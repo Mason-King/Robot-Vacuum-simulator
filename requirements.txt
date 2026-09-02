@@ -1,0 +1,9 @@
+# Simulation engine + WebSocket transport
+websockets>=13.0
+
+# Native desktop shell (pywebview uses Edge WebView2 on Windows,
+# which ships with Windows 10/11)
+pywebview>=5.0
+
+# Only needed for the standalone pygame prototype in /prototype
+pygame>=2.5
