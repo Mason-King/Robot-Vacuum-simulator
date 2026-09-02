@@ -24,7 +24,7 @@ client/            Vue 3 + Vite front end
   src/lib/           framework-free helpers: geometry, coverage overlay, drive keys
   src/components/    FloorPlan.vue (canvas) + one panel per control group
 app.py             pywebview launcher - spawns the server, serves the client, opens a window
-prototype/         early pygame grid sketch, kept for reference
+prototype/         early pygame grid sketch, kept for referenc
 ```
 
 ## Setup
