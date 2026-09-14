@@ -1,9 +1,5 @@
 using RobotVacuum.Level;
 using UnityEngine;
-using RobotVacuum;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 namespace RobotVacuum.Sim
 {
@@ -15,9 +11,6 @@ namespace RobotVacuum.Sim
     [ExecuteAlways]
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
-    [RequireComponent(typeof(Battery))]
-    [RequireComponent(typeof(BatteryDisplay))]
-    [RequireComponent(typeof(SpeedDisplay))]
     public class VacuumRobot : MonoBehaviour
     {
         enum State { Driving, Backing, Turning }
@@ -47,7 +40,6 @@ namespace RobotVacuum.Sim
 
         Rigidbody2D body;
         CircleCollider2D circle;
-        Battery battery;
         State state = State.Driving;
         float stateTimer;
         float targetHeading;
@@ -55,27 +47,6 @@ namespace RobotVacuum.Sim
 
         /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
-
-        public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
-
-        public float DriveSpeedMetersPerSecond => driveSpeed;
-        public float ReverseSpeedMetersPerSecond => reverseSpeed;
-        public float TurnSpeedDegreesPerSecond => turnSpeed;
-
-        public void SetDriveSpeedMetersPerSecond(float speed)
-        {
-            driveSpeed = Mathf.Max(0f, speed);
-        }
-
-        public void SetReverseSpeedMetersPerSecond(float speed)
-        {
-            reverseSpeed = Mathf.Max(0f, speed);
-        }
-
-        public void SetTurnSpeedDegreesPerSecond(float speed)
-        {
-            turnSpeed = Mathf.Max(0f, speed);
-        }
 
         public FloorType CurrentFloor =>
             levelRenderer != null ? levelRenderer.FloorTypeAtWorld(transform.position) : null;
@@ -111,7 +82,6 @@ namespace RobotVacuum.Sim
         {
             body = GetComponent<Rigidbody2D>();
             circle = GetComponent<CircleCollider2D>();
-            battery = GetComponent<Battery>();
 
             if (body != null)
             {
@@ -131,12 +101,6 @@ namespace RobotVacuum.Sim
         {
             if (!Application.isPlaying || body == null) return;
 
-            if (!battery.CanOperate)
-            {
-                body.linearVelocity = Vector2.zero;
-                return;
-            }
-
             float dt = Time.fixedDeltaTime;
 
             switch (state)
@@ -155,7 +119,6 @@ namespace RobotVacuum.Sim
                     TurnTowardsTarget(dt);
                     break;
             }
-
         }
 
         void Drive(float dt)
@@ -244,7 +207,6 @@ namespace RobotVacuum.Sim
 
             DistanceTravelled = 0f;
             state = State.Driving;
-            battery.ResetBattery();
 
             if (body != null) body.linearVelocity = Vector2.zero;
         }
