@@ -368,8 +368,7 @@ namespace RobotVacuum.Sim
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode) return;
 
-            foreach (var robot in Object.FindObjectsByType<VacuumRobot>(
-                         FindObjectsInactive.Include, FindObjectsSortMode.None))
+            foreach (var robot in Object.FindObjectsByType<VacuumRobot>(FindObjectsInactive.Include))
                 robot.BuildVisual();
         }
     }
