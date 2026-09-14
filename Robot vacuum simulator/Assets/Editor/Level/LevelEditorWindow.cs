@@ -175,8 +175,6 @@ namespace RobotVacuum.LevelEditor
 
                     if (GUILayout.Button("Build Scene", EditorStyles.toolbarButton, GUILayout.Width(84f)))
                     {
-                        if (!ConfirmBuildConnectivity()) return;
-
                         Selection.activeObject = level;
                         LevelAssetFactory.SetUp2DScene();
                         cachedRenderer = null;
@@ -189,23 +187,6 @@ namespace RobotVacuum.LevelEditor
                 showGrid = GUILayout.Toggle(showGrid, "Grid", EditorStyles.toolbarButton, GUILayout.Width(40f));
                 if (EditorGUI.EndChangeCheck()) rasterDirty = true;
             }
-        }
-
-        bool ConfirmBuildConnectivity()
-        {
-            if (level == null || level.RoomIndexAt(level.RobotSpawn) < 0) return true;
-
-            var orphans = level.UnreachableRooms();
-            if (orphans.Count == 0) return true;
-
-            var names = new List<string>();
-            foreach (int index in orphans) names.Add(NameOfRoom(index));
-
-            return EditorUtility.DisplayDialog(
-                "Unreachable rooms",
-                "No doorway path reaches: " + string.Join(", ", names) + ".\n\nBuild the scene anyway?",
-                "Build Anyway",
-                "Cancel");
         }
 
         void DrawEmptyState()
