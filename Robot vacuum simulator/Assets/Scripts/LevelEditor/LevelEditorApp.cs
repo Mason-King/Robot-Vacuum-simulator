@@ -813,13 +813,46 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
+            int startRoom = session.Level.RoomIndexAt(session.Level.RobotSpawn);
+            if (startRoom < 0)
+            {
+                overlay.ShowDialog(
+                    "Vacuum starts outside",
+                    "The vacuum cannot reach any room from its starting position. Proceeding will leave all rooms at 0% coverage.",
+                    null,
+                    new DialogButton("Cancel", ButtonStyle.Ghost, null),
+                    new DialogButton("Proceed anyway", ButtonStyle.Primary, BeginRun));
+                return;
+            }
+
+            var unreachable = session.Level.UnreachableRooms();
+            if (unreachable.Count > 0)
+            {
+                var names = new List<string>();
+                foreach (int index in unreachable)
+                {
+                    var room = session.Level.GetRoom(index);
+                    names.Add(room != null ? room.name : "Room");
+                }
+
+                overlay.ShowDialog(
+                    "Unreachable rooms",
+                    "No doorway path reaches " + string.Join(", ", names) + ". Proceeding will leave those rooms at 0% coverage.",
+                    null,
+                    new DialogButton("Cancel", ButtonStyle.Ghost, null),
+                    new DialogButton("Proceed anyway", ButtonStyle.Primary, BeginRun));
+                return;
+            }
+
+            BeginRun();
+        }
+
+        void BeginRun()
+        {
             overlay.CloseMenu();
             run = new LevelRun(session.Level);
             ShowScreen(BuildRunHud());
             app.AddToClassList("le-app--running");
-
-            if (session.Level.RoomIndexAt(session.Level.RobotSpawn) < 0)
-                overlay.Toast("The vacuum starts outside every room.");
         }
 
         void StopRun()
