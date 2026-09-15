@@ -67,6 +67,9 @@ namespace RobotVacuum.LevelEditor
 
         LevelRun run;
 
+        // Captured from the first run's robot, then applied to every later one.
+        VacuumSettings vacuumSettings;
+
         FloorPalette Palette => palette != null ? palette : runtimePalette;
 
         // ---------------------------------------------------------------- lifecycle
@@ -851,6 +854,10 @@ namespace RobotVacuum.LevelEditor
         {
             overlay.CloseMenu();
             run = new LevelRun(session.Level);
+
+            if (vacuumSettings == null) vacuumSettings = VacuumSettings.From(run.Robot, run.Battery);
+            else vacuumSettings.ApplyTo(run.Robot, run.Battery);
+
             ShowScreen(BuildRunHud());
             app.AddToClassList("le-app--running");
         }
@@ -876,25 +883,42 @@ namespace RobotVacuum.LevelEditor
             Ui.Button(bar, "Stop", IconKind.Stop, StopRun, "le-btn--ghost");
             Ui.IconButton(bar, IconKind.Undo, "Restart", () => run?.Restart(), "le-btn--ghost");
 
-            var speed = new Segmented(new[] { "1×", "2×", "4×" }, 0);
-            speed.SelectionChanged += index => run?.SetSpeed(index == 0 ? 1f : index == 1 ? 2f : 4f);
-            bar.Add(speed);
+            var simSpeed = new Segmented(new[] { "1×", "2×", "4×" }, 0);
+            simSpeed.SelectionChanged += index => run?.SetSpeed(index == 0 ? 1f : index == 1 ? 2f : 4f);
+            Ui.Tooltip(simSpeed, "Simulation speed");
+            bar.Add(simSpeed);
+
+            VisualElement settingsButton = null;
+            settingsButton = Ui.Button(bar, "Settings", IconKind.Spawn, () => ShowVacuumSettings(settingsButton), "le-btn--ghost");
+            Ui.Tooltip(settingsButton, "Vacuum speed and battery");
 
             var live = Ui.Div(bar, "le-run-live");
             Ui.Div(live, "le-run-live__dot");
             Ui.Text(live, session.Name);
 
-            var time = RunStat(bar, "Time");
+            var runtime = RunStat(bar, "Runtime");
+            var speed = RunStat(bar, "Speed");
+            var battery = RunStat(bar, "Battery");
             var distance = RunStat(bar, "Distance");
             var surface = RunStat(bar, "Surface");
 
             screen.schedule.Execute(() =>
             {
                 if (run == null) return;
-                var elapsed = TimeSpan.FromSeconds(run.Elapsed);
-                time.text = $"{(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}";
-                distance.text = Ui.FormatMetres(run.Robot != null ? run.Robot.DistanceTravelled : 0f);
-                var floor = run.Robot != null ? run.Robot.CurrentFloor : null;
+                var robot = run.Robot;
+
+                runtime.text = VacuumSettings.FormatDuration(run.Elapsed);
+                speed.text = vacuumSettings.FormatSpeed(robot != null ? robot.SpeedMetersPerSecond : 0f);
+
+                if (run.Battery != null)
+                {
+                    battery.text = VacuumSettings.FormatBattery(run.Battery.CurrentLifeSeconds, run.Battery.BatteryLifeSeconds);
+                    Ui.SetClass(battery, "le-run-stat__value--warn",
+                        VacuumSettings.IsBatteryLow(run.Battery.CurrentLifeSeconds, run.Battery.BatteryLifeSeconds));
+                }
+
+                distance.text = Ui.FormatMetres(robot != null ? robot.DistanceTravelled : 0f);
+                var floor = robot != null ? robot.CurrentFloor : null;
                 surface.text = floor != null ? floor.Label : "—";
             }).Every(150);
 
@@ -906,6 +930,54 @@ namespace RobotVacuum.LevelEditor
             var stat = Ui.Div(parent, "le-run-stat");
             Ui.Text(stat, label, "le-run-stat__label");
             return Ui.Text(stat, "—", "le-run-stat__value");
+        }
+
+        void ShowVacuumSettings(VisualElement anchor)
+        {
+            if (run == null) return;
+
+            overlay.ShowMenuBelow(anchor, new List<MenuEntry>
+            {
+                MenuEntry.Heading("VACUUM"),
+                MenuEntry.Custom(_ => BuildVacuumSettings(anchor)),
+            });
+        }
+
+        VisualElement BuildVacuumSettings(VisualElement anchor)
+        {
+            var settings = vacuumSettings;
+            var panel = Ui.Div(null, "le-run-settings");
+
+            var units = new Segmented(new[] { "m/s", "ft/s" }, settings.useFeet ? 1 : 0);
+            units.SelectionChanged += index =>
+            {
+                settings.useFeet = index == 1;
+                ShowVacuumSettings(anchor); // rebuild so the slider read-outs switch unit too
+            };
+            panel.Add(units);
+
+            AddVacuumSetting(panel, "Drive speed", 0.05f, 2f, settings.driveSpeed, settings.FormatSpeed, v => settings.driveSpeed = v);
+            AddVacuumSetting(panel, "Reverse speed", 0.05f, 1.5f, settings.reverseSpeed, settings.FormatSpeed, v => settings.reverseSpeed = v);
+            AddVacuumSetting(panel, "Turn speed", 30f, 720f, settings.turnSpeed, v => $"{v:0} °/s", v => settings.turnSpeed = v);
+            AddVacuumSetting(panel, "Battery life", 10f, 1800f, settings.batteryLifeSeconds, VacuumSettings.FormatDuration,
+                v => settings.batteryLifeSeconds = v);
+            Ui.Text(panel, "Changing battery life recharges the vacuum.", "le-empty-hint");
+
+            return panel;
+        }
+
+        void AddVacuumSetting(VisualElement parent, string label, float min, float max, float value,
+            Func<float, string> format, Action<float> store)
+        {
+            Ui.Text(parent, label, "le-field-label");
+
+            var slider = new ValueSlider(min, max, value, format);
+            slider.ValueChanged += next =>
+            {
+                store(next);
+                if (run != null) vacuumSettings.ApplyTo(run.Robot, run.Battery);
+            };
+            parent.Add(slider);
         }
     }
 
@@ -949,6 +1021,7 @@ namespace RobotVacuum.LevelEditor
             var robotObject = new GameObject("Vacuum Robot");
             robotObject.transform.SetParent(root.transform, false);
             Robot = robotObject.AddComponent<VacuumRobot>();
+            Battery = robotObject.GetComponent<Battery>();
             Robot.ResetToSpawn();
 
             camera = Camera.main;
@@ -975,6 +1048,7 @@ namespace RobotVacuum.LevelEditor
         }
 
         public VacuumRobot Robot { get; }
+        public Battery Battery { get; }
         public float Elapsed => (Time.time - startTime);
 
         void FrameCamera()

@@ -16,8 +16,6 @@ namespace RobotVacuum.Sim
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
     [RequireComponent(typeof(Battery))]
-    [RequireComponent(typeof(BatteryDisplay))]
-    [RequireComponent(typeof(SpeedDisplay))]
     public class VacuumRobot : MonoBehaviour
     {
         enum State { Driving, Backing, Turning }
