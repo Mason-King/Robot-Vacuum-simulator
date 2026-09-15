@@ -1,6 +1,10 @@
 using System.Collections.Generic;
 using RobotVacuum.Level;
 using UnityEngine;
+using RobotVacuum;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace RobotVacuum.Sim
 {
@@ -12,6 +16,7 @@ namespace RobotVacuum.Sim
     [ExecuteAlways]
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
+    [RequireComponent(typeof(Battery))]
     public class VacuumRobot : MonoBehaviour
     {
         enum State { Driving, Backing, Turning, Shifting }
@@ -50,6 +55,7 @@ namespace RobotVacuum.Sim
 
         Rigidbody2D body;
         CircleCollider2D circle;
+        Battery battery;
         State state = State.Driving;
         float stateTimer;
         float targetHeading;
@@ -61,6 +67,27 @@ namespace RobotVacuum.Sim
 
         /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
+
+        public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
+
+        public float DriveSpeedMetersPerSecond => driveSpeed;
+        public float ReverseSpeedMetersPerSecond => reverseSpeed;
+        public float TurnSpeedDegreesPerSecond => turnSpeed;
+
+        public void SetDriveSpeedMetersPerSecond(float speed)
+        {
+            driveSpeed = Mathf.Max(0f, speed);
+        }
+
+        public void SetReverseSpeedMetersPerSecond(float speed)
+        {
+            reverseSpeed = Mathf.Max(0f, speed);
+        }
+
+        public void SetTurnSpeedDegreesPerSecond(float speed)
+        {
+            turnSpeed = Mathf.Max(0f, speed);
+        }
 
         public FloorType CurrentFloor =>
             levelRenderer != null ? levelRenderer.FloorTypeAtWorld(transform.position) : null;
@@ -166,6 +193,7 @@ namespace RobotVacuum.Sim
         {
             body = GetComponent<Rigidbody2D>();
             circle = GetComponent<CircleCollider2D>();
+            battery = GetComponent<Battery>();
 
             if (body != null)
             {
@@ -184,6 +212,12 @@ namespace RobotVacuum.Sim
         void FixedUpdate()
         {
             if (!Application.isPlaying || body == null) return;
+
+            if (!battery.CanOperate)
+            {
+                body.linearVelocity = Vector2.zero;
+                return;
+            }
 
             float dt = Time.fixedDeltaTime;
 
@@ -207,6 +241,7 @@ namespace RobotVacuum.Sim
                     Shift(dt);
                     break;
             }
+
         }
 
         void Drive(float dt)
@@ -344,6 +379,7 @@ namespace RobotVacuum.Sim
                 levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
 
             DistanceTravelled = 0f;
+            battery.ResetBattery();
 
             if (body != null) body.linearVelocity = Vector2.zero;
         }
@@ -447,4 +483,30 @@ namespace RobotVacuum.Sim
             return mesh;
         }
     }
+
+#if UNITY_EDITOR
+    [InitializeOnLoad]
+    static class VacuumRobotEditorLifecycle
+    {
+        static VacuumRobotEditorLifecycle()
+        {
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        }
+
+        static void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.EnteredEditMode)
+                EditorApplication.delayCall += RebuildSceneVisuals;
+        }
+
+        static void RebuildSceneVisuals()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+
+            foreach (var robot in Object.FindObjectsByType<VacuumRobot>(
+                         FindObjectsInactive.Include, FindObjectsSortMode.None))
+                robot.BuildVisual();
+        }
+    }
+#endif
 }

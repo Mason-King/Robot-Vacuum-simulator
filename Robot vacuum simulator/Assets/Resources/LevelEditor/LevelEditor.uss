@@ -1494,6 +1494,19 @@
     color: rgba(255, 255, 255, 0.82);
 }
 
+.le-app .le-run-stat__value--warn {
+    color: var(--warning);
+}
+
+.le-run-settings {
+    width: 260px;
+    padding: 2px 8px 8px 8px;
+}
+
+.le-run-settings .le-segmented {
+    margin-bottom: 4px;
+}
+
 /* ------------------------------------------------------------ scrollbars */
 
 .le-app .unity-scroller--vertical {
