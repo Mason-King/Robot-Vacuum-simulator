@@ -17,7 +17,7 @@ namespace RobotVacuum.LevelEditor
     /// </summary>
     public sealed class FloorPlanCanvas : VisualElement
     {
-        enum Drag { None, Pan, Vertex, Room, Doorway, Spawn, RectCreate, WallCreate }
+        enum Drag { None, Pan, Vertex, Room, Doorway, Spawn, RectCreate, WallCreate, Obstacle, ObstacleCreate, ObstacleHandle }
 
         public const float PixelsPerMetreAt100 = 50f;
         const float MinZoom = 4f;
@@ -39,6 +39,7 @@ namespace RobotVacuum.LevelEditor
         readonly Label measureLabel;
         readonly List<Label> roomLabels = new List<Label>();
         readonly List<Vector2> penPoints = new List<Vector2>();
+        readonly List<Vector2> patternSegments = new List<Vector2>();
 
         float zoom = 60f;
         Vector2 viewCenter;
@@ -60,7 +61,12 @@ namespace RobotVacuum.LevelEditor
         int dragVertex = -1;
         int pendingInsertEdge = -1;
         int dragDoorway = -1;
+        int dragObstacle = -1;
         Vector2 dragAnchor;
+        Vector2 dragObstacleOrigin;
+        int dragHandle = -1;
+        bool dragHandleIsSide;
+        Vector2 dragOriginalSize;
         readonly List<Vector2> dragOriginalOutline = new List<Vector2>();
         readonly List<KeyValuePair<Doorway, Vector2>> dragOriginalDoorways = new List<KeyValuePair<Doorway, Vector2>>();
         Vector2 rectStart;
@@ -71,6 +77,9 @@ namespace RobotVacuum.LevelEditor
         int hoverVertex = -1;
         int hoverMidpoint = -1;
         int hoverDoorway = -1;
+        int hoverObstacle = -1;
+        int hoverObstacleCorner = -1;
+        int hoverObstacleSide = -1;
         bool hoverSpawn;
         int hoverEdgeRoom = -1;
         int hoverEdge = -1;
@@ -260,6 +269,11 @@ namespace RobotVacuum.LevelEditor
                     BeginDrag(Drag.RectCreate, evt.pointerId);
                     break;
 
+                case EditorTool.Obstacle:
+                    rectStart = session.Snap(cursorLevel, zoom);
+                    BeginDrag(Drag.ObstacleCreate, evt.pointerId);
+                    break;
+
                 case EditorTool.Pen: AddPenPoint(); break;
 
                 case EditorTool.Wall: BeginWallAction(evt.pointerId); break;
@@ -315,10 +329,13 @@ namespace RobotVacuum.LevelEditor
             {
                 case Drag.RectCreate: CommitRect(); break;
                 case Drag.WallCreate: CommitWallStroke(); break;
+                case Drag.ObstacleCreate: CommitObstacle(); break;
                 case Drag.Room:
                 case Drag.Vertex:
                 case Drag.Doorway:
                 case Drag.Spawn:
+                case Drag.Obstacle:
+                case Drag.ObstacleHandle:
                     if (recorded) session.Commit();
                     break;
             }
@@ -373,6 +390,8 @@ namespace RobotVacuum.LevelEditor
             dragRoom = -1;
             dragVertex = -1;
             dragDoorway = -1;
+            dragObstacle = -1;
+            dragHandle = -1;
             pendingInsertEdge = -1;
 
             if (pointer >= 0 && this.HasPointerCapture(pointer)) this.ReleasePointer(pointer);
@@ -398,7 +417,7 @@ namespace RobotVacuum.LevelEditor
                 return true;
             }
 
-            if (drag == Drag.RectCreate || drag == Drag.WallCreate)
+            if (drag == Drag.RectCreate || drag == Drag.WallCreate || drag == Drag.ObstacleCreate)
             {
                 EndDrag();
                 Invalidate();
@@ -462,6 +481,18 @@ namespace RobotVacuum.LevelEditor
                 }
             }
 
+            if (TryFindObstacleHandle(point, grab, out int handle, out bool isSide))
+            {
+                var picked = session.SelectedObstacleData;
+                BeginDrag(Drag.ObstacleHandle, pointerId);
+                dragObstacle = session.SelectedObstacle;
+                dragHandle = handle;
+                dragHandleIsSide = isSide;
+                dragObstacleOrigin = picked.center;
+                dragOriginalSize = picked.size;
+                return;
+            }
+
             int doorway = session.FindDoorway(point, grab * 1.2f);
             if (doorway >= 0)
             {
@@ -474,6 +505,17 @@ namespace RobotVacuum.LevelEditor
             if (Vector2.Distance(session.Level.RobotSpawn, point) <= Mathf.Max(grab * 1.5f, SpawnRadius))
             {
                 BeginDrag(Drag.Spawn, pointerId);
+                return;
+            }
+
+            // Furniture sits on top of rooms, so it wins the click.
+            int obstacle = session.FindObstacle(point);
+            if (obstacle >= 0)
+            {
+                session.SelectObstacle(obstacle);
+                BeginDrag(Drag.Obstacle, pointerId);
+                dragObstacle = obstacle;
+                dragObstacleOrigin = session.Level.Obstacles[obstacle].center;
                 return;
             }
 
@@ -521,6 +563,8 @@ namespace RobotVacuum.LevelEditor
             {
                 case Drag.Vertex: DragVertex(); break;
                 case Drag.Room: DragRoom(); break;
+                case Drag.Obstacle: DragObstacle(); break;
+                case Drag.ObstacleHandle: DragObstacleHandle(); break;
 
                 case Drag.Doorway:
                     RecordOnce("Move Doorway");
@@ -580,6 +624,64 @@ namespace RobotVacuum.LevelEditor
             session.NotifyLiveChange();
         }
 
+        void DragObstacle()
+        {
+            if (session.GetObstacle(dragObstacle) == null) return;
+
+            // Grid snapping only: snapping a piece's centre to a room corner would park it on the wall.
+            RecordOnce("Move Furniture");
+            session.MoveObstacleLive(dragObstacle, session.SnapToGridStep(dragObstacleOrigin + (cursorLevel - pressLevel)));
+        }
+
+        /// <summary>Resizes from a corner or side handle, keeping the opposite corner or side where it was.</summary>
+        void DragObstacleHandle()
+        {
+            var obstacle = session.GetObstacle(dragObstacle);
+            if (obstacle == null) return;
+
+            RecordOnce("Resize Furniture");
+
+            Vector2 target = session.Snap(cursorLevel, zoom);
+            Vector2 center, size;
+            if (dragHandleIsSide)
+                Obstacle.ResizeFromSide(dragObstacleOrigin, dragOriginalSize, obstacle.rotation, dragHandle, target, out center, out size);
+            else
+                Obstacle.ResizeFromCorner(dragObstacleOrigin, dragOriginalSize, obstacle.rotation, dragHandle, target, out center, out size);
+
+            session.SetObstacleBoundsLive(dragObstacle, center, size);
+        }
+
+        /// <summary>A corner or side handle of the selected furniture under the point, as on rooms.</summary>
+        bool TryFindObstacleHandle(Vector2 point, float grab, out int handle, out bool isSide)
+        {
+            handle = -1;
+            isSide = false;
+
+            var obstacle = session.SelectedObstacleData;
+            if (obstacle == null || session.Tool != EditorTool.Select) return false;
+
+            var corners = obstacle.Corners();
+            for (int c = 0; c < 4; c++)
+            {
+                if (Vector2.Distance(corners[c], point) > grab) continue;
+                handle = c;
+                return true;
+            }
+
+            for (int s = 0; s < 4; s++)
+            {
+                Vector2 a = corners[s], b = corners[(s + 1) % 4];
+                if (Vector2.Distance(a, b) * zoom < 28f) continue;
+                if (Vector2.Distance((a + b) * 0.5f, point) > grab * 1.3f) continue;
+
+                handle = s;
+                isSide = true;
+                return true;
+            }
+
+            return false;
+        }
+
         // ---------------------------------------------------------------- drawing tools
 
         Vector2 RectEnd(out Vector2 min, out Vector2 max)
@@ -609,6 +711,20 @@ namespace RobotVacuum.LevelEditor
                 new Vector2(max.x, max.y),
                 new Vector2(min.x, max.y),
             });
+            session.Tool = EditorTool.Select;
+        }
+
+        void CommitObstacle()
+        {
+            RectEnd(out Vector2 min, out Vector2 max);
+            Vector2 size = max - min;
+
+            // A click without a real drag drops the kind's usual footprint where it was pressed.
+            if (size.x < Obstacle.MinSize || size.y < Obstacle.MinSize)
+                session.AddObstacle(rectStart, Obstacle.DefaultSize(session.ObstacleKind));
+            else
+                session.AddObstacle((min + max) * 0.5f, size);
+
             session.Tool = EditorTool.Select;
         }
 
@@ -691,7 +807,8 @@ namespace RobotVacuum.LevelEditor
 
         void ClearHover()
         {
-            hoverRoom = hoverVertex = hoverMidpoint = hoverDoorway = hoverEdgeRoom = hoverEdge = hoverStroke = -1;
+            hoverRoom = hoverVertex = hoverMidpoint = hoverDoorway = hoverObstacle = hoverEdgeRoom = hoverEdge = hoverStroke = -1;
+            hoverObstacleCorner = hoverObstacleSide = -1;
             hoverSpawn = false;
             hoverPenClose = false;
         }
@@ -716,11 +833,21 @@ namespace RobotVacuum.LevelEditor
                         if (hoverVertex >= 0 || hoverMidpoint >= 0) return;
                     }
 
+                    if (TryFindObstacleHandle(point, grab, out int handle, out bool isSide))
+                    {
+                        if (isSide) hoverObstacleSide = handle;
+                        else hoverObstacleCorner = handle;
+                        return;
+                    }
+
                     hoverDoorway = session.FindDoorway(point, grab * 1.2f);
                     if (hoverDoorway >= 0) return;
 
                     hoverSpawn = Vector2.Distance(session.Level.RobotSpawn, point) <= Mathf.Max(grab * 1.5f, SpawnRadius);
                     if (hoverSpawn) return;
+
+                    hoverObstacle = session.FindObstacle(point);
+                    if (hoverObstacle >= 0) return;
 
                     hoverRoom = RoomHit(point);
                     break;
@@ -758,15 +885,7 @@ namespace RobotVacuum.LevelEditor
                 float screenHeight = bounds.height * zoom;
                 if (screenWidth < 56f || screenHeight < 26f) continue;
 
-                if (used == roomLabels.Count)
-                {
-                    var created = Ui.Text(labelLayer, string.Empty, "le-room-label");
-                    created.pickingMode = PickingMode.Ignore;
-                    created.enableRichText = true;
-                    roomLabels.Add(created);
-                }
-
-                var label = roomLabels[used++];
+                var label = NextLabel(used++);
                 var center = ToLocal(room.Center);
                 label.style.left = center.x;
                 label.style.top = center.y;
@@ -777,17 +896,46 @@ namespace RobotVacuum.LevelEditor
                     ? $"{room.name}  <color=#FFFFFF8C>{room.Area:0.0} m²</color>"
                     : room.name;
                 label.EnableInClassList("le-room-label--selected", i == session.SelectedRoom);
+                label.EnableInClassList("le-room-label--obstacle", false);
+            }
+
+            for (int i = 0; i < level.Obstacles.Count; i++)
+            {
+                var obstacle = level.Obstacles[i];
+                if (obstacle == null || obstacle.size.x * zoom < 48f || obstacle.size.y * zoom < 18f) continue;
+
+                var label = NextLabel(used++);
+                var center = ToLocal(obstacle.center);
+                label.style.left = center.x;
+                label.style.top = center.y;
+                label.style.display = DisplayStyle.Flex;
+                label.text = obstacle.name;
+                label.EnableInClassList("le-room-label--selected", i == session.SelectedObstacle);
+                label.EnableInClassList("le-room-label--obstacle", true);
             }
 
             for (int i = used; i < roomLabels.Count; i++) roomLabels[i].style.display = DisplayStyle.None;
             measureLabel.BringToFront();
         }
 
+        Label NextLabel(int index)
+        {
+            if (index == roomLabels.Count)
+            {
+                var created = Ui.Text(labelLayer, string.Empty, "le-room-label");
+                created.pickingMode = PickingMode.Ignore;
+                created.enableRichText = true;
+                roomLabels.Add(created);
+            }
+
+            return roomLabels[index];
+        }
+
         void UpdateMeasureLabel()
         {
             string text = null;
 
-            if (drag == Drag.RectCreate)
+            if (drag == Drag.RectCreate || drag == Drag.ObstacleCreate)
             {
                 RectEnd(out Vector2 min, out Vector2 max);
                 text = $"{max.x - min.x:0.00} × {max.y - min.y:0.00} m";
@@ -799,6 +947,11 @@ namespace RobotVacuum.LevelEditor
             else if (session.Tool == EditorTool.Pen && penPoints.Count > 0 && cursorInside)
             {
                 text = Ui.FormatMetres(Vector2.Distance(penPoints[penPoints.Count - 1], session.Snap(cursorLevel, zoom)));
+            }
+            else if (drag == Drag.ObstacleHandle && dragMoved && session.GetObstacle(dragObstacle) != null)
+            {
+                var size = session.GetObstacle(dragObstacle).size;
+                text = $"{size.x:0.00} × {size.y:0.00} m";
             }
             else if (drag == Drag.Vertex && dragMoved && dragVertex >= 0)
             {
@@ -834,6 +987,7 @@ namespace RobotVacuum.LevelEditor
             if (session.ShowGrid) PaintGrid(painter);
             PaintRooms(painter);
             PaintRemovedWalls(painter);
+            PaintObstacles(painter);
             PaintWalls(painter);
             PaintDoorways(painter);
             PaintSpawn(painter);
@@ -923,6 +1077,10 @@ namespace RobotVacuum.LevelEditor
                 painter.fillColor = fill;
                 painter.Fill(FillRule.NonZero);
 
+                // The pattern replaces the current path, so the outline is traced again afterwards.
+                PaintFloorPattern(painter, room, level.FloorTypeOf(room), fill);
+                PolygonPath(painter, room.outline);
+
                 if (selected || hovered)
                 {
                     painter.fillColor = selected ? AccentSoft : new Color(1f, 1f, 1f, 0.05f);
@@ -933,6 +1091,117 @@ namespace RobotVacuum.LevelEditor
                 painter.strokeColor = new Color(fill.r * 0.55f, fill.g * 0.55f, fill.b * 0.55f, 1f);
                 painter.Stroke();
             }
+        }
+
+        /// <summary>Strokes the floor's pattern over its fill, fading it out before it gets too dense to read.</summary>
+        void PaintFloorPattern(Painter2D painter, Room room, FloorType floor, Color fill)
+        {
+            if (floor == null || floor.pattern == FloorPattern.Plain) return;
+
+            float spacingPixels = FloorPatterns.Spacing(floor.pattern) * zoom;
+            if (spacingPixels < 4f) return;
+
+            patternSegments.Clear();
+            FloorPatterns.Collect(floor.pattern, room.outline, patternSegments);
+            if (patternSegments.Count == 0) return;
+
+            float fade = Mathf.InverseLerp(4f, 12f, spacingPixels);
+            bool hazard = floor.pattern == FloorPattern.Hazard;
+
+            // Dark lines on light floors and light lines on dark ones, so the pattern shows on any colour.
+            float luminance = fill.r * 0.299f + fill.g * 0.587f + fill.b * 0.114f;
+            painter.strokeColor = hazard ? new Color(Warning.r, Warning.g, Warning.b, 0.85f * fade)
+                : luminance > 0.35f ? new Color(0f, 0f, 0f, 0.16f * fade)
+                : new Color(1f, 1f, 1f, 0.14f * fade);
+            painter.lineWidth = hazard ? Mathf.Max(2f, spacingPixels * 0.35f) : 1f;
+            painter.lineCap = LineCap.Butt;
+
+            painter.BeginPath();
+            for (int i = 0; i + 1 < patternSegments.Count; i += 2)
+            {
+                painter.MoveTo(ToLocal(patternSegments[i]));
+                painter.LineTo(ToLocal(patternSegments[i + 1]));
+            }
+            painter.Stroke();
+        }
+
+        /// <summary>Solid furniture blocks the vacuum; translucent furniture with a dashed edge lets it pass under.</summary>
+        void PaintObstacles(Painter2D painter)
+        {
+            var level = session.Level;
+
+            for (int i = 0; i < level.Obstacles.Count; i++)
+            {
+                var obstacle = level.Obstacles[i];
+                if (obstacle == null) continue;
+
+                var corners = obstacle.Corners();
+                var color = Obstacle.ColorOf(obstacle.kind);
+                bool selected = i == session.SelectedObstacle;
+                bool hovered = i == hoverObstacle && !selected && drag == Drag.None;
+
+                PolygonPath(painter, corners);
+                painter.fillColor = new Color(color.r, color.g, color.b, obstacle.blocksVacuum ? 1f : 0.4f);
+                painter.Fill(FillRule.NonZero);
+
+                if (hovered)
+                {
+                    painter.fillColor = new Color(1f, 1f, 1f, 0.08f);
+                    painter.Fill(FillRule.NonZero);
+                }
+
+                var edge = selected
+                    ? Accent
+                    : new Color(Mathf.Min(1f, color.r * 1.35f), Mathf.Min(1f, color.g * 1.35f), Mathf.Min(1f, color.b * 1.35f), 1f);
+                float width = selected ? 2f : 1.5f;
+
+                if (obstacle.blocksVacuum)
+                {
+                    painter.lineWidth = width;
+                    painter.strokeColor = edge;
+                    painter.Stroke();
+                }
+                else
+                {
+                    DashedPolygon(painter, corners, width, edge);
+                }
+            }
+        }
+
+        void PaintObstacleGhost(Painter2D painter, IList<Vector2> corners, float alpha)
+        {
+            var color = Obstacle.ColorOf(session.ObstacleKind);
+
+            PolygonPath(painter, corners);
+            painter.fillColor = new Color(color.r, color.g, color.b, alpha);
+            painter.Fill(FillRule.NonZero);
+            painter.lineWidth = 1.5f;
+            painter.strokeColor = Accent;
+            painter.Stroke();
+        }
+
+        void DashedPolygon(Painter2D painter, IList<Vector2> points, float width, Color color)
+        {
+            painter.lineWidth = width;
+            painter.lineCap = LineCap.Butt;
+            painter.strokeColor = color;
+            painter.BeginPath();
+
+            float dash = 5f / zoom;
+            for (int e = 0; e < points.Count; e++)
+            {
+                Vector2 a = points[e];
+                Vector2 b = points[(e + 1) % points.Count];
+                int dashes = Mathf.Clamp(Mathf.FloorToInt(Vector2.Distance(a, b) / dash), 2, 400);
+
+                for (int d = 0; d < dashes; d += 2)
+                {
+                    painter.MoveTo(ToLocal(Vector2.Lerp(a, b, d / (float)dashes)));
+                    painter.LineTo(ToLocal(Vector2.Lerp(a, b, (d + 1) / (float)dashes)));
+                }
+            }
+
+            painter.Stroke();
         }
 
         void PaintRemovedWalls(Painter2D painter)
@@ -1117,8 +1386,34 @@ namespace RobotVacuum.LevelEditor
             FillCircle(painter, center + new Vector2(0f, -radius * 0.58f), Mathf.Max(2f, radius * 0.2f), new Color(Accent.r, Accent.g, Accent.b, alpha));
         }
 
+        void PaintObstacleHandles(Painter2D painter)
+        {
+            var obstacle = session.SelectedObstacleData;
+            if (obstacle == null || session.Tool != EditorTool.Select || (drag == Drag.Obstacle && dragMoved)) return;
+
+            var corners = obstacle.Corners();
+            bool resizing = drag == Drag.ObstacleHandle && dragMoved;
+
+            for (int s = 0; s < 4; s++)
+            {
+                Vector2 a = corners[s], b = corners[(s + 1) % 4];
+                if (Vector2.Distance(a, b) * zoom < 28f) continue;
+
+                bool hot = s == hoverObstacleSide || (resizing && dragHandleIsSide && s == dragHandle);
+                PaintMidpointHandle(painter, ToLocal((a + b) * 0.5f), hot);
+            }
+
+            for (int c = 0; c < 4; c++)
+            {
+                bool hot = c == hoverObstacleCorner || (resizing && !dragHandleIsSide && c == dragHandle);
+                PaintCornerHandle(painter, ToLocal(corners[c]), hot);
+            }
+        }
+
         void PaintSelection(Painter2D painter)
         {
+            PaintObstacleHandles(painter);
+
             var room = session.SelectedRoomData;
             if (room == null || !room.IsValid) return;
 
@@ -1140,31 +1435,13 @@ namespace RobotVacuum.LevelEditor
                     Vector2 a = room.outline[e], b = room.outline[(e + 1) % count];
                     if (Vector2.Distance(a, b) * zoom < 36f) continue;
 
-                    var mid = ToLocal((a + b) * 0.5f);
-                    bool hovered = e == hoverMidpoint;
-                    FillCircle(painter, mid, hovered ? 5f : 3.5f, hovered ? Accent : new Color(0.09f, 0.1f, 0.13f, 0.9f));
-                    StrokeCircle(painter, mid, hovered ? 5f : 3.5f, 1.5f, Accent);
+                    PaintMidpointHandle(painter, ToLocal((a + b) * 0.5f), e == hoverMidpoint);
                 }
             }
 
             for (int v = 0; v < count; v++)
             {
-                bool hot = v == hoverVertex || (draggingVertex && v == dragVertex);
-                float half = hot ? 5.5f : 4f;
-                var p = ToLocal(room.outline[v]);
-
-                var square = new Rect(p.x - half, p.y - half, half * 2f, half * 2f);
-                painter.BeginPath();
-                painter.MoveTo(new Vector2(square.xMin, square.yMin));
-                painter.LineTo(new Vector2(square.xMax, square.yMin));
-                painter.LineTo(new Vector2(square.xMax, square.yMax));
-                painter.LineTo(new Vector2(square.xMin, square.yMax));
-                painter.ClosePath();
-                painter.fillColor = hot ? Accent : HandleFill;
-                painter.Fill(FillRule.NonZero);
-                painter.lineWidth = 1.5f;
-                painter.strokeColor = Accent;
-                painter.Stroke();
+                PaintCornerHandle(painter, ToLocal(room.outline[v]), v == hoverVertex || (draggingVertex && v == dragVertex));
             }
         }
 
@@ -1189,6 +1466,18 @@ namespace RobotVacuum.LevelEditor
                     break;
                 }
 
+                case EditorTool.Obstacle when drag == Drag.ObstacleCreate:
+                {
+                    RectEnd(out Vector2 min, out Vector2 max);
+                    PaintObstacleGhost(painter, new[] { min, new Vector2(max.x, min.y), max, new Vector2(min.x, max.y) }, 0.55f);
+                    break;
+                }
+
+                case EditorTool.Obstacle when cursorInside && drag == Drag.None:
+                    PaintObstacleGhost(painter,
+                        LevelData.RectangleOutline(session.Snap(cursorLevel, zoom), Obstacle.DefaultSize(session.ObstacleKind)), 0.3f);
+                    break;
+
                 case EditorTool.Wall when drag == Drag.WallCreate:
                     painter.lineCap = LineCap.Round;
                     StrokeLine(painter, wallStart, WallEnd(), Mathf.Max(3f, level.WallThickness * zoom), Accent);
@@ -1204,7 +1493,8 @@ namespace RobotVacuum.LevelEditor
                     break;
             }
 
-            bool drawing = session.Tool == EditorTool.Rect || session.Tool == EditorTool.Pen || session.Tool == EditorTool.Wall;
+            bool drawing = session.Tool == EditorTool.Rect || session.Tool == EditorTool.Pen || session.Tool == EditorTool.Wall
+                || session.Tool == EditorTool.Obstacle;
             if (drawing && cursorInside && drag != Drag.Pan)
             {
                 // A small reticle shows exactly where the next point will land after snapping.
@@ -1259,6 +1549,31 @@ namespace RobotVacuum.LevelEditor
             painter.MoveTo(ToLocal(levelA));
             painter.LineTo(ToLocal(levelB));
             painter.Stroke();
+        }
+
+        /// <summary>The square corner handle shared by rooms and furniture.</summary>
+        static void PaintCornerHandle(Painter2D painter, Vector2 local, bool hot)
+        {
+            float half = hot ? 5.5f : 4f;
+
+            painter.BeginPath();
+            painter.MoveTo(new Vector2(local.x - half, local.y - half));
+            painter.LineTo(new Vector2(local.x + half, local.y - half));
+            painter.LineTo(new Vector2(local.x + half, local.y + half));
+            painter.LineTo(new Vector2(local.x - half, local.y + half));
+            painter.ClosePath();
+            painter.fillColor = hot ? Accent : HandleFill;
+            painter.Fill(FillRule.NonZero);
+            painter.lineWidth = 1.5f;
+            painter.strokeColor = Accent;
+            painter.Stroke();
+        }
+
+        /// <summary>The round side handle shared by rooms and furniture.</summary>
+        static void PaintMidpointHandle(Painter2D painter, Vector2 local, bool hot)
+        {
+            FillCircle(painter, local, hot ? 5f : 3.5f, hot ? Accent : new Color(0.09f, 0.1f, 0.13f, 0.9f));
+            StrokeCircle(painter, local, hot ? 5f : 3.5f, 1.5f, Accent);
         }
 
         static void FillCircle(Painter2D painter, Vector2 localCenter, float radius, Color color)

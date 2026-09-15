@@ -33,6 +33,7 @@ namespace RobotVacuum.LevelEditor
             (EditorTool.Wall, IconKind.Wall, "Walls", "W"),
             (EditorTool.Doorway, IconKind.Doorway, "Doorway", "D"),
             (EditorTool.Spawn, IconKind.Spawn, "Vacuum start", "S"),
+            (EditorTool.Obstacle, IconKind.Obstacle, "Furniture", "O"),
         };
 
         VisualElement root;
@@ -552,6 +553,7 @@ namespace RobotVacuum.LevelEditor
                 EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall",
                 EditorTool.Doorway => "Click on a wall to cut a doorway",
                 EditorTool.Spawn => "Click to set where the vacuum starts",
+                EditorTool.Obstacle => $"Drag to size a {Obstacle.DefaultName(session.ObstacleKind).ToLowerInvariant()}, or click to drop one · change the kind in the panel",
                 _ => string.Empty,
             };
         }
@@ -565,6 +567,7 @@ namespace RobotVacuum.LevelEditor
             Ui.SetClass(pointsToggle, "le-toggle--on", session.SnapToVertices);
             snapLabel.text = FormatStep(session.SnapIncrement);
             snapLabel.parent.SetEnabled(session.SnapToGrid);
+            RefreshHint(); // the furniture hint names the kind, which is an option
         }
 
         void RefreshViewReadouts()
@@ -585,6 +588,24 @@ namespace RobotVacuum.LevelEditor
             var level = session.Level;
             float grab = EditorSession.HandlePixels / canvas.Zoom;
             var entries = new List<MenuEntry>();
+
+            int obstacleIndex = level.ObstacleIndexAt(point);
+            if (obstacleIndex >= 0)
+            {
+                var obstacle = level.Obstacles[obstacleIndex];
+                session.SelectObstacle(obstacleIndex);
+
+                entries.Add(MenuEntry.Heading(obstacle.name.ToUpperInvariant()));
+                var passItem = MenuEntry.Item("Vacuum can pass under", () => session.SetObstacleBlocks(obstacleIndex, !obstacle.blocksVacuum));
+                passItem.isChecked = !obstacle.blocksVacuum;
+                entries.Add(passItem);
+                entries.Add(MenuEntry.Separator());
+                entries.Add(MenuEntry.Item("Duplicate", () => session.DuplicateObstacle(obstacleIndex), IconKind.Duplicate, Shortcut("D")));
+                entries.Add(MenuEntry.Item("Delete furniture", () => session.DeleteObstacle(obstacleIndex), IconKind.Trash, "⌫", danger: true));
+
+                overlay.ShowMenu(panelPosition, entries);
+                return;
+            }
 
             int roomIndex = session.SelectedRoomData != null && session.SelectedRoomData.Contains(point)
                 ? session.SelectedRoom
@@ -613,6 +634,9 @@ namespace RobotVacuum.LevelEditor
                         () => session.SetWall(wallRoom, wallEdge, !present), present ? IconKind.WallsOff : IconKind.WallsOn));
                 }
 
+                entries.Add(MenuEntry.Item("Place furniture here",
+                    () => session.AddObstacle(session.Snap(point, canvas.Zoom), Obstacle.DefaultSize(session.ObstacleKind)), IconKind.Obstacle));
+
                 entries.Add(MenuEntry.Separator());
                 entries.Add(MenuEntry.Heading("FLOOR"));
                 entries.Add(MenuEntry.Custom(close => BuildSwatchRow(roomIndex, room.floorIndex, close)));
@@ -632,6 +656,8 @@ namespace RobotVacuum.LevelEditor
                 entries.Add(MenuEntry.Item("Draw rectangle room", () => session.Tool = EditorTool.Rect, IconKind.Rect, "R"));
                 entries.Add(MenuEntry.Item("Draw pen room", () => session.Tool = EditorTool.Pen, IconKind.Pen, "P"));
                 entries.Add(MenuEntry.Item("Start vacuum here", () => session.SetSpawn(session.Snap(point, canvas.Zoom)), IconKind.Spawn));
+                entries.Add(MenuEntry.Item("Place furniture here",
+                    () => session.AddObstacle(session.Snap(point, canvas.Zoom), Obstacle.DefaultSize(session.ObstacleKind)), IconKind.Obstacle));
                 entries.Add(MenuEntry.Separator());
                 entries.Add(MenuEntry.Item("Fit floor plan", canvas.FrameAll, IconKind.Fit, "F"));
             }
@@ -728,6 +754,7 @@ namespace RobotVacuum.LevelEditor
 
                 case KeyCode.D:
                     if (session.SelectedRoom >= 0) session.DuplicateRoom(session.SelectedRoom);
+                    else if (session.SelectedObstacle >= 0) session.DuplicateObstacle(session.SelectedObstacle);
                     return true;
 
                 default:
@@ -747,6 +774,7 @@ namespace RobotVacuum.LevelEditor
                 case KeyCode.W: session.Tool = EditorTool.Wall; return true;
                 case KeyCode.D: session.Tool = EditorTool.Doorway; return true;
                 case KeyCode.S: session.Tool = EditorTool.Spawn; return true;
+                case KeyCode.O: session.Tool = EditorTool.Obstacle; return true;
                 case KeyCode.G: session.ShowGrid = !session.ShowGrid; return true;
                 case KeyCode.F: canvas.FrameAll(); return true;
 
@@ -866,6 +894,15 @@ namespace RobotVacuum.LevelEditor
             speed.SelectionChanged += index => run?.SetSpeed(index == 0 ? 1f : index == 1 ? 2f : 4f);
             bar.Add(speed);
 
+            var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
+            movement.SelectionChanged += index =>
+            {
+                SimLauncher.MovementPattern = (MovementPattern)index;
+                if (run != null && run.Robot != null) run.Robot.Pattern = SimLauncher.MovementPattern;
+            };
+            Ui.Tooltip(movement, "Movement algorithm");
+            bar.Add(movement);
+
             var live = Ui.Div(bar, "le-run-live");
             Ui.Div(live, "le-run-live__dot");
             Ui.Text(live, session.Name);
@@ -873,6 +910,8 @@ namespace RobotVacuum.LevelEditor
             var time = Ui.RunStat(bar, "Time");
             var distance = Ui.RunStat(bar, "Distance");
             var surface = Ui.RunStat(bar, "Surface");
+            var blocked = Ui.RunStat(bar, "Blocked");
+            blocked.text = Ui.FormatArea(session.Level.BlockedFloorArea());
 
             screen.schedule.Execute(() =>
             {
@@ -928,6 +967,7 @@ namespace RobotVacuum.LevelEditor
             var robotObject = new GameObject("Vacuum Robot");
             robotObject.transform.SetParent(root.transform, false);
             Robot = robotObject.AddComponent<VacuumRobot>();
+            Robot.Pattern = SimLauncher.MovementPattern;
             Robot.ResetToSpawn();
 
             camera = Camera.main;

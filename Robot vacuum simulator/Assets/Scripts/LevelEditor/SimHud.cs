@@ -47,18 +47,30 @@ namespace RobotVacuum.LevelEditor
             speed.SelectionChanged += index => Time.timeScale = Speeds[index];
             bar.Add(speed);
 
+            var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
+            movement.SelectionChanged += index =>
+            {
+                SimLauncher.MovementPattern = (MovementPattern)index;
+                foreach (var robot in FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
+                    robot.Pattern = SimLauncher.MovementPattern;
+            };
+            bar.Add(movement);
+
             var live = Ui.Div(bar, "le-run-live");
             Ui.Div(live, "le-run-live__dot");
             Ui.Text(live, level != null ? level.name : "Floor plan");
 
             var time = Ui.RunStat(bar, "Time");
             var cleaned = Ui.RunStat(bar, "Cleaned");
+            var blocked = Ui.RunStat(bar, "Blocked");
 
             bar.schedule.Execute(() =>
             {
                 var elapsed = TimeSpan.FromSeconds(Time.time - startTime);
                 time.text = $"{(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}";
-                cleaned.text = cleaning != null && cleaning.Grid != null ? $"{cleaning.CoveragePercent:0.0}%" : "—";
+                bool hasGrid = cleaning != null && cleaning.Grid != null;
+                cleaned.text = hasGrid ? $"{cleaning.CoveragePercent:0.0}%" : "—";
+                blocked.text = hasGrid ? Ui.FormatArea(cleaning.Grid.NonCleanableAreaSquareMeters) : "—";
             }).Every(500);
 
             if (root.panel != null) HookEscape(root.panel);

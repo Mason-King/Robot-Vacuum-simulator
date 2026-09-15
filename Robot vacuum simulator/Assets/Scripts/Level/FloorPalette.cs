@@ -51,16 +51,17 @@ namespace RobotVacuum.Level
             public float effort;
             public float soiling;
             public float step;
+            public FloorPattern pattern;
         }
 
         static readonly Preset[] DefaultPresets =
         {
-            new Preset { name = "Hardwood",    hex = "C79A6B", speed = 1.00f, effort = 0.8f, soiling = 1.0f, step = 0.000f },
-            new Preset { name = "Tile",        hex = "D9DDE2", speed = 1.00f, effort = 0.7f, soiling = 1.2f, step = 0.000f },
-            new Preset { name = "Laminate",    hex = "B98E5E", speed = 0.95f, effort = 0.8f, soiling = 1.0f, step = 0.000f },
-            new Preset { name = "Low Carpet",  hex = "97A183", speed = 0.85f, effort = 1.6f, soiling = 1.4f, step = 0.008f },
-            new Preset { name = "High Carpet", hex = "6E7C5C", speed = 0.60f, effort = 2.4f, soiling = 1.6f, step = 0.020f },
-            new Preset { name = "Area Rug",    hex = "A8646B", speed = 0.75f, effort = 2.0f, soiling = 1.3f, step = 0.015f },
+            new Preset { name = "Hardwood",    hex = "C79A6B", speed = 1.00f, effort = 0.8f, soiling = 1.0f, step = 0.000f, pattern = FloorPattern.Planks },
+            new Preset { name = "Tile",        hex = "D9DDE2", speed = 1.00f, effort = 0.7f, soiling = 1.2f, step = 0.000f, pattern = FloorPattern.Tiles },
+            new Preset { name = "Laminate",    hex = "B98E5E", speed = 0.95f, effort = 0.8f, soiling = 1.0f, step = 0.000f, pattern = FloorPattern.Planks },
+            new Preset { name = "Low Carpet",  hex = "97A183", speed = 0.85f, effort = 1.6f, soiling = 1.4f, step = 0.008f, pattern = FloorPattern.Carpet },
+            new Preset { name = "High Carpet", hex = "6E7C5C", speed = 0.60f, effort = 2.4f, soiling = 1.6f, step = 0.020f, pattern = FloorPattern.Shag },
+            new Preset { name = "Area Rug",    hex = "A8646B", speed = 0.75f, effort = 2.0f, soiling = 1.3f, step = 0.015f, pattern = FloorPattern.Rug },
         };
 
         /// <summary>
@@ -82,6 +83,7 @@ namespace RobotVacuum.Level
                 floor.cleaningEffort = preset.effort;
                 floor.soilingRate = preset.soiling;
                 floor.stepHeight = preset.step;
+                floor.pattern = preset.pattern;
 
                 palette.Add(floor);
             }

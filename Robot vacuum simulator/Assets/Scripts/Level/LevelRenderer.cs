@@ -15,6 +15,7 @@ namespace RobotVacuum.Level
     public class LevelRenderer : MonoBehaviour
     {
         const string GeneratedRootName = "Generated";
+        const float PassableRimWidth = 0.06f;
 
         [SerializeField] LevelData level;
         [SerializeField] bool rebuildOnEnable = true;
@@ -23,6 +24,9 @@ namespace RobotVacuum.Level
         [Tooltip("Z depth for room floors. Walls are drawn slightly in front.")]
         [SerializeField] float floorDepth = 0f;
         [SerializeField] float wallDepth = -0.05f;
+
+        [Tooltip("Z depth for furniture: above the floor and coverage overlay, below walls and the vacuum.")]
+        [SerializeField] float obstacleDepth = -0.03f;
 
         [Tooltip("Optional. Leave empty to generate an unlit, double-sided material at build time.")]
         [SerializeField] Material materialOverride;
@@ -84,6 +88,7 @@ namespace RobotVacuum.Level
             generatedRoot = root.transform;
 
             BuildFloors();
+            BuildObstacles();
             if (buildWalls) BuildWalls();
         }
 
@@ -117,7 +122,7 @@ namespace RobotVacuum.Level
                 var uvs = new Vector2[room.outline.Count];
 
                 var floorType = level.FloorTypeOf(room);
-                float tile = floorType != null ? Mathf.Max(0.01f, floorType.textureScale) : 1f;
+                var texture = FloorTextureFor(floorType, out float tile, out bool selfColoured);
 
                 for (int v = 0; v < room.outline.Count; v++)
                 {
@@ -136,9 +141,97 @@ namespace RobotVacuum.Level
                 mesh.RecalculateNormals();
                 mesh.RecalculateBounds();
 
-                CreateMeshObject($"Floor_{room.name}", mesh, level.ColorOf(room),
-                    floorType != null ? floorType.texture : null);
+                CreateMeshObject($"Floor_{room.name}", mesh, selfColoured ? Color.white : level.ColorOf(room), texture);
             }
+        }
+
+        /// <summary>A hand-assigned texture wins; otherwise the floor's pattern is generated at its natural size.</summary>
+        static Texture2D FloorTextureFor(FloorType floor, out float tileMetres, out bool selfColoured)
+        {
+            tileMetres = 1f;
+            selfColoured = false;
+            if (floor == null) return null;
+
+            float scale = Mathf.Max(0.01f, floor.textureScale);
+            if (floor.texture != null)
+            {
+                tileMetres = scale;
+                return floor.texture;
+            }
+
+            tileMetres = FloorTextures.TileMetres(floor.pattern) * scale;
+            selfColoured = FloorTextures.IsSelfColoured(floor.pattern);
+            return FloorTextures.Get(floor.pattern);
+        }
+
+        /// <summary>
+        /// Furniture that blocks the vacuum is solid with a collider. Furniture the vacuum passes under is
+        /// only a rim with no collider, so the floor and its coverage stay visible beneath it.
+        /// </summary>
+        void BuildObstacles()
+        {
+            Transform colliderRoot = null;
+
+            foreach (var obstacle in level.Obstacles)
+            {
+                if (obstacle == null) continue;
+
+                var corners = obstacle.Corners();
+                var vertices = new List<Vector3>();
+                var triangles = new List<int>();
+
+                if (obstacle.blocksVacuum)
+                {
+                    AddQuad(vertices, triangles, corners[0], corners[1], corners[2], corners[3], obstacleDepth);
+                }
+                else
+                {
+                    float rim = Mathf.Min(PassableRimWidth, Mathf.Min(obstacle.size.x, obstacle.size.y) * 0.25f);
+                    var inner = LevelData.RectangleOutline(obstacle.center, obstacle.size - Vector2.one * (rim * 2f), obstacle.rotation);
+                    for (int c = 0; c < 4; c++)
+                    {
+                        int next = (c + 1) % 4;
+                        AddQuad(vertices, triangles, corners[c], corners[next], inner[next], inner[c], obstacleDepth);
+                    }
+                }
+
+                var mesh = new Mesh { name = $"Obstacle_{obstacle.name}" };
+                mesh.SetVertices(vertices);
+                mesh.SetTriangles(triangles, 0);
+                mesh.RecalculateNormals();
+                mesh.RecalculateBounds();
+                CreateMeshObject($"Obstacle_{obstacle.name}", mesh, Obstacle.ColorOf(obstacle.kind));
+
+                if (!obstacle.blocksVacuum) continue;
+
+                if (colliderRoot == null)
+                {
+                    colliderRoot = new GameObject("ObstacleColliders").transform;
+                    colliderRoot.SetParent(generatedRoot, false);
+                }
+
+                var body = new GameObject($"Obstacle_{obstacle.name}");
+                body.transform.SetParent(colliderRoot, false);
+                body.transform.localPosition = obstacle.center;
+                body.transform.localRotation = Quaternion.Euler(0f, 0f, obstacle.rotation);
+                body.AddComponent<BoxCollider2D>().size = obstacle.size;
+            }
+        }
+
+        static void AddQuad(List<Vector3> vertices, List<int> triangles, Vector2 a, Vector2 b, Vector2 c, Vector2 d, float depth)
+        {
+            int start = vertices.Count;
+            vertices.Add(new Vector3(a.x, a.y, depth));
+            vertices.Add(new Vector3(b.x, b.y, depth));
+            vertices.Add(new Vector3(c.x, c.y, depth));
+            vertices.Add(new Vector3(d.x, d.y, depth));
+
+            triangles.Add(start);
+            triangles.Add(start + 1);
+            triangles.Add(start + 2);
+            triangles.Add(start);
+            triangles.Add(start + 2);
+            triangles.Add(start + 3);
         }
 
         void BuildWalls()

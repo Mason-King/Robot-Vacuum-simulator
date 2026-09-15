@@ -17,9 +17,10 @@ namespace RobotVacuum.Sim
     //
     // PLACEHOLDER, clearly flagged below: the actual cleaning-effectiveness
     // formula (SDD 3.14 -- dwell time x velocity x surface type) doesn't exist
-    // yet. This uses a simple flat decrease-per-second while the footprint
-    // overlaps a cell, as a stand-in, so there's something real to look at
-    // tonight. Swap CleanCellsUnderFootprint()'s math once 3.14 is real.
+    // yet. This uses a decrease-per-second while the footprint overlaps a
+    // cell, with only the surface part in place: each floor type's
+    // cleaningEffort divides the rate, so carpet cleans slower than tile.
+    // Swap CleanCellsUnderFootprint()'s math once 3.14 is real.
     // ============================================================================
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
@@ -36,9 +37,15 @@ namespace RobotVacuum.Sim
         [Tooltip("Grid cell edge length, in metres. SDD 4.6 targets roughly 1 inch (~0.0254m). Minimum/maximum bounds are still open -- pending the Level Editor team conversation -- so nothing here enforces a range yet.")]
         [SerializeField] float cellSizeMeters = 0.0254f;
 
-        [Header("PLACEHOLDER cleaning rate -- not the real 3.14 formula")]
-        [Tooltip("How fast dirtiness falls per second while the robot's footprint overlaps a cell. Flat and speed/surface-independent for now -- swap this out once the real cleaning-effectiveness formula (SDD 3.14) exists.")]
+        [Header("PLACEHOLDER cleaning rate -- not the full 3.14 formula")]
+        [Tooltip("How fast dirtiness falls per second, on a floor with a cleaning effort of 1, while the robot's footprint overlaps a cell. Divided by each floor type's cleaningEffort. Still speed/dwell-independent -- swap this out once the real cleaning-effectiveness formula (SDD 3.14) exists.")]
         [SerializeField] float dirtinessDecreasePerSecond = 0.5f;
+
+        // Per-cell rate multiplier (1 / cleaningEffort), looked up the first
+        // time the footprint touches a cell; 0 means not looked up yet. Floor
+        // type is static scene data, so it stays out of CellState (see the
+        // SCOPE NOTE in ExternalModelGrid).
+        float[] cellRateMultiplier;
 
         Rigidbody2D robotBody;
         CircleCollider2D robotCollider;
@@ -79,10 +86,9 @@ namespace RobotVacuum.Sim
 
             Grid = new ExternalModelGrid(level, levelRenderer, cellSizeMeters);
 
-            // Currently a no-op (see ExternalModelGrid.cs) -- called anyway
-            // so this call site doesn't need to change once obstacle data
-            // exists on the Level Editor's side.
+            // Marks cells under blocking furniture as non-cleanable (see ExternalModelGrid.cs).
             Grid.PopulateFromLevelObject();
+            cellRateMultiplier = new float[Grid.Rows * Grid.Cols];
         }
 
         void FixedUpdate()
@@ -132,12 +138,32 @@ namespace RobotVacuum.Sim
                     if (Vector2.Distance(cellCenter, position) > radius) continue; // square box, circular footprint -- corners get skipped here
 
                     CellState cell = Grid.GetCell(row, col);
-                    if (cell.isNonCleanable) continue; // currently always false -- see ExternalModelGrid's PENDING note
+                    if (cell.isNonCleanable) continue; // under blocking furniture -- see ExternalModelGrid.PopulateFromLevelObject
 
-                    float updated = cell.Dirtiness - dirtinessDecreasePerSecond * dt;
+                    float updated = cell.Dirtiness - dirtinessDecreasePerSecond * RateMultiplierAt(row, col, cellCenter) * dt;
                     Grid.SetDirtiness(row, col, updated, simTimeElapsed);
                 }
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Cleaning rate on a given floor: the base rate divided by that
+        // floor type's cleaningEffort. Off the floor (null) or with no
+        // effort set, the base rate applies unchanged.
+        // ------------------------------------------------------------------
+        public static float CleaningRate(float baseRatePerSecond, FloorType floor) =>
+            floor != null && floor.cleaningEffort > 0f ? baseRatePerSecond / floor.cleaningEffort : baseRatePerSecond;
+
+        float RateMultiplierAt(int row, int col, Vector2 worldCenter)
+        {
+            int index = row * Grid.Cols + col;
+            if (cellRateMultiplier[index] > 0f) return cellRateMultiplier[index];
+
+            Vector2 levelPoint = levelRenderer != null ? levelRenderer.WorldToLevel(worldCenter) : worldCenter;
+            float multiplier = CleaningRate(1f, level.FloorTypeAt(levelPoint));
+
+            cellRateMultiplier[index] = multiplier;
+            return multiplier;
         }
     }
 }

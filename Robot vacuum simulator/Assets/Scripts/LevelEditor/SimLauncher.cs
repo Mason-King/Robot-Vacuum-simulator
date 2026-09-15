@@ -18,6 +18,9 @@ namespace RobotVacuum.LevelEditor
         static FloorPalette fallbackPalette;
         static string returnPath;
 
+        /// <summary>The movement algorithm chosen last, carried between the editor's run and the simulator.</summary>
+        public static MovementPattern MovementPattern { get; set; }
+
         public static bool OpenStartScreen() => Load(StartScenePath);
 
         public static bool OpenLevelEditor() => Load(EditorScenePath);
@@ -92,7 +95,10 @@ namespace RobotVacuum.LevelEditor
             if (renderer == null) return;
 
             foreach (var robot in Object.FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
+            {
+                robot.Pattern = MovementPattern;
                 robot.ResetToSpawn();
+            }
 
             if (Camera.main != null) FrameCamera(Camera.main, WorldBounds(renderer, level));
 
@@ -140,6 +146,7 @@ namespace RobotVacuum.LevelEditor
             SceneManager.sceneLoaded -= OnSceneLoaded;
             returnPath = null;
             fallbackPalette = null;
+            MovementPattern = MovementPattern.RandomBounce;
         }
     }
 }

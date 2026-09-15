@@ -1,7 +1,11 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace RobotVacuum.Level
 {
+    /// <summary>Surface detail drawn over a floor's colour, so coverings read apart at a glance.</summary>
+    public enum FloorPattern { Plain, Planks, Tiles, Carpet, Shag, Rug, Hazard }
+
     /// <summary>
     /// A floor covering. Rooms reference one of these; it drives how the floor is drawn
     /// and how the vacuum behaves while it is over that surface.
@@ -12,13 +16,19 @@ namespace RobotVacuum.Level
         public string displayName = "Floor";
 
         [Tooltip("Colour the room is filled with, and the swatch shown in the level editor. " +
-                 "With a texture assigned this tints it.")]
+                 "With a texture or pattern this tints it.")]
+        [FormerlySerializedAs("editorColor")]
         public Color color = new Color(0.78f, 0.78f, 0.78f);
 
-        [Tooltip("Optional seamless tile drawn across the floor. Leave empty for a flat colour.")]
+        [Tooltip("Surface detail drawn over the colour in the editor and the simulation. " +
+                 "The simulation ignores it when a texture is assigned.")]
+        public FloorPattern pattern = FloorPattern.Plain;
+
+        [Tooltip("Optional seamless tile drawn across the floor. Leave empty to use the pattern.")]
         public Texture2D texture;
 
-        [Tooltip("How many metres one repeat of the texture covers. 1 = one tile per metre.")]
+        [Tooltip("How many metres one repeat of the texture covers. 1 = one tile per metre. " +
+                 "For a pattern this scales its natural size.")]
         [Min(0.01f)]
         public float textureScale = 1f;
 

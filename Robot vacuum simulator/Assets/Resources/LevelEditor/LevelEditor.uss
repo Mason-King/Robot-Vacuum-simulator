@@ -1484,6 +1484,16 @@
     padding: 0 18px;
 }
 
+/* ------------------------------------------------------------ furniture */
+
+.le-room-label--obstacle {
+    font-size: 11px;
+}
+
+.le-app .le-room-label--obstacle {
+    color: rgba(255, 255, 255, 0.82);
+}
+
 /* ------------------------------------------------------------ scrollbars */
 
 .le-app .unity-scroller--vertical {

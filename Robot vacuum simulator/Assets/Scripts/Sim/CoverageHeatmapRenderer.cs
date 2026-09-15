@@ -140,9 +140,7 @@ namespace RobotVacuum.Sim
                     // Non-cleanable cells stay fully transparent -- nothing
                     // to show, since they're excluded from coverage entirely
                     // (matches CalculateCoveragePercent's own treatment).
-                    // Currently always false (see ExternalModelGrid's
-                    // PENDING note on obstacle data), but written correctly
-                    // now so nothing needs to change here once that lands.
+                    // Set for cells under furniture that blocks the vacuum.
                     Color pixelColor;
                     if (cell.isNonCleanable)
                     {

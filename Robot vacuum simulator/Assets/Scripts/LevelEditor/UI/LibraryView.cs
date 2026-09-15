@@ -174,6 +174,22 @@ namespace RobotVacuum.LevelEditor
                 painter.Fill(FillRule.NonZero);
             }
 
+            foreach (var obstacle in level.obstacles)
+            {
+                if (obstacle == null) continue;
+
+                var corners = obstacle.Corners();
+                painter.BeginPath();
+                painter.MoveTo(ToLocal(corners[0]));
+                for (int i = 1; i < corners.Count; i++) painter.LineTo(ToLocal(corners[i]));
+                painter.ClosePath();
+
+                var color = Obstacle.ColorOf(obstacle.kind);
+                color.a = obstacle.blocksVacuum ? 1f : 0.45f;
+                painter.fillColor = color;
+                painter.Fill(FillRule.NonZero);
+            }
+
             painter.lineWidth = Mathf.Clamp(level.wallThickness * scale, 1.5f, 4f);
             painter.lineCap = LineCap.Round;
             painter.strokeColor = new Color(0.93f, 0.94f, 0.96f);

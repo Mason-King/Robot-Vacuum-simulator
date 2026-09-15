@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using RobotVacuum.Level;
 
@@ -60,12 +61,9 @@ namespace RobotVacuumSim.EnvironmentModel
         // placement/removal events -- see RecomputeNonCleanableForRegion()
         // below -- it is NOT a permanent property of the cell.
         //
-        // PENDING: nothing currently sets this to true anywhere. LevelData
-        // (the real Level Object type, confirmed by reading the actual
-        // bot-logic source) has no obstacle/furniture concept yet -- only
-        // Room, Doorway, WallStroke, and robotSpawn. Every cell is
-        // cleanable by default until that data model exists on the Level
-        // Editor's side.
+        // Set by ExternalModelGrid.PopulateFromLevelObject() for cells under
+        // furniture that blocks the vacuum (LevelData.Obstacles). Furniture
+        // the vacuum passes under leaves its cells cleanable.
         public bool isNonCleanable;
 
         // The only way to change dirtiness. Mathf.Clamp01 forces the
@@ -185,6 +183,10 @@ namespace RobotVacuumSim.EnvironmentModel
         // contiguous is what we want here for the same cache-locality
         // reason CellState is a struct above.
         private CellState[,] cells;
+
+        // How many cells are currently non-cleanable, kept in step by
+        // SetNonCleanable() so area read-outs don't rescan the grid.
+        private int nonCleanableCount;
 
         // Stored so future population/recompute work (see the stubs below)
         // has the same LevelData/LevelRenderer pair available without
@@ -403,8 +405,18 @@ namespace RobotVacuumSim.EnvironmentModel
 
         public void SetNonCleanable(int row, int col, bool isNonCleanable)
         {
+            if (cells[row, col].isNonCleanable == isNonCleanable) return;
+
             cells[row, col].isNonCleanable = isNonCleanable;
+            nonCleanableCount += isNonCleanable ? 1 : -1;
         }
+
+        // Cells currently excluded from coverage (under blocking furniture).
+        public int NonCleanableCellCount => nonCleanableCount;
+
+        // Floor the robot can't clean because furniture blocks it, in square
+        // metres: the non-cleanable cell count times one cell's area.
+        public float NonCleanableAreaSquareMeters => nonCleanableCount * cellSizeMeters * cellSizeMeters;
 
         public int Rows => rows;
         public int Cols => cols;
@@ -435,9 +447,8 @@ namespace RobotVacuumSim.EnvironmentModel
         // and dividing by the count gives the average fractional
         // cleanliness, which we then express as a percentage.
         //
-        // NOTE (currently true, will change once obstacle data exists):
-        // since nothing sets isNonCleanable yet, every cell is currently
-        // cleanable and this denominator is just Rows * Cols.
+        // NOTE: cells under blocking furniture are marked non-cleanable by
+        // PopulateFromLevelObject(), so they drop out of this denominator.
         // ------------------------------------------------------------------
         public float CalculateCoveragePercent()
         {
@@ -466,7 +477,10 @@ namespace RobotVacuumSim.EnvironmentModel
         }
 
         // ------------------------------------------------------------------
-        // STUB, deliberately empty -- not throwing.
+        // Marks cells under furniture that blocks the vacuum as
+        // non-cleanable, so they drop out of coverage instead of counting as
+        // floor the robot failed to clean. Furniture the vacuum passes under
+        // (Obstacle.blocksVacuum == false) leaves its cells cleanable.
         //
         // SCOPE NOTE (per Eric): the External Model exists to capture TRUE
         // data that can't already be read off the scene itself -- i.e.
@@ -475,26 +489,47 @@ namespace RobotVacuumSim.EnvironmentModel
         // readable directly from LevelData.FloorTypeAt(...) whenever
         // something needs it -- it does NOT belong on CellState.
         //
-        // PENDING: the other half of this method's job -- setting
-        // isNonCleanable under blocking obstructions -- has nothing to
-        // populate FROM yet. Confirmed by reading the real LevelData
-        // source: it has no furniture/obstacle concept at all right now
-        // (only Room, Doorway, WallStroke, robotSpawn). Safe to call this
-        // today; it intentionally does nothing, so every cell simply stays
-        // cleanable, which matches reality until the Level Editor team
-        // adds obstacle data.
-        //
-        // TODO once obstacle data exists: for each cell, point-in-polygon
-        // (or overlap query) test against blocking-obstruction footprints,
-        // using the same LevelToWorld-once-at-population approach as the
-        // constructor above -- convert obstacle polygons to world space
-        // once here, not per-tick, and reuse Poly2D.ContainsPoint (already
-        // exists in the Level Editor codebase, no need to write a new
-        // point-in-polygon test).
+        // Follows the plan that was noted here: each footprint is converted
+        // to world space once through LevelToWorld, then only cells inside
+        // its bounding box are tested with Poly2D.ContainsPoint, so the cost
+        // scales with the furniture rather than the whole grid.
         // ------------------------------------------------------------------
         public void PopulateFromLevelObject()
         {
-            // Intentionally empty -- see comment above.
+            if (level == null || rows == 0 || cols == 0) return;
+
+            var footprint = new List<Vector2>(4);
+
+            foreach (var obstacle in level.Obstacles)
+            {
+                if (obstacle == null || !obstacle.blocksVacuum) continue;
+
+                footprint.Clear();
+                foreach (var corner in obstacle.Corners())
+                    footprint.Add(levelRenderer != null ? (Vector2)levelRenderer.LevelToWorld(corner) : corner);
+
+                Rect bounds = Poly2D.Bounds(footprint);
+                int minCol = Mathf.Clamp(Mathf.FloorToInt((bounds.xMin - originWorld.x) / cellSizeMeters), 0, cols - 1);
+                int maxCol = Mathf.Clamp(Mathf.FloorToInt((bounds.xMax - originWorld.x) / cellSizeMeters), 0, cols - 1);
+                int minRow = Mathf.Clamp(Mathf.FloorToInt((bounds.yMin - originWorld.y) / cellSizeMeters), 0, rows - 1);
+                int maxRow = Mathf.Clamp(Mathf.FloorToInt((bounds.yMax - originWorld.y) / cellSizeMeters), 0, rows - 1);
+
+                for (int row = minRow; row <= maxRow; row++)
+                {
+                    for (int col = minCol; col <= maxCol; col++)
+                    {
+                        Vector2 center = GridIndexToWorldCenter(row, col);
+                        if (!Poly2D.ContainsPoint(footprint, center)) continue;
+
+                        // Only floor counts: cells outside every room were never
+                        // floor the robot could clean in the first place.
+                        Vector2 levelPoint = levelRenderer != null ? levelRenderer.WorldToLevel(center) : center;
+                        if (level.RoomIndexAt(levelPoint) < 0) continue;
+
+                        SetNonCleanable(row, col, true);
+                    }
+                }
+            }
         }
 
         // ------------------------------------------------------------------

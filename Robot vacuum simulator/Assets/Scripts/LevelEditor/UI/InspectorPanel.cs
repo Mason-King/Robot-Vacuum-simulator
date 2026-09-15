@@ -79,6 +79,7 @@ namespace RobotVacuum.LevelEditor
 
             if (session.SelectedRoomData != null) BuildRoom(session.SelectedRoom, session.SelectedRoomData);
             else if (session.SelectedDoorwayData != null) BuildDoorway(session.SelectedDoorway, session.SelectedDoorwayData);
+            else if (session.SelectedObstacleData != null) BuildObstacle(session.SelectedObstacle, session.SelectedObstacleData);
             else BuildLevel();
 
             scroll.schedule.Execute(() => scroll.scrollOffset = new Vector2(0f, scrollOffset));
@@ -107,12 +108,17 @@ namespace RobotVacuum.LevelEditor
             BuildChecks();
             BuildRoomList();
             BuildDoorwayList();
+            BuildObstacleList();
 
             Ui.Section(scroll, "New rooms", out var newRooms);
             BuildFloorPicker(newRooms, session.PaintFloor, index => session.PaintFloor = index);
             var walls = new SwitchToggle("Include walls", session.NewRoomsHaveWalls);
             walls.ValueChanged += value => session.NewRoomsHaveWalls = value;
             newRooms.Add(walls);
+
+            Ui.Section(scroll, "New furniture", out var newFurniture);
+            BuildKindPicker(newFurniture, session.ObstacleKind, kind => session.ObstacleKind = kind);
+            Ui.Text(newFurniture, "Place it with the Furniture tool (O).", "le-empty-hint");
 
             Ui.Section(scroll, "Walls", out var wallBody);
             Ui.Text(wallBody, "Thickness", "le-field-label");
@@ -218,6 +224,30 @@ namespace RobotVacuum.LevelEditor
             }
         }
 
+        void BuildObstacleList()
+        {
+            var level = session.Level;
+            if (level.Obstacles.Count == 0) return;
+
+            Ui.Section(scroll, $"Furniture · {level.Obstacles.Count}", out var body);
+            Ui.Text(body, $"Blocks {Ui.FormatArea(level.BlockedFloorArea())} of floor the vacuum can't clean.", "le-body-text");
+
+            for (int i = 0; i < level.Obstacles.Count; i++)
+            {
+                var obstacle = level.Obstacles[i];
+                if (obstacle == null) continue;
+
+                int index = i;
+                var row = Ui.Div(body, "le-list-row");
+                Ui.Swatch(row, Obstacle.ColorOf(obstacle.kind), "le-swatch le-swatch--round");
+                Ui.Text(row, obstacle.name, "le-list-row__label");
+                Ui.Text(row, obstacle.blocksVacuum ? "Blocks" : "Passable", "le-list-row__meta");
+                Ui.IconButton(row, IconKind.Trash, "Delete furniture", () => session.DeleteObstacle(index), "le-list-row__action");
+
+                row.AddManipulator(new Clickable(() => session.SelectObstacle(index)));
+            }
+        }
+
         // ---------------------------------------------------------------- room
 
         void BuildRoom(int index, Room room)
@@ -316,7 +346,8 @@ namespace RobotVacuum.LevelEditor
 
                 var text = Ui.Div(card, "le-floor-card__text");
                 Ui.Text(text, palette.LabelOf(i), "le-floor-card__name");
-                if (floor != null) Ui.Text(text, $"{floor.speedMultiplier:0.##}× speed", "le-floor-card__meta");
+                if (floor != null)
+                    Ui.Text(text, $"{floor.speedMultiplier:0.##}× speed · {1f / Mathf.Max(0.01f, floor.cleaningEffort):0.##}× clean", "le-floor-card__meta");
 
                 card.AddManipulator(new Clickable(() => onPick(index)));
             }
@@ -341,6 +372,83 @@ namespace RobotVacuum.LevelEditor
 
             var actions = Ui.Div(scroll, "le-button-row le-inspector__actions");
             Ui.Button(actions, "Delete doorway", IconKind.Trash, () => session.DeleteDoorway(index), "le-btn--danger-ghost le-btn--grow");
+        }
+
+        // ---------------------------------------------------------------- furniture
+
+        void BuildObstacle(int index, Obstacle obstacle)
+        {
+            var header = Ui.Div(scroll, "le-inspector__header le-inspector__header--row");
+            var titleBlock = Ui.Div(header, "le-inspector__header-text");
+            Ui.Text(titleBlock, "Furniture", "le-inspector__eyebrow");
+            Ui.IconButton(header, IconKind.Close, "Deselect (Esc)", session.ClearSelection, "le-btn--ghost le-btn--small");
+
+            var nameField = Ui.TextInput(scroll, obstacle.name, value => session.RenameObstacle(index, value), "le-input--title");
+            nameField.RegisterCallback<KeyDownEvent>(evt =>
+            {
+                if (evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter || evt.keyCode == KeyCode.Escape)
+                    nameField.Blur();
+            });
+
+            var stats = Ui.Div(scroll, "le-stats");
+            var footprint = Ui.Stat(stats, "Footprint", string.Empty);
+            var width = Ui.Stat(stats, "Width", string.Empty);
+            var depth = Ui.Stat(stats, "Depth", string.Empty);
+            Live(() =>
+            {
+                footprint.text = Ui.FormatArea(obstacle.size.x * obstacle.size.y);
+                width.text = Ui.FormatMetres(obstacle.size.x);
+                depth.text = Ui.FormatMetres(obstacle.size.y);
+            });
+
+            Ui.Section(scroll, "Vacuum", out var vacuumBody);
+            var passes = new SwitchToggle("Can pass underneath", !obstacle.blocksVacuum);
+            passes.ValueChanged += value => session.SetObstacleBlocks(index, !value);
+            vacuumBody.Add(passes);
+            Ui.Text(vacuumBody, obstacle.blocksVacuum
+                ? "The vacuum bumps into it, and the floor beneath isn't counted towards coverage."
+                : "The vacuum drives under it and cleans the floor beneath.", "le-empty-hint");
+
+            Ui.Section(scroll, "Kind", out var kindBody);
+            BuildKindPicker(kindBody, obstacle.kind, kind => session.SetObstacleKind(index, kind));
+
+            Ui.Section(scroll, "Size", out var sizeBody);
+            Ui.Text(sizeBody, "Width", "le-field-label");
+            var widthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.x, v => $"{v:0.00} m");
+            BindContinuous(widthSlider, "Resize Furniture", v => session.SetObstacleSizeLive(index, new Vector2(v, obstacle.size.y)));
+            sizeBody.Add(widthSlider);
+
+            Ui.Text(sizeBody, "Depth", "le-field-label");
+            var depthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.y, v => $"{v:0.00} m");
+            BindContinuous(depthSlider, "Resize Furniture", v => session.SetObstacleSizeLive(index, new Vector2(obstacle.size.x, v)));
+            sizeBody.Add(depthSlider);
+
+            Ui.Text(sizeBody, "Rotation", "le-field-label");
+            var rotationSlider = new ValueSlider(0f, 360f, obstacle.rotation, v => $"{v:0}°");
+            BindContinuous(rotationSlider, "Rotate Furniture", v => session.SetObstacleRotationLive(index, v));
+            sizeBody.Add(rotationSlider);
+            Ui.Text(sizeBody, "Drag it on the canvas with the Select tool to move it.", "le-empty-hint");
+
+            var actions = Ui.Div(scroll, "le-button-row le-inspector__actions");
+            Ui.Button(actions, "Duplicate", IconKind.Duplicate, () => session.DuplicateObstacle(index), "le-btn--ghost le-btn--grow");
+            Ui.Button(actions, "Delete", IconKind.Trash, () => session.DeleteObstacle(index), "le-btn--danger-ghost le-btn--grow");
+        }
+
+        void BuildKindPicker(VisualElement parent, ObstacleKind selected, Action<ObstacleKind> onPick)
+        {
+            var grid = Ui.Div(parent, "le-floor-grid");
+            foreach (ObstacleKind kind in Enum.GetValues(typeof(ObstacleKind)))
+            {
+                var captured = kind;
+                var card = Ui.Div(grid, kind == selected ? "le-floor-card le-floor-card--selected" : "le-floor-card");
+                Ui.Swatch(card, Obstacle.ColorOf(kind), "le-floor-card__swatch");
+
+                var text = Ui.Div(card, "le-floor-card__text");
+                Ui.Text(text, Obstacle.DefaultName(kind), "le-floor-card__name");
+                Ui.Text(text, Obstacle.DefaultBlocks(kind) ? "Blocks" : "Passable", "le-floor-card__meta");
+
+                card.AddManipulator(new Clickable(() => onPick(captured)));
+            }
         }
 
         // ---------------------------------------------------------------- helpers
