@@ -310,29 +310,4 @@ namespace RobotVacuum.Sim
             return mesh;
         }
     }
-
-#if UNITY_EDITOR
-    [InitializeOnLoad]
-    static class VacuumRobotEditorLifecycle
-    {
-        static VacuumRobotEditorLifecycle()
-        {
-            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-        }
-
-        static void OnPlayModeStateChanged(PlayModeStateChange state)
-        {
-            if (state == PlayModeStateChange.EnteredEditMode)
-                EditorApplication.delayCall += RebuildSceneVisuals;
-        }
-
-        static void RebuildSceneVisuals()
-        {
-            if (EditorApplication.isPlayingOrWillChangePlaymode) return;
-
-            foreach (var robot in Object.FindObjectsByType<VacuumRobot>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-                robot.BuildVisual();
-        }
-    }
-#endif
 }
