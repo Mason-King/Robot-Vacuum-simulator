@@ -7,10 +7,11 @@ namespace RobotVacuum.Sim
     //
     // Draws VacuumCleaningController's grid as a colored overlay: untouched
     // (fully dirty) cells are fully transparent, so the real floor shows through
-    // from the start, and cells solidify toward an opaque evergreen color as the
-    // robot cleans them -- a coverage-progress look, not the usual red "dirt"
-    // heatmap. One quad, one generated texture -- not one GameObject per cell,
-    // which would be far too many objects at ~1-inch resolution.
+    // from the start, and cells change colour as the robot cleans them -- red
+    // when barely touched, through orange and yellow, to green when fully clean
+    // (an editable Gradient). One quad, one generated texture -- not one
+    // GameObject per cell, which would be far too many objects at ~1-inch
+    // resolution.
     // ============================================================================
     [RequireComponent(typeof(MeshFilter))]
     [RequireComponent(typeof(MeshRenderer))]
@@ -25,8 +26,13 @@ namespace RobotVacuum.Sim
         [Tooltip("Z offset from the floor. Small negative values sit the heatmap above the floor and below the walls, matching LevelRenderer's floorDepth/wallDepth convention (floor at 0, walls slightly negative).")]
         [SerializeField] float depthOffset = -0.02f;
 
-        [Tooltip("Overlay color for a fully CLEAN cell (dirtiness = 0), shown at full alpha -- solid. A fully DIRTY cell (dirtiness = 1, the starting state for every cell) is always fully transparent, regardless of this color, so the real floor is visible from the start. Cells interpolate between the two as they're cleaned.")]
-        [SerializeField] Color cleanColor = new Color(0.09f, 0.35f, 0.18f, 1f); // evergreen
+        [Tooltip("Colour by how clean a cell is: the left end is barely touched, the right end fully clean. A cell nobody has cleaned yet is always fully transparent, whatever the gradient says, so the real floor is visible from the start.")]
+        [SerializeField] Gradient colors = DefaultColors();
+
+        // The gradient sampled once into a lookup table, so repainting a
+        // large grid doesn't call Gradient.Evaluate for every cell.
+        const int PaletteSize = 256;
+        Color32[] palette;
 
         Texture2D texture;
         Mesh quadMesh;
@@ -40,6 +46,7 @@ namespace RobotVacuum.Sim
                 controller = FindAnyObjectByType<VacuumCleaningController>(FindObjectsInactive.Include);
 
             GetComponent<MeshRenderer>().sharedMaterial = BuildMaterial();
+            BuildPalette();
         }
 
         void Update()
@@ -130,6 +137,7 @@ namespace RobotVacuum.Sim
         {
             var grid = controller.Grid;
             var pixels = new Color32[builtCols * builtRows];
+            if (palette == null) BuildPalette();
 
             for (int row = 0; row < builtRows; row++)
             {
@@ -141,21 +149,19 @@ namespace RobotVacuum.Sim
                     // to show, since they're excluded from coverage entirely
                     // (matches CalculateCoveragePercent's own treatment).
                     // Set for cells under furniture that blocks the vacuum.
-                    Color pixelColor;
+                    Color32 pixelColor;
                     if (cell.isNonCleanable)
                     {
-                        pixelColor = new Color(0f, 0f, 0f, 0f);
+                        pixelColor = default;
                     }
                     else
                     {
                         // dirtiness runs 1 (dirty, the starting state) -> 0
-                        // (clean). We want the OPPOSITE mapping to alpha:
-                        // dirty -> transparent (floor visible from the
-                        // start), clean -> solid evergreen. So alpha scales
-                        // with (1 - dirtiness), not dirtiness directly.
+                        // (clean). The palette is indexed by how CLEAN a cell
+                        // is, so untouched cells stay transparent and colour
+                        // builds up from red to green as the robot works.
                         float cleanedFraction = 1f - cell.Dirtiness;
-                        float alpha = cleanedFraction * cleanColor.a;
-                        pixelColor = new Color(cleanColor.r, cleanColor.g, cleanColor.b, alpha);
+                        pixelColor = palette[Mathf.Clamp(Mathf.RoundToInt(cleanedFraction * (PaletteSize - 1)), 0, PaletteSize - 1)];
                     }
 
                     // Texture2D rows run bottom-to-top by convention; our
@@ -169,6 +175,49 @@ namespace RobotVacuum.Sim
 
             texture.SetPixels32(pixels);
             texture.Apply();
+        }
+
+        void OnValidate() => palette = null; // rebuilt from the edited gradient on the next repaint
+
+        void BuildPalette()
+        {
+            palette = new Color32[PaletteSize];
+            for (int i = 0; i < PaletteSize; i++)
+                palette[i] = colors.Evaluate(i / (float)(PaletteSize - 1));
+
+            // Untouched floor stays see-through whatever the gradient's left end looks like.
+            palette[0] = default;
+        }
+
+        static Gradient DefaultColors()
+        {
+            var gradient = new Gradient();
+            gradient.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(new Color(0.90f, 0.26f, 0.29f), 0f),    // barely touched: red
+                    new GradientColorKey(new Color(0.96f, 0.58f, 0.22f), 0.35f), // orange
+                    new GradientColorKey(new Color(0.96f, 0.84f, 0.29f), 0.6f),  // yellow
+                    new GradientColorKey(new Color(0.24f, 0.80f, 0.54f), 1f),    // fully clean: green
+                },
+                new[]
+                {
+                    new GradientAlphaKey(0f, 0f),
+                    new GradientAlphaKey(0.8f, 0.06f),
+                    new GradientAlphaKey(0.85f, 1f),
+                });
+            return gradient;
+        }
+
+        // Runs may be started and stopped many times in one session, so the
+        // generated texture, mesh and material go with the component.
+        void OnDestroy()
+        {
+            if (texture != null) Destroy(texture);
+            if (quadMesh != null) Destroy(quadMesh);
+
+            var meshRenderer = GetComponent<MeshRenderer>();
+            if (meshRenderer != null && meshRenderer.sharedMaterial != null) Destroy(meshRenderer.sharedMaterial);
         }
 
         Material BuildMaterial()

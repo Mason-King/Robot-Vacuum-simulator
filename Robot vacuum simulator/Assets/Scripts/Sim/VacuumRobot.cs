@@ -48,6 +48,9 @@ namespace RobotVacuum.Sim
         [Header("Movement")]
         [SerializeField] MovementPattern movementPattern = MovementPattern.RandomBounce;
 
+        [Tooltip("What the Picture movement pattern draws into the coverage heatmap.")]
+        [SerializeField] PictureKind picture = PictureKind.Heart;
+
         Rigidbody2D body;
         CircleCollider2D circle;
         State state = State.Driving;
@@ -55,6 +58,9 @@ namespace RobotVacuum.Sim
         float targetHeading;
         MovementBrain brain;
         MovementPattern brainPattern;
+        PictureKind brainPicture;
+        float speedScale = 1f;
+        float cleaningLimit = 1f;
         readonly Queue<Step> steps = new Queue<Step>();
         readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
@@ -75,17 +81,62 @@ namespace RobotVacuum.Sim
                 movementPattern = value;
                 steps.Clear();
                 state = State.Driving;
+                speedScale = 1f;
+                cleaningLimit = 1f;
+                Print = null;
             }
         }
+
+        /// <summary>What the Picture pattern draws. Changing it starts the drawing again.</summary>
+        public PictureKind Picture
+        {
+            get => picture;
+            set
+            {
+                if (picture == value) return;
+                picture = value;
+                Print = null;
+                steps.Clear();
+                state = State.Driving;
+            }
+        }
+
+        /// <summary>Multiplies drive speed, so a brain can slow down for careful work. Back to 1 on reset.</summary>
+        public float SpeedScale
+        {
+            get => speedScale;
+            set => speedScale = Mathf.Clamp01(value);
+        }
+
+        /// <summary>
+        /// The cleanest the vacuum may leave the floor under it: 0 is suction off, 1 (the default) no limit.
+        /// The cleaning controller respects it; the Picture pattern shades with it.
+        /// </summary>
+        public float CleaningLimit
+        {
+            get => cleaningLimit;
+            set => cleaningLimit = Mathf.Clamp01(value);
+        }
+
+        /// <summary>A picture strip to print straight into the coverage grid under the robot, or null. Set by the Picture pattern.</summary>
+        public PrintStrip? Print { get; set; }
+
+        public LevelData Level => levelRenderer != null ? levelRenderer.Level : null;
+
+        /// <summary>Where the vacuum is, in level metres.</summary>
+        public Vector2 LevelPosition =>
+            levelRenderer != null ? levelRenderer.WorldToLevel(transform.position) : (Vector2)transform.position;
 
         MovementBrain Brain
         {
             get
             {
-                if (brain == null || brainPattern != movementPattern)
+                bool pictureChanged = movementPattern == MovementPattern.Picture && brainPicture != picture;
+                if (brain == null || brainPattern != movementPattern || pictureChanged)
                 {
-                    brain = MovementBrain.Create(movementPattern);
+                    brain = MovementBrain.Create(movementPattern, picture);
                     brainPattern = movementPattern;
+                    brainPicture = picture;
                     brain.Reset(this);
                 }
                 return brain;
@@ -101,9 +152,10 @@ namespace RobotVacuum.Sim
         public float WanderDegreesPerSecond => wanderDegreesPerSecond;
 
         /// <summary>Forward speed on the floor it is on now, in metres per second.</summary>
-        public float DriveSpeedNow => driveSpeed * SurfaceSpeedMultiplier();
+        public float DriveSpeedNow => driveSpeed * SurfaceSpeedMultiplier() * speedScale;
 
-        float Heading => body != null ? body.rotation : transform.eulerAngles.z;
+        /// <summary>Facing, in degrees counter-clockwise; 0 faces +y.</summary>
+        public float Heading => body != null ? body.rotation : transform.eulerAngles.z;
 
         public Vector2 Forward
         {
@@ -336,6 +388,9 @@ namespace RobotVacuum.Sim
         {
             steps.Clear();
             state = State.Driving;
+            speedScale = 1f;
+            cleaningLimit = 1f;
+            Print = null;
             Brain.Reset(this);
 
             if (levelRenderer == null || levelRenderer.Level == null) return;

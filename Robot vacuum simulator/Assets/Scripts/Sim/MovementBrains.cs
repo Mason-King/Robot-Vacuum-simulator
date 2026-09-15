@@ -1,9 +1,11 @@
+using System.Collections.Generic;
+using RobotVacuum.Level;
 using UnityEngine;
 
 namespace RobotVacuum.Sim
 {
     /// <summary>How the vacuum chooses where to go. The order matches <see cref="MovementBrain.Labels"/>.</summary>
-    public enum MovementPattern { RandomBounce, Spiral, WallFollow, Lawnmower }
+    public enum MovementPattern { RandomBounce, Spiral, WallFollow, Lawnmower, Picture }
 
     /// <summary>
     /// What the vacuum does after backing off from a bump: turn, then optionally drive a set distance
@@ -24,18 +26,39 @@ namespace RobotVacuum.Sim
     }
 
     /// <summary>
+    /// A horizontal strip of a picture, in level metres, that the cleaning controller writes straight into
+    /// the coverage grid under the robot. Only the Picture pattern uses it.
+    /// </summary>
+    public readonly struct PrintStrip
+    {
+        public readonly PixelPicture picture;
+        public readonly Rect canvas;
+        public readonly float yMin;
+        public readonly float yMax;
+
+        public PrintStrip(PixelPicture picture, Rect canvas, float yMin, float yMax)
+        {
+            this.picture = picture;
+            this.canvas = canvas;
+            this.yMin = yMin;
+            this.yMax = yMax;
+        }
+    }
+
+    /// <summary>
     /// A movement algorithm. <see cref="VacuumRobot"/> does the driving, backing off and turning; a brain
     /// only decides how to steer while driving freely and what to do after each bump.
     /// </summary>
     public abstract class MovementBrain
     {
-        public static readonly string[] Labels = { "Random", "Spiral", "Wall follow", "Lawnmower" };
+        public static readonly string[] Labels = { "Random", "Spiral", "Wall follow", "Lawnmower", "Picture" };
 
-        public static MovementBrain Create(MovementPattern pattern) => pattern switch
+        public static MovementBrain Create(MovementPattern pattern, PictureKind picture = PictureKind.Heart) => pattern switch
         {
             MovementPattern.Spiral => new SpiralBrain(),
             MovementPattern.WallFollow => new WallFollowBrain(),
             MovementPattern.Lawnmower => new LawnmowerBrain(),
+            MovementPattern.Picture => new PictureBrain(picture),
             _ => new RandomBounceBrain(),
         };
 
@@ -191,6 +214,132 @@ namespace RobotVacuum.Sim
             float turn = turnLeftNext ? 90f : -90f;
             turnLeftNext = !turnLeftNext;
             return new Manoeuvre(turn, robot.CleaningWidth * LaneOverlap, turn);
+        }
+    }
+
+    /// <summary>
+    /// Prints a picture into the coverage heatmap, just for fun. It sweeps the room it starts in row by row
+    /// with suction off, and as it passes over the picture the cleaning controller writes each grid cell
+    /// straight to the picture's shade. That skips the dirt model entirely, so even a photo comes out at
+    /// the grid's full resolution. Unlike the other patterns it plans a route, since it scales to the room.
+    /// </summary>
+    public sealed class PictureBrain : MovementBrain
+    {
+        /// <summary>Rows are at most this fraction of the cleaning width apart, like a real lawnmower pass.</summary>
+        public const float LaneOverlap = 0.85f;
+
+        const float TurnSpeed = 0.05f;
+        const float ArriveDistance = 0.1f;
+        const float SteeringGain = 10f;
+        const float WallMargin = 0.25f;
+
+        readonly PixelPicture fixedPicture;
+        readonly PictureKind kind;
+        readonly List<Vector2> waypoints = new List<Vector2>();
+        bool planned;
+        int next;
+        float lane;
+
+        /// <summary>Always draws this picture.</summary>
+        public PictureBrain(PixelPicture picture) => fixedPicture = picture;
+
+        /// <summary>Draws a library picture, looked up again whenever the route is planned, so a newly loaded image is used after a reset.</summary>
+        public PictureBrain(PictureKind kind) => this.kind = kind;
+
+        /// <summary>The picture being drawn. Set once the route is planned.</summary>
+        public PixelPicture Picture { get; private set; }
+
+        /// <summary>Where the picture lands, in level metres. Set once the route is planned.</summary>
+        public Rect Canvas { get; private set; }
+
+        /// <summary>Pairs of row starts and ends, top row first, alternating direction.</summary>
+        public IReadOnlyList<Vector2> Waypoints => waypoints;
+
+        public bool Finished => planned && next >= waypoints.Count;
+
+        public override void Reset(VacuumRobot robot)
+        {
+            planned = false;
+            next = 0;
+            waypoints.Clear();
+        }
+
+        public override float Steer(VacuumRobot robot, float dt)
+        {
+            if (!planned) Plan(robot);
+
+            robot.CleaningLimit = 0f; // no ordinary cleaning: the picture is printed instead
+
+            if (next >= waypoints.Count)
+            {
+                robot.SpeedScale = 0f;
+                robot.Print = null;
+                return 0f;
+            }
+
+            Vector2 toTarget = waypoints[next] - robot.LevelPosition;
+            if (toTarget.magnitude < ArriveDistance)
+            {
+                next++;
+                robot.Print = null;
+                return 0f;
+            }
+
+            float desired = Mathf.Atan2(-toTarget.x, toTarget.y) * Mathf.Rad2Deg;
+            float error = Mathf.DeltaAngle(robot.Heading, desired);
+
+            // Odd waypoints are the far ends of rows, so heading for one prints that row's strip.
+            float rowY = waypoints[next].y;
+            robot.Print = next % 2 == 1
+                ? new PrintStrip(Picture, Canvas, rowY - lane * 0.5f, rowY + lane * 0.5f)
+                : (PrintStrip?)null;
+            robot.SpeedScale = Mathf.Abs(error) > 20f ? TurnSpeed : 1f;
+
+            return Mathf.Clamp(error * SteeringGain, -360f, 360f);
+        }
+
+        public override Manoeuvre AfterBump(VacuumRobot robot)
+        {
+            // Something is in the way: give up on this point and carry on to the next.
+            if (next < waypoints.Count) next++;
+            return new Manoeuvre(0f);
+        }
+
+        void Plan(VacuumRobot robot)
+        {
+            planned = true;
+            waypoints.Clear();
+            next = 0;
+            Picture = fixedPicture ?? Pictures.Get(kind);
+
+            var level = robot.Level;
+            if (level == null || Picture == null || Picture.Width == 0) return;
+
+            int roomIndex = level.RoomIndexAt(robot.LevelPosition);
+            var room = level.GetRoom(roomIndex >= 0 ? roomIndex : 0);
+            if (room == null || !room.IsValid) return;
+
+            // As large as the room allows, keeping the footprint clear of the walls.
+            var bounds = Poly2D.Bounds(room.outline);
+            float margin = robot.Radius + WallMargin;
+            float pixel = Mathf.Min((bounds.width - margin * 2f) / Picture.Width, (bounds.height - margin * 2f) / Picture.Height);
+            if (pixel <= 0f) return;
+
+            var size = new Vector2(Picture.Width * pixel, Picture.Height * pixel);
+            Canvas = new Rect(bounds.center - size * 0.5f, size);
+
+            int rows = Mathf.CeilToInt(size.y / (robot.CleaningWidth * LaneOverlap));
+            lane = size.y / rows;
+
+            for (int r = 0; r < rows; r++)
+            {
+                float y = Canvas.yMax - (r + 0.5f) * lane;
+                var left = new Vector2(Canvas.xMin - robot.Radius, y);
+                var right = new Vector2(Canvas.xMax + robot.Radius, y);
+
+                waypoints.Add(r % 2 == 0 ? left : right);
+                waypoints.Add(r % 2 == 0 ? right : left);
+            }
         }
     }
 }

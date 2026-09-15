@@ -49,6 +49,7 @@ namespace RobotVacuum.Sim
 
         Rigidbody2D robotBody;
         CircleCollider2D robotCollider;
+        VacuumRobot robot;
 
         // The grid itself. Public so the heatmap renderer (or anything else
         // that wants to read coverage state) can get at it without this
@@ -71,6 +72,7 @@ namespace RobotVacuum.Sim
         {
             robotBody = GetComponent<Rigidbody2D>();
             robotCollider = GetComponent<CircleCollider2D>();
+            robot = GetComponent<VacuumRobot>();
 
             if (levelRenderer == null)
                 levelRenderer = FindAnyObjectByType<LevelRenderer>(FindObjectsInactive.Include);
@@ -84,6 +86,23 @@ namespace RobotVacuum.Sim
                 return;
             }
 
+            BuildGrid();
+        }
+
+        // ------------------------------------------------------------------
+        // Throws away all coverage and starts from a fully dirty floor, e.g.
+        // when a run is restarted.
+        // ------------------------------------------------------------------
+        public void ResetCoverage()
+        {
+            if (level == null) return;
+
+            simTimeElapsed = 0f;
+            BuildGrid();
+        }
+
+        void BuildGrid()
+        {
             Grid = new ExternalModelGrid(level, levelRenderer, cellSizeMeters);
 
             // Marks cells under blocking furniture as non-cleanable (see ExternalModelGrid.cs).
@@ -97,6 +116,8 @@ namespace RobotVacuum.Sim
 
             simTimeElapsed += Time.fixedDeltaTime;
             CleanCellsUnderFootprint(Time.fixedDeltaTime);
+
+            if (robot != null && robot.Print.HasValue) PrintUnderRobot(robot.Print.Value);
         }
 
         // ------------------------------------------------------------------
@@ -114,6 +135,11 @@ namespace RobotVacuum.Sim
         // ------------------------------------------------------------------
         void CleanCellsUnderFootprint(float dt)
         {
+            // The robot can cap how clean it leaves the floor (the Picture
+            // pattern shades with this); cells never go below that dirtiness.
+            float dirtinessFloor = robot != null ? 1f - robot.CleaningLimit : 0f;
+            if (dirtinessFloor >= 1f) return; // suction off
+
             Vector2 position = robotBody.position;
             float radius = robotCollider.radius;
 
@@ -140,7 +166,10 @@ namespace RobotVacuum.Sim
                     CellState cell = Grid.GetCell(row, col);
                     if (cell.isNonCleanable) continue; // under blocking furniture -- see ExternalModelGrid.PopulateFromLevelObject
 
-                    float updated = cell.Dirtiness - dirtinessDecreasePerSecond * RateMultiplierAt(row, col, cellCenter) * dt;
+                    if (cell.Dirtiness <= dirtinessFloor) continue;
+
+                    float cleaned = cell.Dirtiness - dirtinessDecreasePerSecond * RateMultiplierAt(row, col, cellCenter) * dt;
+                    float updated = Mathf.Max(dirtinessFloor, cleaned);
                     Grid.SetDirtiness(row, col, updated, simTimeElapsed);
                 }
             }
@@ -165,5 +194,50 @@ namespace RobotVacuum.Sim
             cellRateMultiplier[index] = multiplier;
             return multiplier;
         }
+
+        // ------------------------------------------------------------------
+        // NOT CLEANING -- a toy for the Picture movement pattern. Writes each
+        // cell in the picture strip under the robot straight to the picture's
+        // shade (shade 1 = fully clean), so the heatmap shows the picture at
+        // full grid resolution. Deliberately bypasses the dirt model above.
+        // ------------------------------------------------------------------
+        void PrintUnderRobot(PrintStrip strip)
+        {
+            if (strip.picture == null) return;
+
+            Vector2 center = robot.LevelPosition;
+            float half = robotCollider.radius;
+            Vector2 cornerA = ToWorld(new Vector2(center.x - half, strip.yMin));
+            Vector2 cornerB = ToWorld(new Vector2(center.x + half, strip.yMax));
+            Vector2 min = Vector2.Min(cornerA, cornerB);
+            Vector2 max = Vector2.Max(cornerA, cornerB);
+
+            Vector2 origin = Grid.OriginWorld;
+            float cellSize = Grid.CellSizeMeters;
+            int minCol = Mathf.Clamp(Mathf.FloorToInt((min.x - origin.x) / cellSize), 0, Grid.Cols - 1);
+            int maxCol = Mathf.Clamp(Mathf.FloorToInt((max.x - origin.x) / cellSize), 0, Grid.Cols - 1);
+            int minRow = Mathf.Clamp(Mathf.FloorToInt((min.y - origin.y) / cellSize), 0, Grid.Rows - 1);
+            int maxRow = Mathf.Clamp(Mathf.FloorToInt((max.y - origin.y) / cellSize), 0, Grid.Rows - 1);
+
+            for (int row = minRow; row <= maxRow; row++)
+            {
+                for (int col = minCol; col <= maxCol; col++)
+                {
+                    CellState cell = Grid.GetCell(row, col);
+                    if (cell.isNonCleanable) continue;
+
+                    Vector2 world = Grid.GridIndexToWorldCenter(row, col);
+                    Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
+                    if (point.y < strip.yMin || point.y > strip.yMax) continue;
+
+                    float target = 1f - strip.picture.Sample(strip.canvas, point);
+                    if (Mathf.Abs(cell.Dirtiness - target) > 1e-3f)
+                        Grid.SetDirtiness(row, col, target, simTimeElapsed);
+                }
+            }
+        }
+
+        Vector2 ToWorld(Vector2 levelPoint) =>
+            levelRenderer != null ? (Vector2)levelRenderer.LevelToWorld(levelPoint) : levelPoint;
     }
 }
