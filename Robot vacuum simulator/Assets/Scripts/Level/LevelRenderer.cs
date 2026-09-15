@@ -47,7 +47,7 @@ namespace RobotVacuum.Level
         {
             if (data == null) return null;
 
-            var all = FindObjectsByType<LevelRenderer>(FindObjectsInactive.Include);
+            var all = FindObjectsByType<LevelRenderer>(FindObjectsInactive.Include, FindObjectsSortMode.None);
             foreach (var renderer in all)
                 if (renderer.level == data) return renderer;
             return null;

@@ -1,0 +1,125 @@
+Title,Description
+EditHistoryTests.NewHistory_HasNothingToUndoOrRedo,"A new undo history reports nothing to undo or redo, has no labels, and refuses both operations."
+EditHistoryTests.Undo_RestoresStateBeforeEdit_AndRedoReturnsToCurrent,"Undo hands back the state from before the edit with its label, and redo returns to the state that was current at undo time."
+EditHistoryTests.Undo_WalksBackInOrder,Repeated undos restore earlier states newest-first with the matching labels.
+EditHistoryTests.Push_DiscardsRedoBranch,"Recording a new edit after an undo throws away the redo step."
+EditHistoryTests.DiscardIfUnchanged_DropsOnlyAMatchingTopEntry,"An unchanged edit is dropped only when the newest undo entry matches the current state; older entries are never compared or removed."
+EditHistoryTests.Push_BeyondCapacity_DropsOldestEntries,"Past the 200-step limit the oldest undo step is evicted, so exactly 200 undos are possible and the very first state is gone."
+EditHistoryTests.Clear_EmptiesBothStacks,Clearing the history removes all undo and redo steps.
+EditorSessionTests.NewSession_IsCleanWithNoHistory,"Opening a level gives the right name and rooms, no unsaved changes, no undo/redo, and no selection."
+EditorSessionTests.Edit_MarksDirty_AndUndoingItClearsDirty,"Adding a room marks the level as unsaved with an ""Add Room"" undo label; undoing removes the room, clears the unsaved flag, enables redo and shows an ""Undo Add Room"" notice."
+EditorSessionTests.Redo_ReappliesTheEdit,"Redo puts an undone room back in the same place, marks the level unsaved again and shows a ""Redo Add Room"" notice."
+EditorSessionTests.UndoAndRedo_WithNothingRecorded_ReturnFalse,Undo and redo with an empty history do nothing and show no notice.
+EditorSessionTests.NewEdit_AfterUndo_DiscardsRedo,Making a new edit after an undo removes the ability to redo.
+EditorSessionTests.MultipleEdits_UndoInReverseOrder,"Moving the vacuum start, removing a wall and renaming a room undo one at a time in reverse order, ending with no unsaved changes."
+EditorSessionTests.CheckpointWithoutAChange_LeavesNoUndoStep,"Starting an edit (e.g. grabbing a point) and finishing it without changing anything leaves no undo step and no unsaved changes."
+EditorSessionTests.LiveDrag_IsOneUndoStep_AndOnlyRaisesLiveChangesUntilCommit,"Dragging the wall thickness slider sends live updates while dragging, one final update on release, and undoes as a single step."
+EditorSessionTests.Edit_RaisesLevelAndDocumentChanged,A normal edit notifies the UI exactly once that the level changed and once that the document changed.
+EditorSessionTests.Save_WritesTheLevel_AndClearsDirty,"Saving writes the level (with its new name and rooms) to its file and clears the unsaved flag."
+EditorSessionTests.Undo_PastASave_MarksDirtyAgain,"Undoing past a save marks the level unsaved; redoing back to the saved state clears the flag."
+EditorSessionTests.Rename_TrimsInput_AndIgnoresBlankOrUnchanged,"Renaming the level trims spaces, ignores blank, null or unchanged names, and records only real renames for undo."
+EditorSessionTests.SelectRoom_InvalidIndex_ClearsSelection,Selecting a room that doesn't exist clears the selection instead of keeping a bad index.
+EditorSessionTests.SelectionChanged_OnlyFiresOnActualChange,Selecting the same room twice or clearing an empty selection doesn't send extra selection-changed notifications.
+EditorSessionTests.SelectingADoorway_DeselectsTheRoom_AndViceVersa,"A room and a doorway can't be selected at the same time; selecting one deselects the other."
+EditorSessionTests.Undo_DropsASelectionThatNoLongerExists,"Undoing the addition of the selected room clears the selection so it doesn't point at a missing room."
+EditorSessionTests.ToolChanged_FiresOncePerChange,Switching tools notifies once; choosing the tool that is already active does not.
+EditorSessionTests.Options_ClampAndNotify,"Editor options clamp bad values (negative floor index, zero snap increment) and only notify when a value actually changes."
+EditorSessionTests.AddRoom_UsesCurrentFloorAndWallDefaults_AndSelectsIt,"A new room uses the current floor covering and the ""new rooms have walls"" setting, gets the next room name, and becomes selected."
+EditorSessionTests.AddRoom_SkipsNamesAlreadyInUse,"Automatic room names skip any ""Room N"" name already taken by another room."
+EditorSessionTests.DeleteRoom_RemovesItsDoorways_AndUndoBringsThemBack,"Deleting a room also deletes its doorways, renumbers the remaining ones, clears the selection and shows a notice; undo restores the room and all doorways."
+EditorSessionTests.DeleteRoom_InvalidIndex_RecordsNothing,Deleting a room that doesn't exist does nothing: no undo step and no notice.
+EditorSessionTests.DuplicateRoom_PlacesACopyBesideTheOriginal,"Duplicating a room places a selected ""copy"" just to the right of the original, keeps its deleted walls, and doesn't share its outline data."
+EditorSessionTests.SetRoomFloor_ChangesCovering_AndBecomesThePaintFloor,"Changing a room's floor covering is undoable and becomes the covering for the next new room; picking the covering it already has records nothing."
+EditorSessionTests.SetWall_RemovesAndRestoresOneWall,"A single wall can be removed and restored with matching undo labels; removing an already-removed wall records nothing."
+EditorSessionTests.SetAllWalls_TogglesEveryEdge,Removing or adding all walls affects every edge of the room.
+EditorSessionTests.InsertVertex_KeepsWallFlagsOnTheRightEdges,"Adding a corner to a room keeps deleted walls on the correct edges, and undo restores the original corners and walls."
+EditorSessionTests.RemoveVertex_StopsAtATriangle,A room can't lose corners below three; the refused removal isn't recorded for undo.
+EditorSessionTests.PlaceDoorway_NearAWall_SnapsOntoIt,"Clicking near an outer wall snaps a default-width doorway onto it, links it to that room and ""Outside"", and selects it."
+EditorSessionTests.PlaceDoorway_AwayFromWalls_IsRefused,"Clicking far from any wall places no doorway, records nothing, and tells the user to click on a wall."
+EditorSessionTests.PlaceDoorway_OnASharedWall_LinksBothRooms,A doorway placed on a wall shared by two rooms links both of those rooms.
+EditorSessionTests.MoveDoorwayLive_RelinksToTheNewWall_WithoutRecordingHistory,"Dragging a doorway onto a different shared wall relinks it to the rooms on that wall, without adding undo steps mid-drag."
+EditorSessionTests.MoveDoorwayLive_OffEveryWall_KeepsItsLinks,Dragging a doorway away from every wall moves it but keeps its existing room links.
+EditorSessionTests.SetDoorwayWidthLive_ClampsToSensibleWidths,Doorway width is clamped between the minimum and maximum allowed widths.
+EditorSessionTests.DeleteSelection_RemovesTheSelectedDoorway,"Delete with a doorway selected removes it, clears the selection and records a ""Delete Doorway"" undo step."
+EditorSessionTests.WallStrokes_CanBeDrawnFoundAndDeleted,"Free-standing walls can be drawn, clicked on (hit-tested) and deleted; deleting an invalid index is ignored and delete is undoable."
+EditorSessionTests.SetWallColor_SameColour_RecordsNothing,"Setting the wall colour to its current value records nothing; a new colour applies and is undoable."
+EditorSessionTests.Snap_RoundsToTheGrid,"With corner snapping off, points round to the nearest grid step, including negative coordinates."
+EditorSessionTests.Snap_PrefersANearbyCornerOverTheGrid,A point close to an existing room corner snaps to that corner instead of the grid.
+EditorSessionTests.Snap_CornerReachScalesWithZoom,"Corner snapping reach is measured in screen pixels: a corner too far away when zoomed in is in reach when zoomed out."
+EditorSessionTests.Snap_IgnoresTheCornerBeingDragged,"While dragging a corner (or a whole room), snapping ignores that corner (or room) but still snaps to other corners."
+EditorSessionTests.Snap_WithEverythingOff_ReturnsThePoint,With grid and corner snapping both off the point is returned unchanged.
+EditorSessionTests.FindVertex_ReturnsTheClosestCornerWithinTolerance,"Clicking finds the nearest room corner within the tolerance, and returns nothing when too far away or for a missing room."
+EditorSessionTests.TryFindEdge_ProjectsOntoTheNearestEdge,"Clicking near a room edge finds that edge and the closest point on it; nothing is found far from edges or for a missing room."
+EditorSessionTests.TryFindAnyEdge_SearchesEveryRoom,Edge hit-testing across the whole level finds the right room and edge in rooms other than the first.
+EditorSessionTests.NearestWall_GivesDistanceAndDirection,Returns the distance to the closest wall and that wall's direction.
+EditorSessionTests.FindDoorway_WithinTolerance,"Clicking near a doorway finds it; clicking elsewhere finds nothing."
+EditorSessionTests.Validate_SampleApartment_IsClean,The built-in sample apartment produces no validation issues.
+EditorSessionTests.Validate_EmptyLevel_PromptsForARoom,"An empty level gives exactly one warning: ""Draw a room to get started."""
+EditorSessionTests.Validate_SelfCrossingRoom_IsAnError,A room whose outline crosses itself is reported as an error on that room.
+EditorSessionTests.Validate_RoomWithTooFewCorners_IsAnError,A room with fewer than 3 corners is reported as an error on that room.
+EditorSessionTests.Validate_SpawnOutsideEveryRoom_Warns,A vacuum start point outside every room gives a warning.
+EditorSessionTests.Validate_RoomWithNoDoorwayPath_Warns,A room the vacuum can't reach through doorways gives a warning naming that room.
+EditorSessionTests.Validate_DoorwayNotOnAWall_Warns,A doorway that isn't on any wall gives a warning that it opens nothing.
+LevelDataTests.GetRoom_OutOfRange_IsNull,Looking up a room by an out-of-range index returns null instead of throwing.
+LevelDataTests.RoomIndexAt_FindsContainingRoom_LaterRoomsWinOverlaps,"Finds which room contains a point (or none when outside), and where rooms overlap the later room wins."
+LevelDataTests.ReachableFrom_FollowsDoorways,"Walking through doorways reaches every connected room from any starting room, and nothing from an invalid room."
+LevelDataTests.UnreachableRooms_ListsRoomsCutOffFromSpawn,Removing the only doorway to a room makes it show up as unreachable from the vacuum start.
+LevelDataTests.UnreachableRooms_IsEmpty_WhenSpawnIsOutside,"When the vacuum starts outside every room, no rooms are listed as unreachable (a separate warning covers that case)."
+LevelDataTests.NeighboursOf_IgnoresDoorwaysToOutside,Doorways leading outside aren't counted as connections to another room.
+LevelDataTests.RemoveRoom_DropsItsDoorways_AndReindexesTheRest,Removing a room deletes its doorways and renumbers the room links on the remaining doorways.
+LevelDataTests.RemoveRoom_OutOfRange_DoesNothing,Removing a room with an invalid index leaves rooms and doorways unchanged.
+LevelDataTests.WallThickness_HasAFloor_AndDrivesDoorwaySnapDistance,"Wall thickness can't go below 0.01 m, and the doorway snap distance is the larger of the wall thickness and 0.12 m."
+LevelDataTests.Bounds_OfEmptyLevel_IsADefaultViewport,A level with no rooms reports a default 10 x 10 m area centred on the origin.
+LevelDataTests.TotalFloorArea_SkipsInvalidRooms,"Total floor area and level bounds ignore rooms with fewer than 3 corners."
+LevelDataTests.FloorTypeAt_UsesPalette_OrNullWithout,"The floor covering under a point comes from the floor palette; it is null without a palette or outside every room."
+LevelDataTests.RectangleOutline_KeepsSizeAndCentreAtAnyRotation,"A generated rectangle room keeps its area, centre and side length at 0, 37 and 90 degrees of rotation (3 cases)."
+LevelDataTests.RegularOutline_HasAtLeastThreeSides_OnTheRadius,"A generated regular polygon always has at least 3 sides, with every corner on the requested radius."
+LevelGeometryTests.Complement_WithoutGaps_IsTheWholeLine,"With no doorway gaps, the whole wall line stays solid."
+LevelGeometryTests.Complement_SplitsAroundAGap,A single doorway gap splits a wall into the solid pieces on either side.
+LevelGeometryTests.Complement_MergesOverlappingGaps_InAnyOrder,Overlapping doorway gaps are merged correctly even when given out of order.
+LevelGeometryTests.Complement_ClampsGapsHangingOffTheEnds,"Gaps that extend past the ends of a wall are clipped to the wall, and a gap covering the whole wall leaves nothing solid."
+LevelGeometryTests.CollectWallSegments_OneSegmentPerWalledEdge,A simple 4 x 3 m room produces four wall segments totalling 14 m.
+LevelGeometryTests.CollectWallSegments_OfNullLevel_IsEmpty,Generating walls for a missing level returns no segments instead of throwing.
+LevelGeometryTests.CollectWallSegments_SkipsDeletedWalls,A deleted wall produces no wall geometry.
+LevelGeometryTests.CollectWallSegments_DoorwayCutsAGapOfItsWidth,A 1 m doorway on a wall cuts a 1 m gap in exactly the right place.
+LevelGeometryTests.CollectWallSegments_DoorwaySlightlyOffTheWall_StillCuts,A doorway a few centimetres off a wall still cuts through it.
+LevelGeometryTests.CollectWallSegments_DoorwayFarFromWalls_CutsNothing,A doorway far from every wall doesn't remove any wall.
+LevelGeometryTests.CollectWallSegments_IncludesFreeStandingWalls,"Free-standing walls are included in the wall geometry, and zero-length ones are dropped."
+LevelGeometryTests.CollectWallSegments_SharedWallDoorway_OpensBothRooms,A doorway on a wall shared by two rooms cuts the wall of both rooms by the doorway's width.
+LevelLibraryTests.UniqueName_KeepsAFreeName,A level name that isn't taken is used as-is.
+LevelLibraryTests.UniqueName_NumbersPastTakenNames_IgnoringCase,"Taken level names get a number (""Kitchen 2"", ""Kitchen 4"" …), and name matching ignores upper/lower case."
+LevelLibraryTests.Write_CreatesTheFolder_AndLeavesNoTempFile,"Saving a level creates missing folders, leaves no temporary file behind, and can be read back."
+LevelLibraryTests.Write_ReplacesAnExistingFile,Saving over an existing level file replaces it without leaving extra files.
+LevelLibraryTests.Read_FileThatIsNotALevel_ReturnsNull,Reading a file that isn't a level returns nothing instead of crashing.
+LevelLibraryTests.Delete_RemovesTheFile_AndIgnoresMissingOnes,"Deleting a level removes its file, and deleting a file that is already gone doesn't throw."
+LevelSnapshotTests.SerializeThenParse_PreservesEverything,"Saving a level to JSON and loading it back keeps the name, rooms, corners, floors, deleted walls, doorways, free-standing walls, wall thickness, wall colour and vacuum start."
+LevelSnapshotTests.FromLevel_IsADeepCopy,Changing a copied level doesn't affect the original level.
+LevelSnapshotTests.ApplyTo_ReplacesTheLevelsContents,"Loading a saved level into an existing one fully replaces its rooms, doorways, walls and settings."
+LevelSnapshotTests.Parse_UnreadableInput_ReturnsNull,"Null, empty, whitespace, non-JSON and truncated JSON all load as nothing instead of throwing (5 cases)."
+LevelSnapshotTests.Parse_RepairsMissingAndOutOfRangeValues,"Loading repairs bad data: a blank name gets the default, negative wall thickness and zero doorway width are clamped, and missing wall flags default to walls."
+LevelSnapshotTests.Parse_EmptyObject_GivesAnEmptyUsableLevel,"An empty JSON object loads as a usable empty level with the default name."
+LevelSnapshotTests.ToJson_RoundTrips,Converting a saved level to JSON and back produces identical JSON.
+LevelSnapshotTests.Summaries_MatchTheLevel,"The room count, floor area and bounds shown for a saved level match the live level, ignoring invalid rooms."
+Poly2DTests.SignedArea_IsPositiveCounterClockwise_NegativeClockwise,"Polygon area is positive for counter-clockwise outlines, negative for clockwise ones, and unsigned area is the same either way."
+Poly2DTests.Area_OfDegenerateInput_IsZero,A missing outline or one with fewer than 3 points has zero area.
+Poly2DTests.Area_OfConcaveOutline,An L-shaped (concave) room has the correct area.
+Poly2DTests.Centroid_OfSquare_IsItsMiddle,The centre of a square is its middle.
+Poly2DTests.Centroid_FallsBackToAverage_ForFewOrCollinearPoints,"For empty, two-point or flat (collinear) outlines the centre falls back to the average of the points."
+Poly2DTests.ContainsPoint_RespectsConcavity,"Point-in-room checks work for L-shaped rooms: points in the notch are outside, and outlines with fewer than 3 points contain nothing."
+Poly2DTests.DistanceToSegment_ReportsDistanceAndClampedPosition,"Distance from a point to a wall is correct, with the position along the wall clamped to its ends."
+Poly2DTests.DistanceToSegment_OfZeroLengthSegment_IsPointDistance,A zero-length wall measures distance to its single point without dividing by zero.
+Poly2DTests.Bounds_EnclosesEveryPoint,"The bounding box encloses every point, and a missing outline gives an empty box."
+Poly2DTests.IsSimple_DetectsSelfIntersection,"Squares, L-shapes and triangles are valid outlines; a bow-tie (self-crossing) outline, too few points or a missing outline are not."
+Poly2DTests.Triangulate_ConcaveOutline_CoversExactlyItsArea,"An L-shaped room triangulates into the right number of counter-clockwise triangles covering exactly its area, for both winding directions (2 cases)."
+Poly2DTests.Triangulate_TooFewPoints_ReturnsEmpty,A missing outline or one with fewer than 3 points produces no triangles.
+Poly2DTests.PointInTriangle_IncludesEdges,"Points inside or exactly on a triangle's edge count as inside; points beyond it don't."
+RoomTests.SyncWallEdges_AddsWallsForNewEdges_AndTrimsExtras,"A room always has exactly one wall flag per edge: missing flags are added as walls and extra flags are trimmed."
+RoomTests.HasWall_OutOfRange_IsFalse,Asking about a wall on an edge that doesn't exist returns false instead of throwing.
+RoomTests.SetWall_ToggleWall_AndSetAllWalls,"Individual walls can be removed and toggled back, all walls can be removed at once, and an invalid edge is ignored."
+RoomTests.InsertVertex_BothHalvesInheritTheSplitEdgesWall,"Adding a corner splits an edge into two halves that both keep that edge's wall setting, so a deleted wall stays deleted."
+RoomTests.InsertVertex_InvalidEdge_DoesNothing,Adding a corner on an edge that doesn't exist changes nothing.
+RoomTests.RemoveVertex_KeepsWallFlagsAlignedWithEdges,Removing a corner keeps the number of wall flags equal to the number of edges.
+RoomTests.RemoveVertex_NeverLeavesFewerThanThreeCorners,A triangle room refuses to lose another corner and stays valid.
+RoomTests.EdgeEnd_WrapsToFirstVertex,The last edge of a room ends at its first corner.
+SampleLevelsTests.Apartment_RoomsAreSimpleAndDoorwaysSitOnWalls,"In the sample apartment no room outline crosses itself, and every doorway sits on the walls of both rooms it connects."
+SampleLevelsTests.PopulateBlank_ReplacesExistingContent,"Starting a blank level replaces any existing content with a single room, no doorways or free-standing walls, and the vacuum start inside the room."
