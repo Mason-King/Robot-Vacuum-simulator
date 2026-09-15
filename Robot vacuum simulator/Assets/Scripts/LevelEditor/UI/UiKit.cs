@@ -99,6 +99,14 @@ namespace RobotVacuum.LevelEditor
             return section;
         }
 
+        /// <summary>A label-over-value read-out for the run bars. Returns the value label.</summary>
+        public static Label RunStat(VisualElement parent, string label)
+        {
+            var stat = Div(parent, "le-run-stat");
+            Text(stat, label, "le-run-stat__label");
+            return Text(stat, "—", "le-run-stat__value");
+        }
+
         public static Label Stat(VisualElement parent, string label, string value)
         {
             var tile = Div(parent, "le-stat");

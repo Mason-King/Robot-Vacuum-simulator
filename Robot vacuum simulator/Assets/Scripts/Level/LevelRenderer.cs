@@ -11,6 +11,7 @@ namespace RobotVacuum.Level
     /// </summary>
     [ExecuteAlways]
     [SelectionBase]
+    [DefaultExecutionOrder(-1000)] // wakes before the robot and cleaning grid, which read the level in Awake
     public class LevelRenderer : MonoBehaviour
     {
         const string GeneratedRootName = "Generated";
@@ -36,6 +37,12 @@ namespace RobotVacuum.Level
         }
 
         public float WallDepth => wallDepth;
+
+        void Awake()
+        {
+            // A floor plan sent from the level editor replaces the one saved in the scene.
+            if (Application.isPlaying && LevelHandoff.TryTake(out var handed)) level = handed;
+        }
 
         void OnEnable()
         {

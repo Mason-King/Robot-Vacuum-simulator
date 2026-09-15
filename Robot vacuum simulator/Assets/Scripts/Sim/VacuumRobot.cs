@@ -75,7 +75,19 @@ namespace RobotVacuum.Sim
 
         void OnEnable()
         {
-            if (transform.Find("Visual") == null) BuildVisual();
+            // The generated material is never saved, so a visual stored in a scene comes back with
+            // empty material slots and draws nothing. Rebuild it rather than leave the robot invisible.
+            if (!HasUsableVisual()) BuildVisual();
+        }
+
+        bool HasUsableVisual()
+        {
+            var visual = transform.Find("Visual");
+            if (visual == null) return false;
+
+            foreach (var part in visual.GetComponentsInChildren<MeshRenderer>(true))
+                if (part.sharedMaterial == null) return false;
+            return true;
         }
 
         void ConfigureComponents()

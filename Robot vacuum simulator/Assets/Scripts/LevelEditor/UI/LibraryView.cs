@@ -21,6 +21,7 @@ namespace RobotVacuum.LevelEditor
             AddToClassList("le-library");
 
             var header = Ui.Div(this, "le-topbar le-library__header");
+            Ui.IconButton(header, IconKind.Back, "Start screen", () => HomeRequested?.Invoke(), "le-btn--ghost");
             var brand = Ui.Div(header, "le-brand");
             var mark = new IconElement(IconKind.Logo);
             mark.AddToClassList("le-brand__mark");
@@ -40,6 +41,9 @@ namespace RobotVacuum.LevelEditor
         }
 
         public event Action<string> OpenRequested;
+
+        /// <summary>The back button was pressed.</summary>
+        public event Action HomeRequested;
 
         /// <summary>The "New floor plan" button was pressed; the element is the anchor for a menu.</summary>
         public event Action<VisualElement> NewRequested;

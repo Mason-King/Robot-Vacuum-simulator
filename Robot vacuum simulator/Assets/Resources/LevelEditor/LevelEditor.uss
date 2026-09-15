@@ -1443,6 +1443,47 @@
     margin: 0 8px 0 4px;
 }
 
+/* ------------------------------------------------------------ start screen */
+
+.le-start {
+    align-items: center;
+    justify-content: center;
+}
+
+.le-start__mark {
+    width: 64px;
+    height: 64px;
+    color: var(--accent);
+}
+
+.le-start__title {
+    margin-top: 20px;
+    font-size: 28px;
+    -unity-font-style: bold;
+}
+
+.le-start__text {
+    margin-top: 8px;
+    max-width: 420px;
+    white-space: normal;
+    -unity-text-align: middle-center;
+}
+
+.le-app .le-start__text {
+    color: var(--text-2);
+}
+
+.le-start__actions {
+    flex-direction: row;
+    margin-top: 28px;
+}
+
+.le-start__button {
+    height: 40px;
+    margin: 0 6px;
+    padding: 0 18px;
+}
+
 /* ------------------------------------------------------------ scrollbars */
 
 .le-app .unity-scroller--vertical {

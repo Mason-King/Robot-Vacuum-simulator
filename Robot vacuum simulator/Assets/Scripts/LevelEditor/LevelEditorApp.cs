@@ -16,9 +16,6 @@ namespace RobotVacuum.LevelEditor
     [DisallowMultipleComponent]
     public sealed class LevelEditorApp : MonoBehaviour
     {
-        const string StyleSheetPath = "LevelEditor/LevelEditor";
-        const string ThemePath = "LevelEditor/LevelEditorTheme";
-
         [Tooltip("Floor coverings rooms can use. Left empty, the built-in six-covering palette is used.")]
         [SerializeField] FloorPalette palette;
 
@@ -38,7 +35,7 @@ namespace RobotVacuum.LevelEditor
             (EditorTool.Spawn, IconKind.Spawn, "Vacuum start", "S"),
         };
 
-        UIDocument document;
+        VisualElement root;
         PanelSettings panelSettings;
         FloorPalette runtimePalette;
         VisualElement app;
@@ -76,7 +73,11 @@ namespace RobotVacuum.LevelEditor
             if (palette == null) runtimePalette = FloorPalette.CreateDefault();
 
             CreatePanel();
-            ShowLibrary();
+
+            // Coming back from the simulator reopens the floor plan that was playing.
+            string returning = SimLauncher.TakeReturnPath();
+            if (!string.IsNullOrEmpty(returning) && File.Exists(returning)) OpenLevel(returning);
+            else ShowLibrary();
         }
 
         void OnDestroy()
@@ -101,30 +102,7 @@ namespace RobotVacuum.LevelEditor
 
         void CreatePanel()
         {
-            panelSettings = ScriptableObject.CreateInstance<PanelSettings>();
-            panelSettings.name = "Level Editor Panel";
-            panelSettings.themeStyleSheet = Resources.Load<ThemeStyleSheet>(ThemePath);
-            panelSettings.scaleMode = PanelScaleMode.ConstantPhysicalSize;
-            panelSettings.referenceDpi = 96f;
-            panelSettings.fallbackDpi = 96f;
-            panelSettings.scale = uiScale;
-
-            if (panelSettings.themeStyleSheet == null)
-                Debug.LogWarning($"Level editor: theme not found at Resources/{ThemePath}. Text fields may look unstyled.");
-
-            var host = new GameObject("Level Editor UI");
-            host.transform.SetParent(transform, false);
-            host.SetActive(false);
-            document = host.AddComponent<UIDocument>();
-            document.panelSettings = panelSettings;
-            host.SetActive(true);
-
-            var root = document.rootVisualElement;
-            root.style.flexGrow = 1f;
-
-            var styleSheet = Resources.Load<StyleSheet>(StyleSheetPath);
-            if (styleSheet != null) root.styleSheets.Add(styleSheet);
-            else Debug.LogError($"Level editor: style sheet not found at Resources/{StyleSheetPath}.");
+            root = UiPanel.Create(transform, "Level Editor UI", uiScale, out panelSettings);
 
             app = Ui.Div(root, "le-app");
             overlay = new OverlayLayer();
@@ -133,6 +111,7 @@ namespace RobotVacuum.LevelEditor
             library.OpenRequested += OpenLevel;
             library.NewRequested += ShowNewLevelMenu;
             library.CardMenuRequested += ShowCardMenu;
+            library.HomeRequested += () => SimLauncher.OpenStartScreen();
 
             // Keyboard events go to the focused element, or the panel root when nothing has focus,
             // so listen on the panel root during trickle-down to see both.
@@ -219,6 +198,7 @@ namespace RobotVacuum.LevelEditor
             overlay.ShowMenuBelow(anchor, new List<MenuEntry>
             {
                 MenuEntry.Item("Open", () => OpenLevel(entry.path), IconKind.Select),
+                MenuEntry.Item("Simulate", () => SimulateLevel(entry.level, entry.path), IconKind.Play),
                 MenuEntry.Item("Duplicate", () => DuplicateLevel(entry), IconKind.Duplicate),
                 MenuEntry.Separator(),
                 MenuEntry.Item("Delete…", () => ConfirmDeleteLevel(entry), IconKind.Trash, danger: true),
@@ -434,7 +414,12 @@ namespace RobotVacuum.LevelEditor
             Ui.Div(bar, "le-divider");
 
             Ui.Button(bar, "Save", IconKind.Save, () => TrySave(true), "le-btn--ghost");
-            Ui.Button(bar, "Run", IconKind.Play, StartRun, "le-btn--primary");
+
+            var preview = Ui.Button(bar, "Preview", IconKind.Spawn, StartRun, "le-btn--ghost");
+            Ui.Tooltip(preview, "Quick test run without leaving the editor");
+
+            var simulate = Ui.Button(bar, "Simulate", IconKind.Play, Simulate, "le-btn--primary");
+            Ui.Tooltip(simulate, "Save, then open this floor plan in the simulator");
         }
 
         void BuildToolRail(VisualElement rail)
@@ -701,7 +686,7 @@ namespace RobotVacuum.LevelEditor
 
             if (session == null || editorScreen == null) return;
 
-            bool typing = Ui.IsTyping(document.rootVisualElement.panel);
+            bool typing = Ui.IsTyping(root.panel);
             if (HandleCommandShortcut(evt, typing) || (!typing && HandleEditorKey(evt)))
                 evt.StopPropagation();
         }
@@ -801,6 +786,40 @@ namespace RobotVacuum.LevelEditor
             }
         }
 
+        // ---------------------------------------------------------------- simulator
+
+        /// <summary>Saves the open floor plan, then plays it in the simulation scene.</summary>
+        void Simulate()
+        {
+            if (session == null) return;
+
+            var snapshot = LevelSnapshot.Parse(session.Serialize());
+            if (!HasRooms(snapshot)) return;
+
+            // Loading the simulator tears down this scene, and the session with it.
+            if (session.IsDirty && !TrySave(false)) return;
+
+            SimulateLevel(snapshot, session.FilePath);
+        }
+
+        void SimulateLevel(LevelSnapshot snapshot, string path)
+        {
+            if (!HasRooms(snapshot)) return;
+
+            // Only the serialized palette asset outlives this scene; the built-in one is destroyed with it,
+            // so leave it out and let the launcher supply its own.
+            if (!SimLauncher.Simulate(snapshot, palette, path))
+                overlay.Toast("The simulator scene isn't in the build's scene list.");
+        }
+
+        bool HasRooms(LevelSnapshot snapshot)
+        {
+            if (snapshot != null && snapshot.ValidRoomCount > 0) return true;
+
+            overlay.Toast("Draw a room before running the vacuum.");
+            return false;
+        }
+
         // ---------------------------------------------------------------- run mode
 
         void StartRun()
@@ -851,9 +870,9 @@ namespace RobotVacuum.LevelEditor
             Ui.Div(live, "le-run-live__dot");
             Ui.Text(live, session.Name);
 
-            var time = RunStat(bar, "Time");
-            var distance = RunStat(bar, "Distance");
-            var surface = RunStat(bar, "Surface");
+            var time = Ui.RunStat(bar, "Time");
+            var distance = Ui.RunStat(bar, "Distance");
+            var surface = Ui.RunStat(bar, "Surface");
 
             screen.schedule.Execute(() =>
             {
@@ -866,13 +885,6 @@ namespace RobotVacuum.LevelEditor
             }).Every(150);
 
             return screen;
-        }
-
-        static Label RunStat(VisualElement parent, string label)
-        {
-            var stat = Ui.Div(parent, "le-run-stat");
-            Ui.Text(stat, label, "le-run-stat__label");
-            return Ui.Text(stat, "—", "le-run-stat__value");
         }
     }
 
@@ -946,13 +958,7 @@ namespace RobotVacuum.LevelEditor
 
         void FrameCamera()
         {
-            var bounds = level.Bounds();
-            float aspect = Mathf.Max(0.1f, camera.aspect);
-
-            camera.orthographic = true;
-            camera.orthographicSize = Mathf.Max(bounds.height * 0.5f, bounds.width * 0.5f / aspect) * 1.2f + 0.6f;
-            camera.transform.position = new Vector3(bounds.center.x, bounds.center.y - camera.orthographicSize * 0.06f, -10f);
-            camera.transform.rotation = Quaternion.identity;
+            SimLauncher.FrameCamera(camera, level.Bounds());
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color(0.063f, 0.075f, 0.094f);
         }
