@@ -14,56 +14,71 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::RobotVacuum.Level.LevelData
   palette: {fileID: 11400000, guid: ecdee519d1f794e57836e1588f83e4cd, type: 2}
   rooms:
-  - name: Room 1
+  - name: Living Room
     outline:
-    - {x: -2.75, y: -0}
-    - {x: 0.75, y: -0}
-    - {x: 0.75, y: 2.75}
-    - {x: -2.75, y: 2.75}
-    floorIndex: 0
-    wallEdges: 01010101y
-  - name: Room 2
+    - {x: -2.3894482, y: -1.7821429}
+    - {x: 1.6105518, y: -1.7821429}
+    - {x: 1.6105518, y: 1.4178569}
+    - {x: -2.3894482, y: 1.4178569}
+    - {x: -2.3894482, y: 0.8133928}
+    floorIndex: 2
+    wallEdges: 0000010000y
+  - name: Kitchennnnnnnnnnn
     outline:
-    - {x: -5.5, y: -0}
-    - {x: -2.75, y: -0}
-    - {x: -2.75, y: 3.25}
-    - {x: -5.5, y: 3.25}
-    floorIndex: 0
-    wallEdges: 01010101y
-  - name: Room 3
+    - {x: 1.6000001, y: -1.7821426}
+    - {x: 4.6000023, y: -1.1821432}
+    - {x: 4.6000023, y: 1.0178576}
+    - {x: 1.6000001, y: 1.4178572}
+    floorIndex: 6
+    wallEdges: 00000000y
+  - name: Hall
     outline:
-    - {x: -5.5, y: -2.75}
-    - {x: -2.75, y: -2.75}
-    - {x: -2.75, y: -0}
-    - {x: -5.5, y: -0}
-    floorIndex: 0
-    wallEdges: 01010101y
-  - name: Room 4
+    - {x: -2.4166667, y: -1.8}
+    - {x: 1.5833334, y: -1.8}
+    - {x: 1.1833334, y: -3.2}
+    - {x: -2.0166667, y: -3.4}
+    floorIndex: 2
+    wallEdges: 00000000y
+  - name: Bedroom
     outline:
-    - {x: -2.75, y: -3}
-    - {x: 0.75, y: -3}
-    - {x: 0.75, y: -0}
-    - {x: -2.75, y: -0}
-    floorIndex: 0
-    wallEdges: 01010101y
+    - {x: -2.016667, y: -3.4}
+    - {x: -2.416667, y: -1.8}
+    - {x: -4.9396667, y: -2.431}
+    - {x: -4.5396667, y: -4.031}
+    floorIndex: 4
+    wallEdges: 00000000y
+  - name: Room 5
+    outline:
+    - {x: -2.3894482, y: 1.4178569}
+    - {x: -4.12, y: 1.88}
+    - {x: -3.1699998, y: 2.84}
+    - {x: -1.4599999, y: 2.97}
+    - {x: -1.51, y: 2.46}
+    - {x: -2.23, y: 2.29}
+    - {x: -1.29, y: 2}
+    - {x: 1.6105518, y: 1.4178569}
+    floorIndex: 2
+    wallEdges: 0000000000000000y
   doorways:
   - roomA: 0
     roomB: 1
-    center: {x: -2.75, y: 1.4012568}
-    width: 0.9
+    center: {x: 1.6105516, y: 0.23571399}
+    width: 1
+  - roomA: 0
+    roomB: 2
+    center: {x: -0.4061147, y: -1.7821429}
+    width: 1.1
   - roomA: 2
     roomB: 3
-    center: {x: -2.75, y: -1.6499174}
+    center: {x: -2.2333336, y: -2.6}
     width: 0.9
   - roomA: 0
-    roomB: 3
-    center: {x: -1.246665, y: 0}
+    roomB: 4
+    center: {x: -1.4608767, y: 1.4178569}
     width: 0.9
-  - roomA: 1
-    roomB: 2
-    center: {x: -4.0266237, y: 0}
-    width: 0.9
-  wallStrokes: []
+  wallStrokes:
+  - a: {x: 3.6399999, y: 0.62}
+    b: {x: 2.24, y: -1.09}
   wallThickness: 0.084
   wallColor: {r: 0.08018869, g: 0.33569175, b: 1, a: 1}
   robotSpawn: {x: -1.35, y: -2.53}
