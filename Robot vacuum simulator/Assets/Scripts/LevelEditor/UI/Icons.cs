@@ -7,7 +7,7 @@ namespace RobotVacuum.LevelEditor
     {
         Select, Rect, Pen, Wall, Doorway, Spawn,
         Undo, Redo, Play, Stop, Save, Check, Plus, Minus, Fit, Grid, Magnet, Points,
-        Trash, Duplicate, Back, More, Warning, Close, ChevronDown, Logo, WallsOn, WallsOff,
+        Trash, Duplicate, Back, More, Warning, Close, ChevronDown, Logo, WallsOn, WallsOff, Obstacle,
     }
 
     /// <summary>
@@ -91,6 +91,13 @@ namespace RobotVacuum.LevelEditor
                 case IconKind.Spawn:
                     pen.Ring(12f, 12f, 8f, 1.8f);
                     pen.Dot(12f, 7.6f, 2.1f);
+                    break;
+
+                case IconKind.Obstacle:
+                    pen.Line(1.7f, 5.5f, 11f, 5.5f, 6.5f, 18.5f, 6.5f, 18.5f, 11f);
+                    pen.RoundRect(3.5f, 11f, 17f, 6f, 2f, 1.7f);
+                    pen.Line(1.7f, 6f, 17f, 6f, 20f);
+                    pen.Line(1.7f, 18f, 17f, 18f, 20f);
                     break;
 
                 case IconKind.Undo:

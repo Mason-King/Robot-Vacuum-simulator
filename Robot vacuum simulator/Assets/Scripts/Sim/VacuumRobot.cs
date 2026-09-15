@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using RobotVacuum.Level;
 using UnityEngine;
 using RobotVacuum;
@@ -8,9 +9,9 @@ using UnityEditor;
 namespace RobotVacuum.Sim
 {
     /// <summary>
-    /// A simple random-bounce robot vacuum: drive forward, and when a whisker or a real
-    /// collision finds a wall, back off, turn a random amount, and carry on. Drive speed is
-    /// scaled by whatever floor covering it is currently sitting on.
+    /// The vacuum's body: drives forward, and when a whisker or a real collision finds something, backs
+    /// off and performs a manoeuvre. Drive speed is scaled by the floor covering beneath it. Where it
+    /// steers is decided by the selected <see cref="MovementPattern"/> (see <see cref="MovementBrain"/>).
     /// </summary>
     [ExecuteAlways]
     [RequireComponent(typeof(Rigidbody2D))]
@@ -18,7 +19,13 @@ namespace RobotVacuum.Sim
     [RequireComponent(typeof(Battery))]
     public class VacuumRobot : MonoBehaviour
     {
-        enum State { Driving, Backing, Turning }
+        enum State { Driving, Backing, Turning, Shifting }
+
+        struct Step
+        {
+            public bool turn;
+            public float amount; // degrees for a turn, metres for a drive
+        }
 
         [Header("Level")]
         [Tooltip("Left empty, the robot finds the first LevelRenderer in the scene.")]
@@ -43,13 +50,20 @@ namespace RobotVacuum.Sim
         [Tooltip("Small random heading drift so the robot does not retrace identical paths.")]
         [SerializeField] float wanderDegreesPerSecond = 12f;
 
+        [Header("Movement")]
+        [SerializeField] MovementPattern movementPattern = MovementPattern.RandomBounce;
+
         Rigidbody2D body;
         CircleCollider2D circle;
         Battery battery;
         State state = State.Driving;
         float stateTimer;
         float targetHeading;
+        MovementBrain brain;
+        MovementPattern brainPattern;
+        readonly Queue<Step> steps = new Queue<Step>();
         readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
+        readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
 
         /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
@@ -78,6 +92,64 @@ namespace RobotVacuum.Sim
         public FloorType CurrentFloor =>
             levelRenderer != null ? levelRenderer.FloorTypeAtWorld(transform.position) : null;
 
+        /// <summary>The movement algorithm. Switching mid-run carries on from where the robot is.</summary>
+        public MovementPattern Pattern
+        {
+            get => movementPattern;
+            set
+            {
+                if (movementPattern == value) return;
+                movementPattern = value;
+                steps.Clear();
+                state = State.Driving;
+            }
+        }
+
+        MovementBrain Brain
+        {
+            get
+            {
+                if (brain == null || brainPattern != movementPattern)
+                {
+                    brain = MovementBrain.Create(movementPattern);
+                    brainPattern = movementPattern;
+                    brain.Reset(this);
+                }
+                return brain;
+            }
+        }
+
+        public float Radius => radius;
+
+        /// <summary>Width of floor cleaned in one pass, in metres.</summary>
+        public float CleaningWidth => radius * 2f;
+
+        public Vector2 TurnAngleRange => turnAngleRange;
+        public float WanderDegreesPerSecond => wanderDegreesPerSecond;
+
+        /// <summary>Forward speed on the floor it is on now, in metres per second.</summary>
+        public float DriveSpeedNow => driveSpeed * SurfaceSpeedMultiplier();
+
+        float Heading => body != null ? body.rotation : transform.eulerAngles.z;
+
+        public Vector2 Forward
+        {
+            get
+            {
+                float radians = Heading * Mathf.Deg2Rad;
+                return new Vector2(-Mathf.Sin(radians), Mathf.Cos(radians));
+            }
+        }
+
+        public Vector2 Right
+        {
+            get
+            {
+                var forward = Forward;
+                return new Vector2(forward.y, -forward.x);
+            }
+        }
+
         void Reset()
         {
             ConfigureComponents();
@@ -102,7 +174,19 @@ namespace RobotVacuum.Sim
 
         void OnEnable()
         {
-            if (transform.Find("Visual") == null) BuildVisual();
+            // The generated material is never saved, so a visual stored in a scene comes back with
+            // empty material slots and draws nothing. Rebuild it rather than leave the robot invisible.
+            if (!HasUsableVisual()) BuildVisual();
+        }
+
+        bool HasUsableVisual()
+        {
+            var visual = transform.Find("Visual");
+            if (visual == null) return false;
+
+            foreach (var part in visual.GetComponentsInChildren<MeshRenderer>(true))
+                if (part.sharedMaterial == null) return false;
+            return true;
         }
 
         void ConfigureComponents()
@@ -145,12 +229,16 @@ namespace RobotVacuum.Sim
 
                 case State.Backing:
                     body.linearVelocity = -Forward * reverseSpeed;
-                    if ((stateTimer -= dt) <= 0f) BeginTurn();
+                    if ((stateTimer -= dt) <= 0f) NextStep();
                     break;
 
                 case State.Turning:
                     body.linearVelocity = Vector2.zero;
                     TurnTowardsTarget(dt);
+                    break;
+
+                case State.Shifting:
+                    Shift(dt);
                     break;
             }
 
@@ -158,32 +246,30 @@ namespace RobotVacuum.Sim
 
         void Drive(float dt)
         {
-            float speed = driveSpeed * SurfaceSpeedMultiplier();
+            float speed = DriveSpeedNow;
             body.linearVelocity = Forward * speed;
             DistanceTravelled += speed * dt;
 
-            if (wanderDegreesPerSecond > 0f)
-            {
-                float drift = (Mathf.PerlinNoise(Time.time * 0.35f, 0f) - 0.5f) * 2f;
-                body.MoveRotation(body.rotation + drift * wanderDegreesPerSecond * dt);
-            }
+            float steer = Brain.Steer(this, dt);
+            if (steer != 0f) body.MoveRotation(body.rotation + steer * dt);
 
             if (WhiskerBlocked()) BeginBackup();
+        }
+
+        /// <summary>A set-distance drive inside a manoeuvre, such as stepping over to the next lawnmower lane.</summary>
+        void Shift(float dt)
+        {
+            float speed = DriveSpeedNow;
+            body.linearVelocity = Forward * speed;
+            DistanceTravelled += speed * dt;
+
+            if ((stateTimer -= speed * dt) <= 0f || WhiskerBlocked()) NextStep();
         }
 
         float SurfaceSpeedMultiplier()
         {
             var floor = CurrentFloor;
             return floor != null ? floor.speedMultiplier : 1f;
-        }
-
-        Vector2 Forward
-        {
-            get
-            {
-                float radians = body.rotation * Mathf.Deg2Rad;
-                return new Vector2(-Mathf.Sin(radians), Mathf.Cos(radians));
-            }
         }
 
         bool WhiskerBlocked()
@@ -203,24 +289,73 @@ namespace RobotVacuum.Sim
             return false;
         }
 
+        /// <summary>
+        /// Distance from the robot's edge to the nearest wall or furniture along <paramref name="direction"/>,
+        /// or positive infinity when nothing is within <paramref name="maxDistance"/>.
+        /// </summary>
+        public float ProbeDistance(Vector2 direction, float maxDistance)
+        {
+            if (body == null) return float.PositiveInfinity;
+
+            var filter = ContactFilter2D.noFilter;
+            filter.useTriggers = false;
+
+            int count = Physics2D.Raycast(body.position, direction.normalized, filter, probeHits, maxDistance + radius);
+            float nearest = float.PositiveInfinity;
+
+            for (int i = 0; i < count; i++)
+            {
+                var hit = probeHits[i];
+                if (hit.collider == null || hit.collider.attachedRigidbody == body) continue;
+                nearest = Mathf.Min(nearest, Mathf.Max(0f, hit.distance - radius));
+            }
+
+            return nearest;
+        }
+
         void OnCollisionEnter2D(Collision2D collision)
         {
-            if (Application.isPlaying && state == State.Driving) BeginBackup();
+            if (!Application.isPlaying) return;
+
+            if (state == State.Driving) BeginBackup();
+            else if (state == State.Shifting) NextStep();
         }
 
         void BeginBackup()
         {
             state = State.Backing;
             stateTimer = backupDuration;
+
+            var manoeuvre = Brain.AfterBump(this);
+            steps.Clear();
+            steps.Enqueue(new Step { turn = true, amount = manoeuvre.turn });
+
+            if (manoeuvre.driveAfter > 0f)
+            {
+                steps.Enqueue(new Step { turn = false, amount = manoeuvre.driveAfter });
+                steps.Enqueue(new Step { turn = true, amount = manoeuvre.turnAfter });
+            }
         }
 
-        void BeginTurn()
+        void NextStep()
         {
-            state = State.Turning;
+            if (steps.Count == 0)
+            {
+                state = State.Driving;
+                return;
+            }
 
-            float amount = Random.Range(turnAngleRange.x, turnAngleRange.y);
-            if (Random.value < 0.5f) amount = -amount;
-            targetHeading = body.rotation + amount;
+            var step = steps.Dequeue();
+            if (step.turn)
+            {
+                state = State.Turning;
+                targetHeading = body.rotation + step.amount;
+            }
+            else
+            {
+                state = State.Shifting;
+                stateTimer = step.amount;
+            }
         }
 
         void TurnTowardsTarget(float dt)
@@ -228,20 +363,22 @@ namespace RobotVacuum.Sim
             float next = Mathf.MoveTowardsAngle(body.rotation, targetHeading, turnSpeed * dt);
             body.MoveRotation(next);
 
-            if (Mathf.Abs(Mathf.DeltaAngle(next, targetHeading)) < 1f)
-                state = State.Driving;
+            if (Mathf.Abs(Mathf.DeltaAngle(next, targetHeading)) < 1f) NextStep();
         }
 
-        /// <summary>Drops the robot back on the level's spawn point and clears its odometer.</summary>
+        /// <summary>Drops the robot back on the level's spawn point, clears its odometer and restarts its algorithm.</summary>
         public void ResetToSpawn()
         {
+            steps.Clear();
+            state = State.Driving;
+            Brain.Reset(this);
+
             if (levelRenderer == null || levelRenderer.Level == null) return;
 
             transform.position = levelRenderer.LevelToWorld(
                 levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
 
             DistanceTravelled = 0f;
-            state = State.Driving;
             battery.ResetBattery();
 
             if (body != null) body.linearVelocity = Vector2.zero;

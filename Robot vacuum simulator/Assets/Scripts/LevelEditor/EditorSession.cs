@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace RobotVacuum.LevelEditor
 {
-    public enum EditorTool { Select, Rect, Pen, Wall, Doorway, Spawn }
+    public enum EditorTool { Select, Rect, Pen, Wall, Doorway, Spawn, Obstacle }
 
     public enum IssueSeverity { Warning, Error }
 
@@ -39,7 +39,9 @@ namespace RobotVacuum.LevelEditor
         EditorTool tool = EditorTool.Select;
         int selectedRoom = -1;
         int selectedDoorway = -1;
+        int selectedObstacle = -1;
         int paintFloor;
+        ObstacleKind obstacleKind;
         bool snapToGrid = true;
         bool snapToVertices = true;
         bool showGrid = true;
@@ -105,6 +107,13 @@ namespace RobotVacuum.LevelEditor
             set => SetOption(ref paintFloor, Mathf.Max(0, value));
         }
 
+        /// <summary>The kind of furniture the Furniture tool places next.</summary>
+        public ObstacleKind ObstacleKind
+        {
+            get => obstacleKind;
+            set => SetOption(ref obstacleKind, value);
+        }
+
         public bool SnapToGrid { get => snapToGrid; set => SetOption(ref snapToGrid, value); }
         public bool SnapToVertices { get => snapToVertices; set => SetOption(ref snapToVertices, value); }
         public bool ShowGrid { get => showGrid; set => SetOption(ref showGrid, value); }
@@ -127,30 +136,48 @@ namespace RobotVacuum.LevelEditor
 
         public int SelectedRoom => selectedRoom;
         public int SelectedDoorway => selectedDoorway;
+        public int SelectedObstacle => selectedObstacle;
         public Room SelectedRoomData => Level.GetRoom(selectedRoom);
         public Doorway SelectedDoorwayData => GetDoorway(selectedDoorway);
-        public bool HasSelection => selectedRoom >= 0 || selectedDoorway >= 0;
+        public Obstacle SelectedObstacleData => GetObstacle(selectedObstacle);
+        public bool HasSelection => selectedRoom >= 0 || selectedDoorway >= 0 || selectedObstacle >= 0;
 
         public Doorway GetDoorway(int index) =>
             index >= 0 && index < Level.Doorways.Count ? Level.Doorways[index] : null;
 
+        public Obstacle GetObstacle(int index) =>
+            index >= 0 && index < Level.Obstacles.Count ? Level.Obstacles[index] : null;
+
         public void SelectRoom(int index)
         {
             if (Level.GetRoom(index) == null) index = -1;
-            if (selectedRoom == index && selectedDoorway < 0) return;
+            if (selectedRoom == index && selectedDoorway < 0 && selectedObstacle < 0) return;
 
             selectedRoom = index;
             selectedDoorway = -1;
+            selectedObstacle = -1;
             SelectionChanged?.Invoke();
         }
 
         public void SelectDoorway(int index)
         {
             if (GetDoorway(index) == null) index = -1;
-            if (selectedDoorway == index && selectedRoom < 0) return;
+            if (selectedDoorway == index && selectedRoom < 0 && selectedObstacle < 0) return;
 
             selectedDoorway = index;
             selectedRoom = -1;
+            selectedObstacle = -1;
+            SelectionChanged?.Invoke();
+        }
+
+        public void SelectObstacle(int index)
+        {
+            if (GetObstacle(index) == null) index = -1;
+            if (selectedObstacle == index && selectedRoom < 0 && selectedDoorway < 0) return;
+
+            selectedObstacle = index;
+            selectedRoom = -1;
+            selectedDoorway = -1;
             SelectionChanged?.Invoke();
         }
 
@@ -159,6 +186,7 @@ namespace RobotVacuum.LevelEditor
             if (!HasSelection) return;
             selectedRoom = -1;
             selectedDoorway = -1;
+            selectedObstacle = -1;
             SelectionChanged?.Invoke();
         }
 
@@ -168,6 +196,7 @@ namespace RobotVacuum.LevelEditor
             bool changed = false;
             if (selectedRoom >= 0 && Level.GetRoom(selectedRoom) == null) { selectedRoom = -1; changed = true; }
             if (selectedDoorway >= 0 && GetDoorway(selectedDoorway) == null) { selectedDoorway = -1; changed = true; }
+            if (selectedObstacle >= 0 && GetObstacle(selectedObstacle) == null) { selectedObstacle = -1; changed = true; }
             return changed;
         }
 
@@ -279,6 +308,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (selectedRoom >= 0) DeleteRoom(selectedRoom);
             else if (selectedDoorway >= 0) DeleteDoorway(selectedDoorway);
+            else if (selectedObstacle >= 0) DeleteObstacle(selectedObstacle);
         }
 
         // ---------------------------------------------------------------- rooms
@@ -297,6 +327,7 @@ namespace RobotVacuum.LevelEditor
 
                 selectedRoom = Level.AddRoom(room);
                 selectedDoorway = -1;
+                selectedObstacle = -1;
             });
 
             SelectionChanged?.Invoke();
@@ -352,6 +383,7 @@ namespace RobotVacuum.LevelEditor
 
                 selectedRoom = Level.AddRoom(copy);
                 selectedDoorway = -1;
+                selectedObstacle = -1;
             });
 
             SelectionChanged?.Invoke();
@@ -442,6 +474,7 @@ namespace RobotVacuum.LevelEditor
 
                 selectedDoorway = Level.Doorways.Count - 1;
                 selectedRoom = -1;
+                selectedObstacle = -1;
             });
 
             SelectionChanged?.Invoke();
@@ -495,6 +528,164 @@ namespace RobotVacuum.LevelEditor
             Edit("Delete Wall", () => Level.WallStrokes.RemoveAt(index));
         }
 
+        // ---------------------------------------------------------------- furniture
+
+        /// <summary>Places furniture of the current <see cref="ObstacleKind"/> and selects it.</summary>
+        public void AddObstacle(Vector2 center, Vector2 size, float rotation = 0f)
+        {
+            var kind = obstacleKind;
+
+            Edit("Add Furniture", () =>
+            {
+                Level.Obstacles.Add(new Obstacle
+                {
+                    name = NextObstacleName(kind),
+                    kind = kind,
+                    center = center,
+                    size = Vector2.Max(size, Vector2.one * Obstacle.MinSize),
+                    rotation = Mathf.Repeat(rotation, 360f),
+                    blocksVacuum = Obstacle.DefaultBlocks(kind),
+                });
+
+                selectedObstacle = Level.Obstacles.Count - 1;
+                selectedRoom = -1;
+                selectedDoorway = -1;
+            });
+
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>"Sofa", then "Sofa 2", "Sofa 3" … skipping names in use, optionally ignoring one piece.</summary>
+        string NextObstacleName(ObstacleKind kind, int ignore = -1)
+        {
+            string stem = Obstacle.DefaultName(kind);
+            var taken = new List<string>();
+            for (int i = 0; i < Level.Obstacles.Count; i++)
+                if (i != ignore && Level.Obstacles[i] != null) taken.Add(Level.Obstacles[i].name);
+
+            if (!taken.Contains(stem)) return stem;
+
+            for (int n = 2; ; n++)
+            {
+                string candidate = $"{stem} {n}";
+                if (!taken.Contains(candidate)) return candidate;
+            }
+        }
+
+        public void DeleteObstacle(int index)
+        {
+            var obstacle = GetObstacle(index);
+            if (obstacle == null) return;
+
+            Edit("Delete Furniture", () =>
+            {
+                Level.Obstacles.RemoveAt(index);
+                selectedObstacle = -1;
+            });
+
+            SelectionChanged?.Invoke();
+            Notice?.Invoke($"Deleted {obstacle.name}");
+        }
+
+        public void DuplicateObstacle(int index)
+        {
+            var source = GetObstacle(index);
+            if (source == null) return;
+
+            Edit("Duplicate Furniture", () =>
+            {
+                var copy = source.Clone();
+                copy.name = source.name + " copy";
+                copy.center += new Vector2(source.Bounds.width + 0.2f, 0f);
+                Level.Obstacles.Add(copy);
+
+                selectedObstacle = Level.Obstacles.Count - 1;
+                selectedRoom = -1;
+                selectedDoorway = -1;
+            });
+
+            SelectionChanged?.Invoke();
+        }
+
+        public void RenameObstacle(int index, string next)
+        {
+            var obstacle = GetObstacle(index);
+            next = next?.Trim();
+            if (obstacle == null || string.IsNullOrEmpty(next) || obstacle.name == next) return;
+
+            Edit("Rename Furniture", () => obstacle.name = next);
+        }
+
+        /// <summary>
+        /// Changes what the furniture is, taking on that kind's usual passability, and remembers the kind
+        /// for the next piece placed. A name still following the old kind is renamed to match.
+        /// </summary>
+        public void SetObstacleKind(int index, ObstacleKind kind)
+        {
+            ObstacleKind = kind;
+
+            var obstacle = GetObstacle(index);
+            if (obstacle == null || obstacle.kind == kind) return;
+
+            Edit("Furniture Kind", () =>
+            {
+                if (obstacle.name.StartsWith(Obstacle.DefaultName(obstacle.kind), StringComparison.Ordinal))
+                    obstacle.name = NextObstacleName(kind, index);
+
+                obstacle.kind = kind;
+                obstacle.blocksVacuum = Obstacle.DefaultBlocks(kind);
+            });
+        }
+
+        public void SetObstacleBlocks(int index, bool blocks)
+        {
+            var obstacle = GetObstacle(index);
+            if (obstacle == null || obstacle.blocksVacuum == blocks) return;
+
+            Edit(blocks ? "Block Vacuum" : "Let Vacuum Pass", () => obstacle.blocksVacuum = blocks);
+        }
+
+        /// <summary>For drags and sliders: call <see cref="Checkpoint"/> first and <see cref="Commit"/> after.</summary>
+        public void MoveObstacleLive(int index, Vector2 center)
+        {
+            var obstacle = GetObstacle(index);
+            if (obstacle == null) return;
+
+            obstacle.center = center;
+            NotifyLiveChange();
+        }
+
+        public void SetObstacleSizeLive(int index, Vector2 size)
+        {
+            var obstacle = GetObstacle(index);
+            if (obstacle == null) return;
+
+            obstacle.size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
+            NotifyLiveChange();
+        }
+
+        public void SetObstacleRotationLive(int index, float degrees)
+        {
+            var obstacle = GetObstacle(index);
+            if (obstacle == null) return;
+
+            obstacle.rotation = Mathf.Repeat(degrees, 360f);
+            NotifyLiveChange();
+        }
+
+        /// <summary>Moves and resizes together, as a handle drag does. Sizes are clamped to <see cref="Obstacle.MinSize"/>.</summary>
+        public void SetObstacleBoundsLive(int index, Vector2 center, Vector2 size)
+        {
+            var obstacle = GetObstacle(index);
+            if (obstacle == null) return;
+
+            obstacle.center = center;
+            obstacle.size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
+            NotifyLiveChange();
+        }
+
+        public int FindObstacle(Vector2 point) => Level.ObstacleIndexAt(point);
+
         // ---------------------------------------------------------------- queries
 
         public string NameOfRoom(int index)
@@ -541,6 +732,12 @@ namespace RobotVacuum.LevelEditor
                 if (found) return result;
             }
 
+            return SnapToGridStep(point);
+        }
+
+        /// <summary>Rounds to the alignment grid when grid snapping is on, ignoring room corners.</summary>
+        public Vector2 SnapToGridStep(Vector2 point)
+        {
             if (!snapToGrid || snapIncrement <= 0f) return point;
 
             return new Vector2(
@@ -732,6 +929,16 @@ namespace RobotVacuum.LevelEditor
                 if (NearestWall(doorway.center, out _) <= Level.DoorwaySnapDistance) continue;
 
                 issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = "A doorway isn't on a wall, so it opens nothing." });
+            }
+
+            foreach (var obstacle in Level.Obstacles)
+            {
+                if (obstacle == null) continue;
+
+                if (Level.RoomIndexAt(obstacle.center) < 0)
+                    issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = $"{obstacle.name} isn't inside any room." });
+                else if (obstacle.blocksVacuum && obstacle.Contains(Level.RobotSpawn))
+                    issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = $"The vacuum starts inside {obstacle.name}." });
             }
 
             if (Level.Rooms.Count == 0)

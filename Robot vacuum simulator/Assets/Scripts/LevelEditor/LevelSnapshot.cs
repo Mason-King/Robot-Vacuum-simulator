@@ -22,6 +22,7 @@ namespace RobotVacuum.LevelEditor
         public List<Room> rooms = new List<Room>();
         public List<Doorway> doorways = new List<Doorway>();
         public List<WallStroke> wallStrokes = new List<WallStroke>();
+        public List<Obstacle> obstacles = new List<Obstacle>();
         public float wallThickness = 0.12f;
         public Color wallColor = new Color(0.22f, 0.24f, 0.29f);
         public Vector2 robotSpawn;
@@ -35,6 +36,7 @@ namespace RobotVacuum.LevelEditor
                 rooms = level.Rooms,
                 doorways = level.Doorways,
                 wallStrokes = level.WallStrokes,
+                obstacles = level.Obstacles,
                 wallThickness = level.WallThickness,
                 wallColor = level.WallColor,
                 robotSpawn = level.RobotSpawn,
@@ -86,6 +88,7 @@ namespace RobotVacuum.LevelEditor
             rooms ??= new List<Room>();
             doorways ??= new List<Doorway>();
             wallStrokes ??= new List<WallStroke>();
+            obstacles ??= new List<Obstacle>();
             wallThickness = Mathf.Max(0.01f, wallThickness);
 
             foreach (var room in rooms)
@@ -97,6 +100,13 @@ namespace RobotVacuum.LevelEditor
 
             foreach (var doorway in doorways)
                 if (doorway != null) doorway.width = Mathf.Max(0.05f, doorway.width);
+
+            foreach (var obstacle in obstacles)
+            {
+                if (obstacle == null) continue;
+                obstacle.size = Vector2.Max(obstacle.size, Vector2.one * Obstacle.MinSize);
+                if (string.IsNullOrWhiteSpace(obstacle.name)) obstacle.name = Obstacle.DefaultName(obstacle.kind);
+            }
         }
 
         /// <summary>
@@ -111,6 +121,8 @@ namespace RobotVacuum.LevelEditor
             level.Doorways.AddRange(doorways);
             level.WallStrokes.Clear();
             level.WallStrokes.AddRange(wallStrokes);
+            level.Obstacles.Clear();
+            level.Obstacles.AddRange(obstacles);
             level.WallThickness = wallThickness;
             level.WallColor = wallColor;
             level.RobotSpawn = robotSpawn;

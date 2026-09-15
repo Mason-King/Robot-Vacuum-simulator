@@ -127,6 +127,7 @@ namespace RobotVacuum.Level
         [SerializeField] List<Room> rooms = new List<Room>();
         [SerializeField] List<Doorway> doorways = new List<Doorway>();
         [SerializeField] List<WallStroke> wallStrokes = new List<WallStroke>();
+        [SerializeField] List<Obstacle> obstacles = new List<Obstacle>();
 
         [Tooltip("Wall thickness in metres. Walls are centred on room edges.")]
         [SerializeField] float wallThickness = 0.12f;
@@ -138,6 +139,7 @@ namespace RobotVacuum.Level
         public List<Room> Rooms => rooms;
         public List<Doorway> Doorways => doorways;
         public List<WallStroke> WallStrokes => wallStrokes;
+        public List<Obstacle> Obstacles => obstacles;
         public Color WallColor { get => wallColor; set => wallColor = value; }
         public Vector2 RobotSpawn { get => robotSpawn; set => robotSpawn = value; }
 
@@ -156,6 +158,7 @@ namespace RobotVacuum.Level
             if (rooms == null) rooms = new List<Room>();
             if (doorways == null) doorways = new List<Doorway>();
             if (wallStrokes == null) wallStrokes = new List<WallStroke>();
+            if (obstacles == null) obstacles = new List<Obstacle>();
 
             foreach (var room in rooms) room?.SyncWallEdges();
 
@@ -188,6 +191,70 @@ namespace RobotVacuum.Level
 
         /// <summary>Floor covering under a point, or null when the point is outside every room.</summary>
         public FloorType FloorTypeAt(Vector2 point) => FloorTypeOf(RoomAt(point));
+
+        /// <summary>Index of the top-most furniture containing <paramref name="point"/>, or -1.</summary>
+        public int ObstacleIndexAt(Vector2 point)
+        {
+            for (int i = obstacles.Count - 1; i >= 0; i--)
+                if (obstacles[i] != null && obstacles[i].Contains(point))
+                    return i;
+            return -1;
+        }
+
+        /// <summary>True when furniture the vacuum can't get past stands on <paramref name="point"/>.</summary>
+        public bool IsBlocked(Vector2 point)
+        {
+            foreach (var obstacle in obstacles)
+                if (obstacle != null && obstacle.blocksVacuum && obstacle.Contains(point))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Floor area, in square metres, under furniture that blocks the vacuum: floor it can never clean.
+        /// Only floor inside rooms counts and overlapping pieces count once. Estimated by sampling the
+        /// level on a <paramref name="cellSize"/> grid.
+        /// </summary>
+        public float BlockedFloorArea(float cellSize = 0.05f)
+        {
+            cellSize = Mathf.Max(0.005f, cellSize);
+
+            var footprints = new List<List<Vector2>>(obstacles.Count);
+            foreach (var obstacle in obstacles)
+                footprints.Add(obstacle != null && obstacle.blocksVacuum ? obstacle.Corners() : null);
+
+            int samples = 0;
+            for (int i = 0; i < footprints.Count; i++)
+            {
+                var footprint = footprints[i];
+                if (footprint == null) continue;
+
+                var bounds = Poly2D.Bounds(footprint);
+                int x0 = Mathf.FloorToInt(bounds.xMin / cellSize), x1 = Mathf.CeilToInt(bounds.xMax / cellSize);
+                int y0 = Mathf.FloorToInt(bounds.yMin / cellSize), y1 = Mathf.CeilToInt(bounds.yMax / cellSize);
+
+                for (int y = y0; y < y1; y++)
+                {
+                    for (int x = x0; x < x1; x++)
+                    {
+                        var point = new Vector2((x + 0.5f) * cellSize, (y + 0.5f) * cellSize);
+                        if (!Poly2D.ContainsPoint(footprint, point) || RoomIndexAt(point) < 0) continue;
+                        if (CoveredByEarlier(footprints, i, point)) continue;
+                        samples++;
+                    }
+                }
+            }
+
+            return samples * cellSize * cellSize;
+        }
+
+        static bool CoveredByEarlier(List<List<Vector2>> footprints, int index, Vector2 point)
+        {
+            for (int j = 0; j < index; j++)
+                if (footprints[j] != null && Poly2D.ContainsPoint(footprints[j], point))
+                    return true;
+            return false;
+        }
 
         public IEnumerable<int> NeighboursOf(int roomIndex)
         {

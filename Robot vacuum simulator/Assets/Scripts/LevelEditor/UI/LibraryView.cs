@@ -21,6 +21,7 @@ namespace RobotVacuum.LevelEditor
             AddToClassList("le-library");
 
             var header = Ui.Div(this, "le-topbar le-library__header");
+            Ui.IconButton(header, IconKind.Back, "Start screen", () => HomeRequested?.Invoke(), "le-btn--ghost");
             var brand = Ui.Div(header, "le-brand");
             var mark = new IconElement(IconKind.Logo);
             mark.AddToClassList("le-brand__mark");
@@ -40,6 +41,9 @@ namespace RobotVacuum.LevelEditor
         }
 
         public event Action<string> OpenRequested;
+
+        /// <summary>The back button was pressed.</summary>
+        public event Action HomeRequested;
 
         /// <summary>The "New floor plan" button was pressed; the element is the anchor for a menu.</summary>
         public event Action<VisualElement> NewRequested;
@@ -167,6 +171,22 @@ namespace RobotVacuum.LevelEditor
                 var floor = palette != null && palette.Get(room.floorIndex) != null ? palette.ColorOf(room.floorIndex) : Color.gray;
                 floor.a = 1f;
                 painter.fillColor = floor;
+                painter.Fill(FillRule.NonZero);
+            }
+
+            foreach (var obstacle in level.obstacles)
+            {
+                if (obstacle == null) continue;
+
+                var corners = obstacle.Corners();
+                painter.BeginPath();
+                painter.MoveTo(ToLocal(corners[0]));
+                for (int i = 1; i < corners.Count; i++) painter.LineTo(ToLocal(corners[i]));
+                painter.ClosePath();
+
+                var color = Obstacle.ColorOf(obstacle.kind);
+                color.a = obstacle.blocksVacuum ? 1f : 0.45f;
+                painter.fillColor = color;
                 painter.Fill(FillRule.NonZero);
             }
 
