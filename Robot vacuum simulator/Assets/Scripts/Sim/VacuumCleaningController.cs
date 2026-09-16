@@ -196,19 +196,17 @@ namespace RobotVacuum.Sim
         }
 
         // ------------------------------------------------------------------
-        // NOT CLEANING -- a toy for the Picture movement pattern. Writes each
-        // cell in the picture strip under the robot straight to the picture's
-        // shade (shade 1 = fully clean), so the heatmap shows the picture at
-        // full grid resolution. Deliberately bypasses the dirt model above.
+        // NOT CLEANING -- a toy for the picture-printing movement patterns.
+        // Writes every cell in the patch straight to the picture's shade
+        // (shade 1 = fully clean), so the heatmap shows the picture at full
+        // grid resolution. Deliberately bypasses the dirt model above.
         // ------------------------------------------------------------------
-        void PrintUnderRobot(PrintStrip strip)
+        void PrintUnderRobot(PrintPatch patch)
         {
-            if (strip.picture == null) return;
+            if (patch.picture == null) return;
 
-            Vector2 center = robot.LevelPosition;
-            float half = robotCollider.radius;
-            Vector2 cornerA = ToWorld(new Vector2(center.x - half, strip.yMin));
-            Vector2 cornerB = ToWorld(new Vector2(center.x + half, strip.yMax));
+            Vector2 cornerA = ToWorld(patch.area.min);
+            Vector2 cornerB = ToWorld(patch.area.max);
             Vector2 min = Vector2.Min(cornerA, cornerB);
             Vector2 max = Vector2.Max(cornerA, cornerB);
 
@@ -228,9 +226,10 @@ namespace RobotVacuum.Sim
 
                     Vector2 world = Grid.GridIndexToWorldCenter(row, col);
                     Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
-                    if (point.y < strip.yMin || point.y > strip.yMax) continue;
+                    if (!patch.area.Contains(point)) continue;
+                    if (patch.radius > 0f && Vector2.Distance(point, patch.area.center) > patch.radius) continue;
 
-                    float target = 1f - strip.picture.Sample(strip.canvas, point);
+                    float target = 1f - patch.picture.Sample(patch.canvas, point);
                     if (Mathf.Abs(cell.Dirtiness - target) > 1e-3f)
                         Grid.SetDirtiness(row, col, target, simTimeElapsed);
                 }

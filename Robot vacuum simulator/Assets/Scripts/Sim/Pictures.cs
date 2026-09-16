@@ -107,11 +107,72 @@ namespace RobotVacuum.Sim
             _ => Heart,
         };
 
+        /// <summary>Image file extensions the app will read.</summary>
+        public static readonly string[] Extensions = { ".png", ".jpg", ".jpeg" };
+
+        /// <summary>Where a picture asked for by name is looked up: what ships with the app, then what the player added.</summary>
+        public static string[] SearchFolders =>
+            new[] { Application.streamingAssetsPath, Path.Combine(Application.persistentDataPath, "Images") };
+
+        static readonly System.Collections.Generic.Dictionary<string, PixelPicture> named =
+            new System.Collections.Generic.Dictionary<string, PixelPicture>();
+
+        /// <summary>
+        /// A picture that comes with the app, by file name without its extension (James's photo, say).
+        /// Looked up in <see cref="SearchFolders"/> and kept after the first load; null when there is no such file.
+        /// </summary>
+        public static PixelPicture LoadNamed(string baseName)
+        {
+            if (named.TryGetValue(baseName, out var cached)) return cached;
+
+            PixelPicture picture = null;
+            foreach (string folder in SearchFolders)
+            {
+                string path = FindNamedFile(folder, baseName);
+                if (path == null) continue;
+
+                picture = LoadImageFile(path);
+                if (picture != null) break;
+            }
+
+            named[baseName] = picture;
+            return picture;
+        }
+
+        /// <summary>
+        /// An image in <paramref name="folder"/> called <paramref name="baseName"/>, whatever its capitalisation
+        /// or image extension (James.JPEG counts as james), or null when there is none.
+        /// </summary>
+        public static string FindNamedFile(string folder, string baseName)
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return null;
+
+            foreach (string path in Directory.GetFiles(folder))
+            {
+                if (!string.Equals(Path.GetFileNameWithoutExtension(path), baseName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                string extension = Path.GetExtension(path).ToLowerInvariant();
+                if (Array.IndexOf(Extensions, extension) >= 0) return path;
+            }
+
+            return null;
+        }
+
+        /// <summary>Forgets images loaded by name, so a replaced file is read again.</summary>
+        public static void ClearNamedImages() => named.Clear();
+
         /// <summary>
         /// Reads a PNG or JPG and makes it the <see cref="PictureKind.Image"/> picture. Returns null and changes
         /// nothing when the file can't be read as an image.
         /// </summary>
         public static PixelPicture LoadImage(string path)
+        {
+            var picture = LoadImageFile(path);
+            if (picture != null) CustomImage = picture;
+            return picture;
+        }
+
+        static PixelPicture LoadImageFile(string path)
         {
             byte[] bytes;
             try
@@ -128,8 +189,7 @@ namespace RobotVacuum.Sim
             {
                 if (!texture.LoadImage(bytes)) return null;
 
-                CustomImage = PixelPicture.FromTexture(Path.GetFileNameWithoutExtension(path), texture);
-                return CustomImage;
+                return PixelPicture.FromTexture(Path.GetFileNameWithoutExtension(path), texture);
             }
             finally
             {

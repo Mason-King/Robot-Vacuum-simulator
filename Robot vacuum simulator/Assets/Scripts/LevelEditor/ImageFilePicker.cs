@@ -12,8 +12,6 @@ namespace RobotVacuum.LevelEditor
     /// </summary>
     public static class ImageFilePicker
     {
-        static readonly string[] Extensions = { ".png", ".jpg", ".jpeg" };
-
         public static string ImagesFolder => Path.Combine(Application.persistentDataPath, "Images");
 
         /// <summary>A path to an image file, or null when the user cancelled or there is none.</summary>
@@ -26,7 +24,7 @@ namespace RobotVacuum.LevelEditor
 #else
             Directory.CreateDirectory(ImagesFolder);
             return Directory.GetFiles(ImagesFolder)
-                .Where(file => Extensions.Contains(Path.GetExtension(file).ToLowerInvariant()))
+                .Where(file => Pictures.Extensions.Contains(Path.GetExtension(file).ToLowerInvariant()))
                 .OrderByDescending(File.GetLastWriteTime)
                 .FirstOrDefault();
 #endif

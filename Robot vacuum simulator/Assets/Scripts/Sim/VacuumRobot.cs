@@ -118,8 +118,8 @@ namespace RobotVacuum.Sim
             set => cleaningLimit = Mathf.Clamp01(value);
         }
 
-        /// <summary>A picture strip to print straight into the coverage grid under the robot, or null. Set by the Picture pattern.</summary>
-        public PrintStrip? Print { get; set; }
+        /// <summary>A patch of a picture to print straight into the coverage grid, or null. Set by the printing patterns.</summary>
+        public PrintPatch? Print { get; set; }
 
         public LevelData Level => levelRenderer != null ? levelRenderer.Level : null;
 
