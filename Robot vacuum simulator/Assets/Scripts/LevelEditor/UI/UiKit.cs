@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -182,6 +183,7 @@ namespace RobotVacuum.LevelEditor
         readonly VisualElement fill;
         readonly VisualElement knob;
         readonly Label readout;
+        readonly TextField preciseInput;
         readonly float min;
         readonly float max;
         readonly Func<float, string> format;
@@ -192,7 +194,7 @@ namespace RobotVacuum.LevelEditor
         public event Action<float> ValueChanged;
         public event Action DragEnded;
 
-        public ValueSlider(float min, float max, float initial, Func<float, string> format)
+        public ValueSlider(float min, float max, float initial, Func<float, string> format, bool showInput = false)
         {
             this.min = min;
             this.max = Mathf.Max(min + 1e-4f, max);
@@ -205,6 +207,14 @@ namespace RobotVacuum.LevelEditor
             fill.pickingMode = PickingMode.Ignore;
             knob = Ui.Div(track, "le-slider__knob");
             readout = Ui.Text(this, string.Empty, "le-slider__value");
+
+            if (showInput)
+            {
+                preciseInput = new TextField { isDelayed = true, maxLength = 16 };
+                preciseInput.AddToClassList("le-slider__input");
+                preciseInput.RegisterValueChangedCallback(evt => ApplyTypedValue(evt.newValue));
+                Add(preciseInput);
+            }
 
             track.RegisterCallback<PointerDownEvent>(OnPointerDown);
             track.RegisterCallback<PointerMoveEvent>(OnPointerMove);
@@ -223,6 +233,21 @@ namespace RobotVacuum.LevelEditor
             fill.style.width = Length.Percent(t * 100f);
             knob.style.left = Length.Percent(t * 100f);
             readout.text = format(value);
+            preciseInput?.SetValueWithoutNotify(value.ToString("0.##", CultureInfo.InvariantCulture));
+        }
+
+        void ApplyTypedValue(string text)
+        {
+            if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float next))
+            {
+                preciseInput.SetValueWithoutNotify(value.ToString("0.##", CultureInfo.InvariantCulture));
+                return;
+            }
+
+            float previous = value;
+            float clamped = Mathf.Clamp(next, min, max);
+            SetValueWithoutNotify(clamped);
+            if (!Mathf.Approximately(clamped, previous)) ValueChanged?.Invoke(clamped);
         }
 
         void OnPointerDown(PointerDownEvent evt)

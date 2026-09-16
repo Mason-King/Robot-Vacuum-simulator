@@ -16,7 +16,9 @@ namespace RobotVacuum
         string driveSpeedInput;
         string reverseSpeedInput;
         string turnSpeedInput;
-        GUIStyle labelStyle;
+        GUIStyle panelStyle;
+        GUIStyle titleStyle;
+        GUIStyle valueStyle;
         GUIStyle settingLabelStyle;
         GUIStyle inputStyle;
         GUIStyle buttonStyle;
@@ -59,13 +61,15 @@ namespace RobotVacuum
                 : metersPerSecond;
             string displayedUnit = showingFeetPerSecond ? "ft/s" : "m/s";
 
-            GUI.Label(
-                new Rect(screenPadding.x, screenPadding.y, 360f, 36f),
-                $"Speed: {displayedSpeed:0.00} {displayedUnit}",
-                labelStyle);
+            float left = screenPadding.x;
+            float top = screenPadding.y;
+            GUI.Box(new Rect(left, top, 400f, 242f), GUIContent.none, panelStyle);
+            GUI.Label(new Rect(left + 18f, top + 14f, 150f, 24f), "SPEED", titleStyle);
+            GUI.Label(new Rect(left + 18f, top + 35f, 235f, 42f),
+                $"{displayedSpeed:0.00} {displayedUnit}", valueStyle);
 
-            if (GUI.Button(new Rect(screenPadding.x, screenPadding.y + 40f, 150f, 38f),
-                    "Switch units", buttonStyle))
+            if (GUI.Button(new Rect(left + 274f, top + 33f, 108f, 34f),
+                    showingFeetPerSecond ? "Use m/s" : "Use ft/s", buttonStyle))
             {
                 unit = unit == SpeedUnit.MetersPerSecond
                     ? SpeedUnit.FeetPerSecond
@@ -76,20 +80,20 @@ namespace RobotVacuum
             }
 
             string inputUnit = unit == SpeedUnit.MetersPerSecond ? "m/s" : "ft/s";
-            DrawLinearSetting("Drive", inputUnit, screenPadding.y + 84f, ref driveSpeedInput,
+            DrawLinearSetting("Drive", inputUnit, top + 94f, ref driveSpeedInput,
                 vacuum.DriveSpeedMetersPerSecond, vacuum.SetDriveSpeedMetersPerSecond);
-            DrawLinearSetting("Reverse", inputUnit, screenPadding.y + 128f, ref reverseSpeedInput,
+            DrawLinearSetting("Reverse", inputUnit, top + 138f, ref reverseSpeedInput,
                 vacuum.ReverseSpeedMetersPerSecond, vacuum.SetReverseSpeedMetersPerSecond);
-            DrawTurnSetting(screenPadding.y + 172f);
+            DrawTurnSetting(top + 182f);
         }
 
         void DrawLinearSetting(string label, string unitLabel, float top, ref string input,
             float metersPerSecond, System.Action<float> apply)
         {
-            GUI.Label(new Rect(screenPadding.x, top, 170f, 36f), $"{label} ({unitLabel})", settingLabelStyle);
-            input = GUI.TextField(new Rect(screenPadding.x + 175f, top - 4f, 90f, 42f), input, inputStyle);
+            GUI.Label(new Rect(screenPadding.x + 18f, top, 150f, 30f), $"{label} ({unitLabel})", settingLabelStyle);
+            input = GUI.TextField(new Rect(screenPadding.x + 174f, top - 3f, 90f, 34f), input, inputStyle);
 
-            if (GUI.Button(new Rect(screenPadding.x + 275f, top - 4f, 100f, 42f), "Apply", buttonStyle)
+            if (GUI.Button(new Rect(screenPadding.x + 274f, top - 3f, 108f, 34f), "Apply", buttonStyle)
                 && float.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out float requested)
                 && requested >= 0f)
             {
@@ -100,11 +104,11 @@ namespace RobotVacuum
 
         void DrawTurnSetting(float top)
         {
-            GUI.Label(new Rect(screenPadding.x, top, 170f, 36f), "Turn (deg/s)", settingLabelStyle);
+            GUI.Label(new Rect(screenPadding.x + 18f, top, 150f, 30f), "Turn (deg/s)", settingLabelStyle);
             turnSpeedInput = GUI.TextField(
-                new Rect(screenPadding.x + 175f, top - 4f, 90f, 42f), turnSpeedInput, inputStyle);
+                new Rect(screenPadding.x + 174f, top - 3f, 90f, 34f), turnSpeedInput, inputStyle);
 
-            if (GUI.Button(new Rect(screenPadding.x + 275f, top - 4f, 100f, 42f), "Apply", buttonStyle)
+            if (GUI.Button(new Rect(screenPadding.x + 274f, top - 3f, 108f, 34f), "Apply", buttonStyle)
                 && float.TryParse(turnSpeedInput, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out float requested)
                 && requested >= 0f)
@@ -133,34 +137,60 @@ namespace RobotVacuum
 
         void EnsureStyles()
         {
-            if (labelStyle != null) return;
+            if (panelStyle != null) return;
 
-            labelStyle = new GUIStyle(GUI.skin.label)
+            panelStyle = new GUIStyle(GUI.skin.box)
             {
-                fontSize = 28,
+                normal = { background = MakeTexture(new Color(0.035f, 0.05f, 0.075f, 0.94f)) },
+                border = new RectOffset(8, 8, 8, 8),
+            };
+
+            titleStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(1f, 0.72f, 0.35f) },
+            };
+
+            valueStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 30,
                 fontStyle = FontStyle.Bold,
                 normal = { textColor = Color.white },
             };
 
             settingLabelStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 20,
-                fontStyle = FontStyle.Bold,
-                normal = { textColor = Color.white },
+                fontSize = 14,
+                alignment = TextAnchor.MiddleLeft,
+                normal = { textColor = new Color(0.75f, 0.8f, 0.86f) },
             };
 
             inputStyle = new GUIStyle(GUI.skin.textField)
             {
-                fontSize = 22,
+                fontSize = 16,
+                alignment = TextAnchor.MiddleRight,
                 normal = { textColor = Color.white },
             };
 
             buttonStyle = new GUIStyle(GUI.skin.button)
             {
-                fontSize = 18,
-                normal = { textColor = Color.white },
+                fontSize = 14,
+                fontStyle = FontStyle.Bold,
+                normal =
+                {
+                    textColor = Color.white,
+                    background = MakeTexture(new Color(0.55f, 0.32f, 0.12f, 1f)),
+                },
             };
-        
+        }
+
+        static Texture2D MakeTexture(Color color)
+        {
+            var texture = new Texture2D(1, 1);
+            texture.SetPixel(0, 0, color);
+            texture.Apply();
+            return texture;
         }
     }
 }

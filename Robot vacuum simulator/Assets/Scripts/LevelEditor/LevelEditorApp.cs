@@ -1022,7 +1022,7 @@ namespace RobotVacuum.LevelEditor
         {
             Ui.Text(parent, label, "le-field-label");
 
-            var slider = new ValueSlider(min, max, value, format);
+            var slider = new ValueSlider(min, max, value, format, true);
             slider.ValueChanged += next =>
             {
                 store(next);
