@@ -24,6 +24,28 @@ namespace RobotVacuum.Level
         }
 
         /// <summary>
+        /// An empty 6 × 6 m tiled room: the canvas for the Picture movement pattern, which cleans a picture
+        /// into the coverage heatmap. Tile cleans quickly, so the shades come out true. The vacuum starts in
+        /// the top-left corner, beside the first row.
+        /// </summary>
+        public static void PopulatePictureCanvas(LevelData level)
+        {
+            level.Rooms.Clear();
+            level.Doorways.Clear();
+            level.WallStrokes.Clear();
+            level.Obstacles.Clear();
+
+            level.Rooms.Add(new Room
+            {
+                name = "Canvas",
+                outline = LevelData.RectangleOutline(Vector2.zero, new Vector2(6f, 6f)),
+                floorIndex = 1,
+            });
+
+            level.RobotSpawn = new Vector2(-2.4f, 2.4f);
+        }
+
+        /// <summary>
         /// Four rooms, two of them deliberately off-axis, wired together with doorways.
         /// The bedroom shares an exact edge with the hall so its doorway cuts both walls.
         /// </summary>
