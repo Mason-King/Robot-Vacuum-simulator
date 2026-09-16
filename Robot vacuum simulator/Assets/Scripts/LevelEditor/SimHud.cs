@@ -14,8 +14,8 @@ namespace RobotVacuum.LevelEditor
     [DisallowMultipleComponent]
     public sealed class SimHud : MonoBehaviour
     {
-        static readonly float[] Speeds = { 0.5f, 1f, 2f, 4f };
-        static readonly string[] SpeedLabels = { "0.5×", "1×", "2×", "4×" };
+        static readonly float[] Speeds = { 0.5f, 1f, 2f, 4f, 8f };
+        static readonly string[] SpeedLabels = { "0.5×", "1×", "2×", "4×", "8×" };
 
         PanelSettings panelSettings;
         LevelData level;
@@ -63,15 +63,39 @@ namespace RobotVacuum.LevelEditor
             Ui.Tooltip(speed, "Simulation speed");
             bar.Add(speed);
 
+            var picture = new Segmented(Pictures.Names, (int)SimLauncher.Picture);
+            picture.SelectionChanged += index =>
+            {
+                if ((PictureKind)index == PictureKind.Image && !ImageFilePicker.TryLoad(out string problem))
+                {
+                    picture.SetSelectedWithoutNotify((int)SimLauncher.Picture);
+                    if (problem != null) Debug.LogWarning(problem);
+                    return;
+                }
+
+                SimLauncher.Picture = (PictureKind)index;
+
+                // Start drawing from the top on a clean floor.
+                foreach (var robot in FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
+                {
+                    robot.Picture = SimLauncher.Picture;
+                    robot.ResetToSpawn();
+                }
+                if (cleaning != null) cleaning.ResetCoverage();
+            };
+            Ui.SetVisible(picture, SimLauncher.MovementPattern == MovementPattern.Picture);
+
             var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
             movement.SelectionChanged += index =>
             {
                 SimLauncher.MovementPattern = (MovementPattern)index;
                 foreach (var robot in FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
                     robot.Pattern = SimLauncher.MovementPattern;
+                Ui.SetVisible(picture, SimLauncher.MovementPattern == MovementPattern.Picture);
             };
             Ui.Tooltip(movement, "Movement algorithm");
             bar.Add(movement);
+            bar.Add(picture);
 
             var live = Ui.Div(bar, "le-run-live");
             Ui.Div(live, "le-run-live__dot");

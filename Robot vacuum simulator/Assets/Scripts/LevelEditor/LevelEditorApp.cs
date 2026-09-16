@@ -155,6 +155,7 @@ namespace RobotVacuum.LevelEditor
             {
                 MenuEntry.Item("Blank room", () => CreateLevel(LevelSnapshot.DefaultName, SampleLevels.PopulateBlank), IconKind.Rect),
                 MenuEntry.Item("Sample apartment", () => CreateLevel("Sample apartment", SampleLevels.PopulateApartment), IconKind.Grid),
+                MenuEntry.Item("Picture canvas", () => CreateLevel("Picture canvas", SampleLevels.PopulatePictureCanvas), IconKind.Pen),
             };
 
             bool headed = false;
@@ -930,8 +931,8 @@ namespace RobotVacuum.LevelEditor
             Ui.Button(bar, "Stop", IconKind.Stop, StopRun, "le-btn--ghost");
             Ui.IconButton(bar, IconKind.Undo, "Restart", () => run?.Restart(), "le-btn--ghost");
 
-            var simSpeed = new Segmented(new[] { "1×", "2×", "4×" }, 0);
-            simSpeed.SelectionChanged += index => run?.SetSpeed(index == 0 ? 1f : index == 1 ? 2f : 4f);
+            var simSpeed = new Segmented(new[] { "1×", "2×", "4×", "8×" }, 0);
+            simSpeed.SelectionChanged += index => run?.SetSpeed(Mathf.Pow(2f, index));
             Ui.Tooltip(simSpeed, "Simulation speed");
             bar.Add(simSpeed);
 
@@ -939,14 +940,35 @@ namespace RobotVacuum.LevelEditor
             settingsButton = Ui.Button(bar, "Settings", IconKind.Spawn, () => ShowVacuumSettings(settingsButton), "le-btn--ghost");
             Ui.Tooltip(settingsButton, "Vacuum speed and battery");
 
+            var picture = new Segmented(Pictures.Names, (int)SimLauncher.Picture);
+            picture.SelectionChanged += index =>
+            {
+                if ((PictureKind)index == PictureKind.Image && !ImageFilePicker.TryLoad(out string problem))
+                {
+                    picture.SetSelectedWithoutNotify((int)SimLauncher.Picture);
+                    if (problem != null) overlay.Toast(problem);
+                    return;
+                }
+
+                SimLauncher.Picture = (PictureKind)index;
+                if (run == null) return;
+
+                if (run.Robot != null) run.Robot.Picture = SimLauncher.Picture;
+                run.Restart(); // start drawing from the top on a clean floor
+            };
+            Ui.Tooltip(picture, "Picture to draw into the heatmap · Image… loads a PNG or JPG");
+            Ui.SetVisible(picture, SimLauncher.MovementPattern == MovementPattern.Picture);
+
             var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
             movement.SelectionChanged += index =>
             {
                 SimLauncher.MovementPattern = (MovementPattern)index;
                 if (run != null && run.Robot != null) run.Robot.Pattern = SimLauncher.MovementPattern;
+                Ui.SetVisible(picture, SimLauncher.MovementPattern == MovementPattern.Picture);
             };
             Ui.Tooltip(movement, "Movement algorithm");
             bar.Add(movement);
+            bar.Add(picture);
 
             var live = Ui.Div(bar, "le-run-live");
             Ui.Div(live, "le-run-live__dot");
@@ -959,6 +981,7 @@ namespace RobotVacuum.LevelEditor
             var surface = Ui.RunStat(bar, "Surface");
             var blocked = Ui.RunStat(bar, "Blocked");
             blocked.text = Ui.FormatArea(session.Level.BlockedFloorArea());
+            var cleaned = Ui.RunStat(bar, "Cleaned");
 
             screen.schedule.Execute(() =>
             {
@@ -978,6 +1001,7 @@ namespace RobotVacuum.LevelEditor
                 distance.text = Ui.FormatMetres(robot != null ? robot.DistanceTravelled : 0f);
                 var floor = robot != null ? robot.CurrentFloor : null;
                 surface.text = floor != null ? floor.Label : "—";
+                cleaned.text = run.Cleaning != null && run.Cleaning.Grid != null ? $"{run.Cleaning.CoveragePercent:0.0}%" : "—";
             }).Every(150);
 
             return screen;
@@ -1074,6 +1098,14 @@ namespace RobotVacuum.LevelEditor
             Robot = robotObject.AddComponent<VacuumRobot>();
             Battery = robotObject.GetComponent<Battery>();
             Robot.Pattern = SimLauncher.MovementPattern;
+            Robot.Picture = SimLauncher.Picture;
+
+            // Coverage tracking and its heatmap, as in the simulation scene.
+            Cleaning = robotObject.AddComponent<VacuumCleaningController>();
+            var heatmap = new GameObject("Coverage Heatmap");
+            heatmap.transform.SetParent(root.transform, false);
+            heatmap.AddComponent<CoverageHeatmapRenderer>();
+
             Robot.ResetToSpawn();
 
             camera = Camera.main;
@@ -1100,6 +1132,7 @@ namespace RobotVacuum.LevelEditor
         }
 
         public VacuumRobot Robot { get; }
+        public VacuumCleaningController Cleaning { get; }
         public Battery Battery { get; }
         public float Elapsed => (Time.time - startTime);
 
@@ -1113,6 +1146,7 @@ namespace RobotVacuum.LevelEditor
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
+            if (Cleaning != null) Cleaning.ResetCoverage();
         }
 
         public void SetSpeed(float multiplier) => Time.timeScale = multiplier;
