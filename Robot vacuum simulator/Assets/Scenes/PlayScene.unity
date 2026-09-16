@@ -1294,8 +1294,6 @@ GameObject:
   - component: {fileID: 666368043}
   - component: {fileID: 666368042}
   - component: {fileID: 666368041}
-  - component: {fileID: 666368040}
-  - component: {fileID: 666368039}
   - component: {fileID: 666368038}
   - component: {fileID: 666368045}
   m_Layer: 0
@@ -1328,35 +1326,6 @@ MonoBehaviour:
   backupDuration: 0.28
   turnAngleRange: {x: 70, y: 250}
   wanderDegreesPerSecond: 12
---- !u!114 &666368039
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 666368037}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5d7d4bb0d27d58448883218cf61d7899, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: RobotVacuum::RobotVacuum.SpeedDisplay
-  vacuum: {fileID: 0}
-  screenPadding: {x: 12, y: 250}
---- !u!114 &666368040
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 666368037}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: eb66d2ef5cf2df543a865785e6b8d58a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: RobotVacuum::RobotVacuum.BatteryDisplay
-  battery: {fileID: 0}
-  screenPadding: {x: 12, y: 12}
-  labelSize: {x: 360, y: 165}
 --- !u!114 &666368041
 MonoBehaviour:
   m_ObjectHideFlags: 0
