@@ -21,6 +21,9 @@ namespace RobotVacuum.Level
         [SerializeField] bool rebuildOnEnable = true;
         [SerializeField] bool buildWalls = true;
 
+        [Tooltip("Off builds the colliders but no meshes, for a run with nothing to look at.")]
+        [SerializeField] bool drawMeshes = true;
+
         [Tooltip("Z depth for room floors. Walls are drawn slightly in front.")]
         [SerializeField] float floorDepth = 0f;
         [SerializeField] float wallDepth = -0.05f;
@@ -41,6 +44,16 @@ namespace RobotVacuum.Level
         }
 
         public float WallDepth => wallDepth;
+
+        /// <summary>
+        /// Whether to build the floor, wall and furniture meshes. Colliders are built either way, so a
+        /// headless run can turn this off and still have a level the vacuum bumps into.
+        /// </summary>
+        public bool DrawMeshes
+        {
+            get => drawMeshes;
+            set { drawMeshes = value; Rebuild(); }
+        }
 
         void Awake()
         {
@@ -141,7 +154,8 @@ namespace RobotVacuum.Level
                 mesh.RecalculateNormals();
                 mesh.RecalculateBounds();
 
-                CreateMeshObject($"Floor_{room.name}", mesh, selfColoured ? Color.white : level.ColorOf(room), texture);
+                if (drawMeshes)
+                    CreateMeshObject($"Floor_{room.name}", mesh, selfColoured ? Color.white : level.ColorOf(room), texture);
             }
         }
 
@@ -200,7 +214,7 @@ namespace RobotVacuum.Level
                 mesh.SetTriangles(triangles, 0);
                 mesh.RecalculateNormals();
                 mesh.RecalculateBounds();
-                CreateMeshObject($"Obstacle_{obstacle.name}", mesh, Obstacle.ColorOf(obstacle.kind));
+                if (drawMeshes) CreateMeshObject($"Obstacle_{obstacle.name}", mesh, Obstacle.ColorOf(obstacle.kind));
 
                 if (!obstacle.blocksVacuum) continue;
 
@@ -285,7 +299,7 @@ namespace RobotVacuum.Level
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
 
-            CreateMeshObject("Walls", mesh, level.WallColor);
+            if (drawMeshes) CreateMeshObject("Walls", mesh, level.WallColor);
         }
 
         void CreateWallCollider(Transform parent, Vector2 a, Vector2 b, float length)

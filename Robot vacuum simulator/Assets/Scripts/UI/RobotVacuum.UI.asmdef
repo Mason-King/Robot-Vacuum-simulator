@@ -1,7 +1,10 @@
 {
-    "name": "RobotVacuum",
+    "name": "RobotVacuum.UI",
     "rootNamespace": "RobotVacuum",
-    "references": [],
+    "references": [
+        "RobotVacuum.Core",
+        "RobotVacuum.Sim"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

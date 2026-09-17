@@ -24,6 +24,12 @@ namespace RobotVacuum.LevelEditor
         /// <summary>What the Picture pattern draws, carried the same way.</summary>
         public static PictureKind Picture { get; set; }
 
+        /// <summary>
+        /// Seeds the vacuum's random choices, carried the same way. A watched run and a headless run of the
+        /// same floor plan, pattern and seed take the same route, so the two can be compared.
+        /// </summary>
+        public static int Seed { get; set; }
+
         public static bool OpenStartScreen() => Load(StartScenePath);
 
         public static bool OpenLevelEditor() => Load(EditorScenePath);
@@ -101,6 +107,7 @@ namespace RobotVacuum.LevelEditor
             {
                 robot.Pattern = MovementPattern;
                 robot.Picture = Picture;
+                robot.Seed = Seed;
                 robot.ResetToSpawn();
             }
 
@@ -152,6 +159,7 @@ namespace RobotVacuum.LevelEditor
             fallbackPalette = null;
             MovementPattern = MovementPattern.RandomBounce;
             Picture = PictureKind.Heart;
+            Seed = 0;
         }
     }
 }

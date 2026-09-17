@@ -2,7 +2,9 @@
     "name": "RobotVacuum.Tests.EditMode",
     "rootNamespace": "RobotVacuum.Tests",
     "references": [
-        "RobotVacuum",
+        "RobotVacuum.Core",
+        "RobotVacuum.Sim",
+        "RobotVacuum.UI",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

@@ -64,6 +64,11 @@ namespace RobotVacuum.LevelEditor
         readonly Dictionary<EditorTool, VisualElement> toolButtons = new Dictionary<EditorTool, VisualElement>();
 
         LevelRun run;
+        HeadlessSimulation fastRun;
+        Texture2D fastRunImage;
+        int fastRunSeed;
+        int fastRunMinutesIndex = 1;
+        bool closingFastRun;
 
         // Captured from the first run's robot, then applied to every later one.
         VacuumSettings vacuumSettings;
@@ -420,11 +425,10 @@ namespace RobotVacuum.LevelEditor
 
             Ui.Button(bar, "Save", IconKind.Save, () => TrySave(true), "le-btn--ghost");
 
-            var preview = Ui.Button(bar, "Preview", IconKind.Spawn, StartRun, "le-btn--ghost");
-            Ui.Tooltip(preview, "Quick test run without leaving the editor");
-
-            var simulate = Ui.Button(bar, "Simulate", IconKind.Play, Simulate, "le-btn--primary");
-            Ui.Tooltip(simulate, "Save, then open this floor plan in the simulator");
+            // The editor edits; every way of running the plan lives behind this one button.
+            VisualElement runButton = null;
+            runButton = Ui.Button(bar, "Run", IconKind.Play, () => ShowRunMenu(runButton), "le-btn--primary");
+            Ui.Tooltip(runButton, "Run this floor plan, with or without visuals");
         }
 
         void BuildToolRail(VisualElement rail)
@@ -912,6 +916,13 @@ namespace RobotVacuum.LevelEditor
 
         void StopRun()
         {
+            // Escape and the Stop button reach both kinds of run; a fast run is the one showing if it is.
+            if (fastRun != null || fastRunImage != null)
+            {
+                StopFastRun();
+                return;
+            }
+
             if (run == null) return;
 
             run.Stop();
@@ -920,6 +931,196 @@ namespace RobotVacuum.LevelEditor
 
             ShowScreen(editorScreen);
             canvas.Focus();
+        }
+
+        // ---------------------------------------------------------------- fast run
+
+        static readonly float[] FastRunMinutes = { 1f, 5f, 15f };
+        static readonly string[] FastRunMinuteLabels = { "1 min", "5 min", "15 min" };
+
+        /// <summary>
+        /// The one way from editing into running. Headless is the quick answer — no visuals, many times
+        /// faster than real time, with the coverage previewed as it fills in — while the watched runs are
+        /// for seeing the vacuum actually drive, either over the editor or in the simulator scene.
+        /// </summary>
+        void ShowRunMenu(VisualElement anchor)
+        {
+            overlay.ShowMenuBelow(anchor, new List<MenuEntry>
+            {
+                MenuEntry.Heading("RUN"),
+                MenuEntry.Item("Headless — fast, no visuals", StartFastRun, IconKind.Fit),
+                MenuEntry.Custom(_ => BuildFastRunLength()),
+                MenuEntry.Separator(),
+                MenuEntry.Item("Watch here", StartRun, IconKind.Spawn, Shortcut("↩")),
+                MenuEntry.Item("Watch in simulator", Simulate, IconKind.Play),
+            });
+        }
+
+        /// <summary>
+        /// How long a headless run simulates. It sits in the menu rather than in the run itself, so a length
+        /// can be picked and the run started without leaving the menu.
+        /// </summary>
+        VisualElement BuildFastRunLength()
+        {
+            var row = Ui.Div(null, "le-run-menu__length");
+            Ui.Text(row, "Length", "le-field-label");
+
+            var minutes = new Segmented(FastRunMinuteLabels, fastRunMinutesIndex);
+            minutes.SelectionChanged += index => fastRunMinutesIndex = index;
+            row.Add(minutes);
+
+            return row;
+        }
+
+        /// <summary>
+        /// Runs the open floor plan with no visuals, many times faster than real time, previewing the
+        /// coverage grid as it fills in. The seed is kept, so Watch it replays the same run properly.
+        /// </summary>
+        void StartFastRun()
+        {
+            if (session == null || fastRun != null) return;
+
+            if (session.Level.Rooms.Count == 0)
+            {
+                overlay.Toast("Draw a room before running the vacuum.");
+                return;
+            }
+
+            if (run != null) StopRun(); // the two would fight over the time scale
+
+            overlay.CloseMenu();
+            fastRunSeed = Rng.NewSeed();
+            SimLauncher.Seed = fastRunSeed;
+
+            // The editor goes on using this level, so the run is told not to take ownership of it.
+            fastRun = HeadlessSimulation.Start(session.Level, session.Name, FastRunMinutes[fastRunMinutesIndex] * 60f,
+                SimLauncher.MovementPattern, SimLauncher.Picture, fastRunSeed, HeadlessSimulation.DefaultSpeed, false);
+            fastRun.Finished += OnFastRunFinished;
+
+            ShowScreen(BuildFastRunHud());
+            app.AddToClassList("le-app--running");
+        }
+
+        void StopFastRun()
+        {
+            closingFastRun = true;
+            fastRun?.Stop(); // reports through OnFastRunFinished, which hands over the final image
+            closingFastRun = false;
+            fastRun = null;
+
+            ClearFastRunImage();
+            app.RemoveFromClassList("le-app--running");
+            ShowScreen(editorScreen);
+            canvas.Focus();
+        }
+
+        void ClearFastRunImage()
+        {
+            if (fastRunImage == null) return;
+
+            Destroy(fastRunImage);
+            fastRunImage = null;
+        }
+
+        void OnFastRunFinished(SimulationResults results)
+        {
+            fastRun = null;
+
+            ClearFastRunImage();
+            fastRunImage = results.coverage;
+
+            if (closingFastRun) return; // the run was stopped on the way out of the screen
+            ShowScreen(BuildFastRunResults(results));
+        }
+
+        VisualElement BuildFastRunHud()
+        {
+            var screen = Ui.Div(null, "le-screen le-fastrun-screen");
+
+            var panel = Ui.Div(screen, "le-float le-fastrun");
+            Ui.Text(panel, $"Fast run · {session.Name}", "le-fastrun__title");
+
+            var heatmap = new Image { scaleMode = ScaleMode.ScaleToFit };
+            heatmap.AddToClassList("le-heatmap");
+            Ui.Tooltip(heatmap, "Green is clean, red barely touched, grey blocked by furniture");
+            panel.Add(heatmap);
+
+            var bar = Ui.Div(panel, "le-progress");
+            var fill = Ui.Div(bar, "le-progress__fill");
+
+            var stats = Ui.Div(panel, "le-fastrun__stats");
+            var cleaned = Ui.RunStat(stats, "Cleaned");
+            var simulated = Ui.RunStat(stats, "Simulated");
+            var real = Ui.RunStat(stats, "Real time");
+            var speed = Ui.RunStat(stats, "Speed");
+
+            var actions = Ui.Div(panel, "le-fastrun__actions");
+            Ui.Button(actions, "Stop", IconKind.Stop, StopFastRun, "le-btn--ghost");
+
+            screen.schedule.Execute(() =>
+            {
+                if (fastRun == null || !fastRun.Running) return;
+
+                // Repaint in place while the grid keeps its shape; rebuild only if it ever changes.
+                if (fastRunImage == null || !fastRun.RepaintImage(fastRunImage))
+                {
+                    ClearFastRunImage();
+                    fastRunImage = fastRun.CreateImage();
+                }
+
+                heatmap.image = fastRunImage;
+
+                fill.style.width = Length.Percent(fastRun.Progress * 100f);
+                cleaned.text = $"{fastRun.CoveragePercent:0.0}%";
+                simulated.text = SimulationResults.FormatDuration(fastRun.SimulatedSeconds);
+                real.text = SimulationResults.FormatDuration(fastRun.RealSeconds);
+                speed.text = fastRun.RealSeconds > 0.5f ? $"{fastRun.SimulatedSeconds / fastRun.RealSeconds:0}×" : "—";
+            }).Every(200);
+
+            return screen;
+        }
+
+        VisualElement BuildFastRunResults(SimulationResults results)
+        {
+            var screen = Ui.Div(null, "le-screen le-fastrun-screen");
+
+            var panel = Ui.Div(screen, "le-float le-fastrun");
+            Ui.Text(panel, $"{results.levelName} · {results.coveragePercent:0.0}% cleaned", "le-fastrun__title");
+
+            if (fastRunImage != null)
+            {
+                var heatmap = new Image { image = fastRunImage, scaleMode = ScaleMode.ScaleToFit };
+                heatmap.AddToClassList("le-heatmap");
+                Ui.Tooltip(heatmap, "Green is clean, red barely touched, grey blocked by furniture");
+                panel.Add(heatmap);
+            }
+
+            var stats = Ui.Div(panel, "le-fastrun__stats");
+            Ui.RunStat(stats, "Cleaned").text = $"{results.coveragePercent:0.0}%";
+            Ui.RunStat(stats, "Distance").text = Ui.FormatMetres(results.metresDriven);
+            Ui.RunStat(stats, "Blocked").text = Ui.FormatArea(results.blockedArea);
+            Ui.RunStat(stats, "Simulated").text = SimulationResults.FormatDuration(results.simulatedSeconds);
+            Ui.RunStat(stats, "Real time").text = SimulationResults.FormatDuration(results.realSeconds);
+
+            Ui.Text(panel, results.batteryRanOut
+                ? $"The battery ran out. Seed {results.seed}."
+                : $"About {results.SpeedUp:0}× real time. Seed {results.seed}.", "le-fastrun__note");
+
+            var actions = Ui.Div(panel, "le-fastrun__actions");
+
+            var minutes = new Segmented(FastRunMinuteLabels, fastRunMinutesIndex);
+            minutes.SelectionChanged += index => fastRunMinutesIndex = index;
+            Ui.Tooltip(minutes, "How long the next fast run simulates");
+            actions.Add(minutes);
+
+            Ui.Button(actions, "Run again", IconKind.Redo, () => { StopFastRun(); StartFastRun(); }, "le-btn--ghost");
+
+            var watch = Ui.Button(actions, "Watch it", IconKind.Play, () => { StopFastRun(); StartRun(); }, "le-btn--ghost");
+            Ui.Tooltip(watch, "Replay this exact run in the editor, at normal speed");
+
+            Ui.Button(actions, "Close", IconKind.Close, StopFastRun, "le-btn--primary");
+
+            return screen;
         }
 
         VisualElement BuildRunHud()
@@ -1057,18 +1258,17 @@ namespace RobotVacuum.LevelEditor
     }
 
     /// <summary>
-    /// A live simulation of the level being edited: builds the floor meshes and wall colliders,
-    /// drops in the vacuum, and frames an orthographic camera. <see cref="Stop"/> puts everything back.
+    /// The editor's view of a run: a <see cref="SimulationRunner"/> does the simulation itself, and this
+    /// adds the camera the player watches it through. <see cref="Stop"/> puts everything back.
     /// </summary>
     public sealed class LevelRun
     {
         readonly LevelData level;
-        readonly GameObject root;
+        readonly SimulationRunner simulation;
         readonly Camera camera;
         readonly bool createdCamera;
         readonly CameraState savedCamera;
         readonly float savedTimeScale;
-        readonly float startTime;
 
         struct CameraState
         {
@@ -1084,35 +1284,15 @@ namespace RobotVacuum.LevelEditor
         {
             this.level = level;
             savedTimeScale = Time.timeScale;
-            startTime = Time.time;
 
-            root = new GameObject("Level Run");
-            var levelObject = new GameObject("Level");
-            levelObject.transform.SetParent(root.transform, false);
-            var renderer = levelObject.AddComponent<LevelRenderer>();
-            renderer.Level = level;
-
-            // The robot finds the renderer in Awake, so the level must exist first.
-            var robotObject = new GameObject("Vacuum Robot");
-            robotObject.transform.SetParent(root.transform, false);
-            Robot = robotObject.AddComponent<VacuumRobot>();
-            Battery = robotObject.GetComponent<Battery>();
-            Robot.Pattern = SimLauncher.MovementPattern;
-            Robot.Picture = SimLauncher.Picture;
-
-            // Coverage tracking and its heatmap, as in the simulation scene.
-            Cleaning = robotObject.AddComponent<VacuumCleaningController>();
-            var heatmap = new GameObject("Coverage Heatmap");
-            heatmap.transform.SetParent(root.transform, false);
-            heatmap.AddComponent<CoverageHeatmapRenderer>();
-
-            Robot.ResetToSpawn();
+            simulation = SimulationRunner.Start(level,
+                SimulationRunner.Options.Visible(SimLauncher.MovementPattern, SimLauncher.Picture, SimLauncher.Seed));
 
             camera = Camera.main;
             if (camera == null)
             {
                 camera = new GameObject("Run Camera").AddComponent<Camera>();
-                camera.transform.SetParent(root.transform, false);
+                camera.transform.SetParent(simulation.Root.transform, false);
                 createdCamera = true;
             }
             else
@@ -1131,10 +1311,14 @@ namespace RobotVacuum.LevelEditor
             FrameCamera();
         }
 
-        public VacuumRobot Robot { get; }
-        public VacuumCleaningController Cleaning { get; }
-        public Battery Battery { get; }
-        public float Elapsed => (Time.time - startTime);
+        public VacuumRobot Robot => simulation.Robot;
+        public VacuumCleaningController Cleaning => simulation.Cleaning;
+        public Battery Battery => simulation.Battery;
+        /// <summary>
+        /// Simulated seconds this run has covered. It counts physics steps rather than wall-clock time, so
+        /// it means the same thing at any run speed and matches what a headless run reports.
+        /// </summary>
+        public float Elapsed => simulation.Robot != null ? simulation.Robot.SimTime : 0f;
 
         void FrameCamera()
         {
@@ -1143,11 +1327,7 @@ namespace RobotVacuum.LevelEditor
             camera.backgroundColor = new Color(0.063f, 0.075f, 0.094f);
         }
 
-        public void Restart()
-        {
-            if (Robot != null) Robot.ResetToSpawn();
-            if (Cleaning != null) Cleaning.ResetCoverage();
-        }
+        public void Restart() => simulation.Restart();
 
         public void SetSpeed(float multiplier) => Time.timeScale = multiplier;
 
@@ -1164,7 +1344,7 @@ namespace RobotVacuum.LevelEditor
                 camera.backgroundColor = savedCamera.background;
             }
 
-            if (root != null) UnityEngine.Object.Destroy(root);
+            simulation.Stop();
         }
     }
 }

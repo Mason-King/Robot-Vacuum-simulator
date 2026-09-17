@@ -19,10 +19,12 @@ namespace RobotVacuum
 
         void Awake() => ResetBattery();
 
-        void Update()
+        // Drains on the physics step, like everything else in the simulation. Frame time would make a run
+        // depend on how fast the machine drew it, so a headless run and a watched one would disagree.
+        void FixedUpdate()
         {
             if (Application.isPlaying && CanOperate)
-                Consume(Time.deltaTime);
+                Consume(Time.fixedDeltaTime);
         }
 
         public void Consume(float seconds)

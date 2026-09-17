@@ -59,15 +59,37 @@ namespace RobotVacuum.Sim
         /// <summary>Clearance kept between a printed picture and the room's walls, in metres.</summary>
         protected const float WallMargin = 0.25f;
 
-        public static MovementBrain Create(MovementPattern pattern, PictureKind picture = PictureKind.Heart) => pattern switch
+        /// <summary>
+        /// Where every random choice a brain makes comes from. It is seeded per run rather than drawn from
+        /// <see cref="UnityEngine.Random"/>'s global state, so the same seed always steers the same way.
+        /// </summary>
+        protected Rng Random { get; private set; } = new Rng(0);
+
+        /// <summary>Offset into the wander noise, so runs with different seeds drift apart from the first step.</summary>
+        float wanderPhase;
+
+        public static MovementBrain Create(MovementPattern pattern, PictureKind picture = PictureKind.Heart, int seed = 0)
         {
-            MovementPattern.Spiral => new SpiralBrain(),
-            MovementPattern.WallFollow => new WallFollowBrain(),
-            MovementPattern.Lawnmower => new LawnmowerBrain(),
-            MovementPattern.Picture => new PictureBrain(picture),
-            MovementPattern.James => new JamesBrain(),
-            _ => new RandomBounceBrain(),
-        };
+            MovementBrain brain = pattern switch
+            {
+                MovementPattern.Spiral => new SpiralBrain(),
+                MovementPattern.WallFollow => new WallFollowBrain(),
+                MovementPattern.Lawnmower => new LawnmowerBrain(),
+                MovementPattern.Picture => new PictureBrain(picture),
+                MovementPattern.James => new JamesBrain(),
+                _ => new RandomBounceBrain(),
+            };
+
+            brain.Seed(seed);
+            return brain;
+        }
+
+        /// <summary>Starts the brain's random sequence over from <paramref name="seed"/>.</summary>
+        public void Seed(int seed)
+        {
+            Random = new Rng(seed);
+            wanderPhase = Random.Value * 1000f;
+        }
 
         /// <summary>Fits a picture, as large as it goes, into the room the robot is standing in.</summary>
         protected static bool TryFitCanvas(VacuumRobot robot, PixelPicture picture, out Rect canvas)
@@ -100,15 +122,19 @@ namespace RobotVacuum.Sim
         /// <summary>Called when the robot bumps into something; it backs off, then performs the result.</summary>
         public abstract Manoeuvre AfterBump(VacuumRobot robot);
 
-        protected static float RandomTurn(VacuumRobot robot)
+        protected float RandomTurn(VacuumRobot robot)
         {
             float amount = Random.Range(robot.TurnAngleRange.x, robot.TurnAngleRange.y);
-            return Random.value < 0.5f ? -amount : amount;
+            return Random.Value < 0.5f ? -amount : amount;
         }
 
-        /// <summary>A slow drift so straight runs don't retrace identical paths.</summary>
-        protected static float Wander(VacuumRobot robot) =>
-            (Mathf.PerlinNoise(Time.time * 0.35f, 0f) - 0.5f) * 2f * robot.WanderDegreesPerSecond;
+        /// <summary>
+        /// A slow drift so straight runs don't retrace identical paths. It reads the robot's own clock, not
+        /// <see cref="Time.time"/>, which counts from app start and is scaled: a headless run at 25× would
+        /// otherwise sample completely different noise from a watched one.
+        /// </summary>
+        protected float Wander(VacuumRobot robot) =>
+            (Mathf.PerlinNoise(wanderPhase + robot.SimTime * 0.35f, 0f) - 0.5f) * 2f * robot.WanderDegreesPerSecond;
     }
 
     /// <summary>Straight runs with a slight drift and a random turn at every bump. Simple, thorough eventually, wasteful.</summary>

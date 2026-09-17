@@ -24,7 +24,6 @@ namespace RobotVacuum.LevelEditor
         Battery battery;
         VacuumSettings vacuumSettings;
         OverlayLayer overlay;
-        float startTime;
         float savedTimeScale = 1f;
         bool leaving;
 
@@ -36,7 +35,6 @@ namespace RobotVacuum.LevelEditor
             robot = FindAnyObjectByType<VacuumRobot>();
             battery = robot != null ? robot.GetComponent<Battery>() : null;
             if (robot != null) vacuumSettings = VacuumSettings.From(robot, battery);
-            startTime = Time.time;
             savedTimeScale = Time.timeScale;
 
             var root = UiPanel.Create(transform, "Simulator HUD", 1f, out panelSettings);
@@ -110,8 +108,10 @@ namespace RobotVacuum.LevelEditor
 
             bar.schedule.Execute(() =>
             {
-                var elapsed = TimeSpan.FromSeconds(Time.time - startTime);
-                runtime.text = $"{(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}";
+                // The robot's own clock, counted in physics steps: the read-out then means the same thing
+                // a headless run reports, whatever speed this one is being watched at, and it stops when
+                // the battery does rather than counting on.
+                runtime.text = SimulationResults.FormatDuration(robot != null ? robot.SimTime : 0f);
                 speedStat.text = new VacuumSettings().FormatSpeed(
                     robot != null ? robot.SpeedMetersPerSecond : 0f);
                 batteryStat.text = battery != null
@@ -131,7 +131,10 @@ namespace RobotVacuum.LevelEditor
 
         void Restart()
         {
+            // Same seed, same start point, clean floor: a restart repeats the run exactly, rather than
+            // driving the same route again over floor the last run had already cleaned.
             if (robot != null) robot.ResetToSpawn();
+            if (cleaning != null) cleaning.ResetCoverage();
         }
 
         void ShowVacuumSettings(VisualElement anchor)
