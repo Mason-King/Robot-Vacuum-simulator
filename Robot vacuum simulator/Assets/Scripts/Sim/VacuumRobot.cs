@@ -56,6 +56,9 @@ namespace RobotVacuum.Sim
         [Tooltip("What the Picture movement pattern draws into the coverage heatmap.")]
         [SerializeField] PictureKind picture = PictureKind.Heart;
 
+        [Tooltip("Seeds every random choice the vacuum makes. The same seed drives the same route each run.")]
+        [SerializeField] int seed;
+
         Rigidbody2D body;
         CircleCollider2D circle;
         Battery battery;
@@ -65,6 +68,7 @@ namespace RobotVacuum.Sim
         MovementBrain brain;
         MovementPattern brainPattern;
         PictureKind brainPicture;
+        int brainSeed;
         float speedScale = 1f;
         float cleaningLimit = 1f;
         readonly Queue<Step> steps = new Queue<Step>();
@@ -73,6 +77,12 @@ namespace RobotVacuum.Sim
 
         /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
+
+        /// <summary>
+        /// Seconds of simulated time since the last reset, accumulated on the physics step. Brains steer by
+        /// this rather than <see cref="Time.time"/>, which counts from app start and is scaled by run speed.
+        /// </summary>
+        public float SimTime { get; private set; }
 
         public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
 
@@ -96,7 +106,7 @@ namespace RobotVacuum.Sim
         }
 
         public FloorType CurrentFloor =>
-            levelRenderer != null ? levelRenderer.FloorTypeAtWorld(transform.position) : null;
+            levelRenderer != null ? levelRenderer.FloorTypeAtWorld(WorldPosition) : null;
 
         /// <summary>The movement algorithm. Switching mid-run carries on from where the robot is.</summary>
         public MovementPattern Pattern
@@ -128,6 +138,34 @@ namespace RobotVacuum.Sim
             }
         }
 
+        /// <summary>
+        /// Seeds the vacuum's random choices. Setting it starts the algorithm's sequence again, so two runs
+        /// of the same level, pattern and seed take the same route.
+        /// </summary>
+        public int Seed
+        {
+            get => seed;
+            set
+            {
+                if (seed == value) return;
+                seed = value;
+                brain = null; // rebuilt from the new seed on next use
+            }
+        }
+
+        /// <summary>
+        /// The shared random source for this run. SimulationRunner builds ONE of these per run and assigns
+        /// it here, so every subsystem that draws randomness (movement, and eventually sensor noise, debris
+        /// accumulation) pulls from the same instance -- needed for RNG-state snapshot/restore to mean
+        /// anything (SDD 2.9/2.10): a freshly-built same-seed provider always restarts its streams from the
+        /// top, not from wherever a shared instance currently sits.
+        ///
+        /// Left unset, a robot builds its own from <see cref="Seed"/> the first time a brain is needed --
+        /// keeps standalone testing (a VacuumRobot dropped into a scene directly, no SimulationRunner
+        /// involved) working exactly as before.
+        /// </summary>
+        public RandomProvider RandomSource { get; set; }
+
         /// <summary>Multiplies drive speed, so a brain can slow down for careful work. Back to 1 on reset.</summary>
         public float SpeedScale
         {
@@ -150,20 +188,33 @@ namespace RobotVacuum.Sim
 
         public LevelData Level => levelRenderer != null ? levelRenderer.Level : null;
 
+        /// <summary>
+        /// Where the body actually is. The transform is interpolated for smooth drawing, so it trails the
+        /// physics state by part of a frame and moves with the frame rate; everything the simulation
+        /// decides from reads this instead, or a headless run would disagree with a watched one.
+        /// </summary>
+        Vector3 WorldPosition => body != null ? (Vector3)body.position : transform.position;
+
         /// <summary>Where the vacuum is, in level metres.</summary>
         public Vector2 LevelPosition =>
-            levelRenderer != null ? levelRenderer.WorldToLevel(transform.position) : (Vector2)transform.position;
+            levelRenderer != null ? levelRenderer.WorldToLevel(WorldPosition) : (Vector2)WorldPosition;
 
         MovementBrain Brain
         {
             get
             {
                 bool pictureChanged = movementPattern == MovementPattern.Picture && brainPicture != picture;
-                if (brain == null || brainPattern != movementPattern || pictureChanged)
+                if (brain == null || brainPattern != movementPattern || pictureChanged || brainSeed != seed)
                 {
-                    brain = MovementBrain.Create(movementPattern, picture);
+                    // ??= assigns only if RandomSource is still null -- if SimulationRunner already
+                    // injected one, this does nothing; if nobody did (standalone testing), it builds one
+                    // from the local seed so the robot still works on its own.
+                    RandomSource ??= new RandomProvider((uint)seed);
+
+                    brain = MovementBrain.Create(movementPattern, RandomSource, picture);
                     brainPattern = movementPattern;
                     brainPicture = picture;
+                    brainSeed = seed;
                     brain.Reset(this);
                 }
                 return brain;
@@ -272,6 +323,7 @@ namespace RobotVacuum.Sim
             }
 
             float dt = Time.fixedDeltaTime;
+            SimTime += dt;
 
             switch (state)
             {
@@ -425,7 +477,15 @@ namespace RobotVacuum.Sim
             state = State.Driving;
             speedScale = 1f;
             cleaningLimit = 1f;
+            SimTime = 0f;
             Print = null;
+
+            // Back to the same random sequence, so a repeat of a run matches it step for step. A fresh
+            // RandomProvider from the same seed reproduces the same per-subsystem streams from the top --
+            // see VacuumRobot.RandomSource's doc comment for why this has to be a real rebuild, not just
+            // telling the existing shared instance to rewind.
+            RandomSource = new RandomProvider((uint)seed);
+            Brain.AssignRandomSource(RandomSource);
             Brain.Reset(this);
 
             if (levelRenderer == null || levelRenderer.Level == null) return;
@@ -436,7 +496,14 @@ namespace RobotVacuum.Sim
             DistanceTravelled = 0f;
             battery.ResetBattery();
 
-            if (body != null) body.linearVelocity = Vector2.zero;
+            if (body != null)
+            {
+                // Move the body itself, and face the same way every time: the transform alone would leave
+                // the first physics step starting from wherever the last run happened to end up.
+                body.position = transform.position;
+                body.rotation = 0f;
+                body.linearVelocity = Vector2.zero;
+            }
         }
 
         // ---------------------------------------------------------------- visual

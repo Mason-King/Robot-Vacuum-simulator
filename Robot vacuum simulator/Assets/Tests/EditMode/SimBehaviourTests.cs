@@ -28,14 +28,20 @@ namespace RobotVacuum.Tests
         {
             var patterns = (MovementPattern[])Enum.GetValues(typeof(MovementPattern));
 
+            // MovementBrain.Create now requires a RandomProvider (brains share one
+            // per run rather than each owning a private Rng) -- any instance works
+            // here, since this test only checks which subclass comes back, not
+            // anything about the random sequence itself.
+            var randomSource = new RandomProvider(0);
+
             Assert.GreaterOrEqual(patterns.Length, 4);
             Assert.AreEqual(patterns.Length, MovementBrain.Labels.Length);
-            Assert.IsInstanceOf<RandomBounceBrain>(MovementBrain.Create(MovementPattern.RandomBounce));
-            Assert.IsInstanceOf<SpiralBrain>(MovementBrain.Create(MovementPattern.Spiral));
-            Assert.IsInstanceOf<WallFollowBrain>(MovementBrain.Create(MovementPattern.WallFollow));
-            Assert.IsInstanceOf<LawnmowerBrain>(MovementBrain.Create(MovementPattern.Lawnmower));
-            Assert.IsInstanceOf<PictureBrain>(MovementBrain.Create(MovementPattern.Picture));
-            Assert.IsInstanceOf<JamesBrain>(MovementBrain.Create(MovementPattern.James));
+            Assert.IsInstanceOf<RandomBounceBrain>(MovementBrain.Create(MovementPattern.RandomBounce, randomSource));
+            Assert.IsInstanceOf<SpiralBrain>(MovementBrain.Create(MovementPattern.Spiral, randomSource));
+            Assert.IsInstanceOf<WallFollowBrain>(MovementBrain.Create(MovementPattern.WallFollow, randomSource));
+            Assert.IsInstanceOf<LawnmowerBrain>(MovementBrain.Create(MovementPattern.Lawnmower, randomSource));
+            Assert.IsInstanceOf<PictureBrain>(MovementBrain.Create(MovementPattern.Picture, randomSource));
+            Assert.IsInstanceOf<JamesBrain>(MovementBrain.Create(MovementPattern.James, randomSource));
         }
 
         [Test]
