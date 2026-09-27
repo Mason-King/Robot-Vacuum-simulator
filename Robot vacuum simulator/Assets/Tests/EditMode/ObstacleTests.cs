@@ -27,6 +27,7 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Table));
             Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Bed));
             Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Chair));
+            Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Cat));
             Assert.IsTrue(Obstacle.DefaultBlocks(ObstacleKind.Sofa));
             Assert.IsTrue(Obstacle.DefaultBlocks(ObstacleKind.Cabinet));
             Assert.IsTrue(Obstacle.DefaultBlocks(ObstacleKind.Box));
@@ -109,6 +110,24 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Snapshot_RoundTripsPlacedCatAsPassable()
+        {
+            level.Obstacles.Add(new Obstacle
+            {
+                name = "Miso", kind = ObstacleKind.Cat, center = new Vector2(0.6f, 0.3f),
+                size = Obstacle.DefaultSize(ObstacleKind.Cat), blocksVacuum = true,
+            });
+
+            var snapshot = LevelSnapshot.Parse(LevelSnapshot.Serialize(level, "Flat"));
+            var cat = snapshot.obstacles.Single();
+
+            Assert.AreEqual("Miso", cat.name);
+            Assert.AreEqual(ObstacleKind.Cat, cat.kind);
+            TestLevels.AssertNear(new Vector2(0.6f, 0.3f), cat.center);
+            Assert.IsFalse(cat.blocksVacuum);
+        }
+
+        [Test]
         public void Parse_LevelSavedBeforeFurniture_HasNone()
         {
             var snapshot = LevelSnapshot.Parse("{\"name\":\"Old\",\"rooms\":[]}");
@@ -185,7 +204,7 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(table.blocksVacuum);
             TestLevels.AssertNear(new Vector2(0.5f, 0.2f), table.center);
             Assert.AreEqual(-1, session.SelectedRoom);
-            Assert.AreEqual("Add Furniture", session.UndoLabel);
+            Assert.AreEqual("Add Table", session.UndoLabel);
 
             session.AddObstacle(Vector2.zero, Vector2.one);
             Assert.AreEqual("Table 2", session.SelectedObstacleData.name);

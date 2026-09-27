@@ -67,6 +67,9 @@ namespace RobotVacuum.Sim
         PictureKind brainPicture;
         float speedScale = 1f;
         float cleaningLimit = 1f;
+        Vector2 batterySamplePosition;
+        float batterySampleHeading;
+        bool hasBatterySample;
         readonly Queue<Step> steps = new Queue<Step>();
         readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
@@ -222,6 +225,8 @@ namespace RobotVacuum.Sim
             ConfigureComponents();
             if (levelRenderer == null)
                 levelRenderer = FindAnyObjectByType<LevelRenderer>(FindObjectsInactive.Include);
+
+            ResetBatteryMotionSample();
         }
 
         void OnEnable()
@@ -265,6 +270,8 @@ namespace RobotVacuum.Sim
         {
             if (!Application.isPlaying || body == null) return;
 
+            ConsumeCompletedWork();
+
             if (!battery.CanOperate)
             {
                 body.linearVelocity = Vector2.zero;
@@ -294,6 +301,35 @@ namespace RobotVacuum.Sim
                     break;
             }
 
+        }
+
+        void ConsumeCompletedWork()
+        {
+            Vector2 position = body.position;
+            float heading = body.rotation;
+
+            if (hasBatterySample)
+            {
+                float distance = Vector2.Distance(batterySamplePosition, position);
+                float turn = Mathf.Abs(Mathf.DeltaAngle(batterySampleHeading, heading));
+                Vector2 midpoint = (batterySamplePosition + position) * 0.5f;
+                FloorType floor = levelRenderer != null ? levelRenderer.FloorTypeAtWorld(midpoint) : null;
+                float surfaceMultiplier = floor != null ? floor.energyCostMultiplier : 1f;
+                battery.ConsumeWork(distance, turn, surfaceMultiplier);
+            }
+
+            batterySamplePosition = position;
+            batterySampleHeading = heading;
+            hasBatterySample = true;
+        }
+
+        void ResetBatteryMotionSample()
+        {
+            if (body == null) return;
+
+            batterySamplePosition = body.position;
+            batterySampleHeading = body.rotation;
+            hasBatterySample = true;
         }
 
         void Drive(float dt)
@@ -434,9 +470,10 @@ namespace RobotVacuum.Sim
                 levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
 
             DistanceTravelled = 0f;
-            battery.ResetBattery();
+            battery.ResetCharge();
 
             if (body != null) body.linearVelocity = Vector2.zero;
+            ResetBatteryMotionSample();
         }
 
         // ---------------------------------------------------------------- visual

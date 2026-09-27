@@ -1,44 +1,50 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace RobotVacuum
 {
     public class Battery : MonoBehaviour
     {
-        [Tooltip("How long the vacuum can operate before its battery is empty, in seconds.")]
+        [Tooltip("Available work units before the battery is empty.")]
         [Min(0f)]
-        [SerializeField] float batteryLifeSeconds = 300f;
+        [SerializeField, FormerlySerializedAs("batteryLifeSeconds")] float capacity = 300f;
 
-        public float BatteryLifeSeconds
+        [Tooltip("Battery work units used per metre travelled on a neutral surface.")]
+        [Min(0f)]
+        [SerializeField] float distanceEnergyPerMeter = 1f;
+
+        [Tooltip("Battery work units used per degree of rotation on a neutral surface.")]
+        [Min(0f)]
+        [SerializeField] float turnEnergyPerDegree = 0.01f;
+
+        public float Capacity
         {
-            get => batteryLifeSeconds;
-            set => SetBatteryLifeSeconds(value);
+            get => capacity;
+            set => SetCapacity(value);
         }
 
-        public float CurrentLifeSeconds { get; private set; }
-        public bool CanOperate => CurrentLifeSeconds > 0f;
+        public float CurrentCharge { get; private set; }
+        public bool CanOperate => CurrentCharge > 0f;
 
-        void Awake() => ResetBattery();
+        void Awake() => ResetCharge();
 
-        void Update()
+        public void ConsumeWork(float distanceMeters, float turnDegrees, float surfaceMultiplier)
         {
-            if (Application.isPlaying && CanOperate)
-                Consume(Time.deltaTime);
+            float distanceCost = Mathf.Max(0f, distanceMeters) * distanceEnergyPerMeter;
+            float turnCost = Mathf.Abs(turnDegrees) * turnEnergyPerDegree;
+            float surfaceCost = Mathf.Max(0f, surfaceMultiplier);
+            CurrentCharge = Mathf.Max(0f, CurrentCharge - (distanceCost + turnCost) * surfaceCost);
         }
 
-        public void Consume(float seconds)
+        public void SetCapacity(float workUnits)
         {
-            CurrentLifeSeconds = Mathf.Max(0f, CurrentLifeSeconds - Mathf.Max(0f, seconds));
+            capacity = Mathf.Max(0f, workUnits);
+            ResetCharge();
         }
 
-        public void SetBatteryLifeSeconds(float seconds)
+        public void ResetCharge()
         {
-            batteryLifeSeconds = Mathf.Max(0f, seconds);
-            ResetBattery();
-        }
-
-        public void ResetBattery()
-        {
-            CurrentLifeSeconds = batteryLifeSeconds;
+            CurrentCharge = capacity;
         }
     }
 }

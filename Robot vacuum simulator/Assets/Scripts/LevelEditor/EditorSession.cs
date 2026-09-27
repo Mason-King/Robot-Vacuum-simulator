@@ -107,7 +107,7 @@ namespace RobotVacuum.LevelEditor
             set => SetOption(ref paintFloor, Mathf.Max(0, value));
         }
 
-        /// <summary>The kind of furniture the Furniture tool places next.</summary>
+        /// <summary>The kind of object the Objects tool places next.</summary>
         public ObstacleKind ObstacleKind
         {
             get => obstacleKind;
@@ -530,12 +530,12 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- furniture
 
-        /// <summary>Places furniture of the current <see cref="ObstacleKind"/> and selects it.</summary>
+        /// <summary>Places an object of the current <see cref="ObstacleKind"/> and selects it.</summary>
         public void AddObstacle(Vector2 center, Vector2 size, float rotation = 0f)
         {
             var kind = obstacleKind;
 
-            Edit("Add Furniture", () =>
+            Edit($"Add {Obstacle.DefaultName(kind)}", () =>
             {
                 Level.Obstacles.Add(new Obstacle
                 {
@@ -577,7 +577,7 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
-            Edit("Delete Furniture", () =>
+            Edit($"Delete {obstacle.name}", () =>
             {
                 Level.Obstacles.RemoveAt(index);
                 selectedObstacle = -1;
@@ -592,7 +592,7 @@ namespace RobotVacuum.LevelEditor
             var source = GetObstacle(index);
             if (source == null) return;
 
-            Edit("Duplicate Furniture", () =>
+            Edit($"Duplicate {source.name}", () =>
             {
                 var copy = source.Clone();
                 copy.name = source.name + " copy";
@@ -613,7 +613,7 @@ namespace RobotVacuum.LevelEditor
             next = next?.Trim();
             if (obstacle == null || string.IsNullOrEmpty(next) || obstacle.name == next) return;
 
-            Edit("Rename Furniture", () => obstacle.name = next);
+            Edit($"Rename {obstacle.name}", () => obstacle.name = next);
         }
 
         /// <summary>
@@ -627,7 +627,7 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null || obstacle.kind == kind) return;
 
-            Edit("Furniture Kind", () =>
+            Edit("Object Kind", () =>
             {
                 if (obstacle.name.StartsWith(Obstacle.DefaultName(obstacle.kind), StringComparison.Ordinal))
                     obstacle.name = NextObstacleName(kind, index);
@@ -640,7 +640,7 @@ namespace RobotVacuum.LevelEditor
         public void SetObstacleBlocks(int index, bool blocks)
         {
             var obstacle = GetObstacle(index);
-            if (obstacle == null || obstacle.blocksVacuum == blocks) return;
+            if (obstacle == null || obstacle.kind == ObstacleKind.Cat || obstacle.blocksVacuum == blocks) return;
 
             Edit(blocks ? "Block Vacuum" : "Let Vacuum Pass", () => obstacle.blocksVacuum = blocks);
         }

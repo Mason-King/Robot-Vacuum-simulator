@@ -106,6 +106,7 @@ namespace RobotVacuum.LevelEditor
                 if (obstacle == null) continue;
                 obstacle.size = Vector2.Max(obstacle.size, Vector2.one * Obstacle.MinSize);
                 if (string.IsNullOrWhiteSpace(obstacle.name)) obstacle.name = Obstacle.DefaultName(obstacle.kind);
+                if (obstacle.kind == ObstacleKind.Cat) obstacle.blocksVacuum = false;
             }
         }
 

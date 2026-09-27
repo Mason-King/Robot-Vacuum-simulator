@@ -116,9 +116,9 @@ namespace RobotVacuum.LevelEditor
             walls.ValueChanged += value => session.NewRoomsHaveWalls = value;
             newRooms.Add(walls);
 
-            Ui.Section(scroll, "New furniture", out var newFurniture);
-            BuildKindPicker(newFurniture, session.ObstacleKind, kind => session.ObstacleKind = kind);
-            Ui.Text(newFurniture, "Place it with the Furniture tool (O).", "le-empty-hint");
+            Ui.Section(scroll, "New objects", out var newObjects);
+            BuildKindPicker(newObjects, session.ObstacleKind, kind => session.ObstacleKind = kind);
+            Ui.Text(newObjects, "Place the selected kind with the Objects tool (O).", "le-empty-hint");
 
             Ui.Section(scroll, "Walls", out var wallBody);
             Ui.Text(wallBody, "Thickness", "le-field-label");
@@ -229,7 +229,7 @@ namespace RobotVacuum.LevelEditor
             var level = session.Level;
             if (level.Obstacles.Count == 0) return;
 
-            Ui.Section(scroll, $"Furniture · {level.Obstacles.Count}", out var body);
+            Ui.Section(scroll, $"Objects · {level.Obstacles.Count}", out var body);
             Ui.Text(body, $"Blocks {Ui.FormatArea(level.BlockedFloorArea())} of floor the vacuum can't clean.", "le-body-text");
 
             for (int i = 0; i < level.Obstacles.Count; i++)
@@ -242,7 +242,7 @@ namespace RobotVacuum.LevelEditor
                 Ui.Swatch(row, Obstacle.ColorOf(obstacle.kind), "le-swatch le-swatch--round");
                 Ui.Text(row, obstacle.name, "le-list-row__label");
                 Ui.Text(row, obstacle.blocksVacuum ? "Blocks" : "Passable", "le-list-row__meta");
-                Ui.IconButton(row, IconKind.Trash, "Delete furniture", () => session.DeleteObstacle(index), "le-list-row__action");
+                Ui.IconButton(row, IconKind.Trash, "Delete object", () => session.DeleteObstacle(index), "le-list-row__action");
 
                 row.AddManipulator(new Clickable(() => session.SelectObstacle(index)));
             }
@@ -380,7 +380,7 @@ namespace RobotVacuum.LevelEditor
         {
             var header = Ui.Div(scroll, "le-inspector__header le-inspector__header--row");
             var titleBlock = Ui.Div(header, "le-inspector__header-text");
-            Ui.Text(titleBlock, "Furniture", "le-inspector__eyebrow");
+            Ui.Text(titleBlock, obstacle.kind == ObstacleKind.Cat ? "Dynamic obstacle" : "Furniture", "le-inspector__eyebrow");
             Ui.IconButton(header, IconKind.Close, "Deselect (Esc)", session.ClearSelection, "le-btn--ghost le-btn--small");
 
             var nameField = Ui.TextInput(scroll, obstacle.name, value => session.RenameObstacle(index, value), "le-input--title");
@@ -401,13 +401,20 @@ namespace RobotVacuum.LevelEditor
                 depth.text = Ui.FormatMetres(obstacle.size.y);
             });
 
-            Ui.Section(scroll, "Vacuum", out var vacuumBody);
-            var passes = new SwitchToggle("Can pass underneath", !obstacle.blocksVacuum);
-            passes.ValueChanged += value => session.SetObstacleBlocks(index, !value);
-            vacuumBody.Add(passes);
-            Ui.Text(vacuumBody, obstacle.blocksVacuum
-                ? "The vacuum bumps into it, and the floor beneath isn't counted towards coverage."
-                : "The vacuum drives under it and cleans the floor beneath.", "le-empty-hint");
+            Ui.Section(scroll, obstacle.kind == ObstacleKind.Cat ? "Simulation" : "Vacuum", out var vacuumBody);
+            if (obstacle.kind == ObstacleKind.Cat)
+            {
+                Ui.Text(vacuumBody, "Moves during a run. The floor remains cleanable as it moves.", "le-empty-hint");
+            }
+            else
+            {
+                var passes = new SwitchToggle("Can pass underneath", !obstacle.blocksVacuum);
+                passes.ValueChanged += value => session.SetObstacleBlocks(index, !value);
+                vacuumBody.Add(passes);
+                Ui.Text(vacuumBody, obstacle.blocksVacuum
+                    ? "The vacuum bumps into it, and the floor beneath isn't counted towards coverage."
+                    : "The vacuum drives under it and cleans the floor beneath.", "le-empty-hint");
+            }
 
             Ui.Section(scroll, "Kind", out var kindBody);
             BuildKindPicker(kindBody, obstacle.kind, kind => session.SetObstacleKind(index, kind));
@@ -415,17 +422,17 @@ namespace RobotVacuum.LevelEditor
             Ui.Section(scroll, "Size", out var sizeBody);
             Ui.Text(sizeBody, "Width", "le-field-label");
             var widthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.x, v => $"{v:0.00} m");
-            BindContinuous(widthSlider, "Resize Furniture", v => session.SetObstacleSizeLive(index, new Vector2(v, obstacle.size.y)));
+            BindContinuous(widthSlider, "Resize Object", v => session.SetObstacleSizeLive(index, new Vector2(v, obstacle.size.y)));
             sizeBody.Add(widthSlider);
 
             Ui.Text(sizeBody, "Depth", "le-field-label");
             var depthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.y, v => $"{v:0.00} m");
-            BindContinuous(depthSlider, "Resize Furniture", v => session.SetObstacleSizeLive(index, new Vector2(obstacle.size.x, v)));
+            BindContinuous(depthSlider, "Resize Object", v => session.SetObstacleSizeLive(index, new Vector2(obstacle.size.x, v)));
             sizeBody.Add(depthSlider);
 
             Ui.Text(sizeBody, "Rotation", "le-field-label");
             var rotationSlider = new ValueSlider(0f, 360f, obstacle.rotation, v => $"{v:0}°");
-            BindContinuous(rotationSlider, "Rotate Furniture", v => session.SetObstacleRotationLive(index, v));
+            BindContinuous(rotationSlider, "Rotate Object", v => session.SetObstacleRotationLive(index, v));
             sizeBody.Add(rotationSlider);
             Ui.Text(sizeBody, "Drag it on the canvas with the Select tool to move it.", "le-empty-hint");
 
@@ -445,7 +452,8 @@ namespace RobotVacuum.LevelEditor
 
                 var text = Ui.Div(card, "le-floor-card__text");
                 Ui.Text(text, Obstacle.DefaultName(kind), "le-floor-card__name");
-                Ui.Text(text, Obstacle.DefaultBlocks(kind) ? "Blocks" : "Passable", "le-floor-card__meta");
+                Ui.Text(text, kind == ObstacleKind.Cat ? "Moves during runs"
+                    : Obstacle.DefaultBlocks(kind) ? "Blocks" : "Passable", "le-floor-card__meta");
 
                 card.AddManipulator(new Clickable(() => onPick(captured)));
             }

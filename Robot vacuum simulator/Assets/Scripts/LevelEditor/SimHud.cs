@@ -26,6 +26,8 @@ namespace RobotVacuum.LevelEditor
         OverlayLayer overlay;
         float startTime;
         float savedTimeScale = 1f;
+        float playbackSpeed = 1f;
+        bool isPaused;
         bool leaving;
 
         /// <summary>Builds the bar. <paramref name="handedLevel"/> is destroyed along with the scene.</summary>
@@ -59,9 +61,21 @@ namespace RobotVacuum.LevelEditor
 
             // Scales simulated time, so the robot, cleaning and the runtime readout stay together.
             var speed = new Segmented(SpeedLabels, Array.IndexOf(Speeds, 1f));
-            speed.SelectionChanged += index => Time.timeScale = Speeds[index];
+            speed.SelectionChanged += index =>
+            {
+                playbackSpeed = Speeds[index];
+                if (!isPaused) Time.timeScale = playbackSpeed;
+            };
             Ui.Tooltip(speed, "Simulation speed");
             bar.Add(speed);
+
+            VisualElement pauseButton = null;
+            pauseButton = Ui.IconButton(bar, IconKind.Pause, "Pause or resume the simulation", () =>
+            {
+                isPaused = !isPaused;
+                Time.timeScale = isPaused ? 0f : playbackSpeed;
+                pauseButton.Q<IconElement>().Kind = isPaused ? IconKind.Play : IconKind.Pause;
+            }, "le-btn--ghost");
 
             var picture = new Segmented(Pictures.Names, (int)SimLauncher.Picture);
             picture.SelectionChanged += index =>
@@ -115,7 +129,7 @@ namespace RobotVacuum.LevelEditor
                 speedStat.text = new VacuumSettings().FormatSpeed(
                     robot != null ? robot.SpeedMetersPerSecond : 0f);
                 batteryStat.text = battery != null
-                    ? VacuumSettings.FormatBattery(battery.CurrentLifeSeconds, battery.BatteryLifeSeconds)
+                    ? VacuumSettings.FormatBattery(battery.CurrentCharge, battery.Capacity)
                     : "—";
                 distance.text = Ui.FormatMetres(robot != null ? robot.DistanceTravelled : 0f);
                 surface.text = robot != null && robot.CurrentFloor != null ? robot.CurrentFloor.Label : "—";
@@ -164,8 +178,8 @@ namespace RobotVacuum.LevelEditor
             AddVacuumSetting(panel, "Turn speed", 30f, 720f,
                 vacuumSettings.turnSpeed, value => $"{value:0} °/s", value => vacuumSettings.turnSpeed = value);
             AddVacuumSetting(panel, "Battery life", 10f, 1800f,
-                vacuumSettings.batteryLifeSeconds, VacuumSettings.FormatDuration,
-                value => vacuumSettings.batteryLifeSeconds = value);
+                vacuumSettings.batteryCapacity, VacuumSettings.FormatCapacity,
+                value => vacuumSettings.batteryCapacity = value);
             Ui.Text(panel, "Changing battery life recharges the vacuum.", "le-empty-hint");
 
             return panel;
@@ -200,6 +214,7 @@ namespace RobotVacuum.LevelEditor
 
         void OnDestroy()
         {
+            isPaused = false;
             Time.timeScale = savedTimeScale;
             overlay = null;
             if (panelSettings != null) Destroy(panelSettings);

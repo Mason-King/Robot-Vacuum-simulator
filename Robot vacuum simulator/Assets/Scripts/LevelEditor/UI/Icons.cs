@@ -6,7 +6,7 @@ namespace RobotVacuum.LevelEditor
     public enum IconKind
     {
         Select, Rect, Pen, Wall, Doorway, Spawn,
-        Undo, Redo, Play, Stop, Save, Check, Plus, Minus, Fit, Grid, Magnet, Points,
+        Undo, Redo, Play, Pause, Stop, Save, Check, Plus, Minus, Fit, Grid, Magnet, Points,
         Trash, Duplicate, Back, More, Warning, Close, ChevronDown, Logo, WallsOn, WallsOff, Obstacle,
     }
 
@@ -117,6 +117,13 @@ namespace RobotVacuum.LevelEditor
                 case IconKind.Play:
                     pen.Fill(8f, 5f, 19f, 12f, 8f, 19f);
                     pen.Closed(1.6f, 8f, 5f, 19f, 12f, 8f, 19f);
+                    break;
+
+                case IconKind.Pause:
+                    pen.Fill(6f, 5f, 10f, 19f);
+                    pen.Fill(14f, 5f, 18f, 19f);
+                    pen.Closed(1.4f, 6f, 5f, 10f, 5f, 10f, 19f, 6f, 19f);
+                    pen.Closed(1.4f, 14f, 5f, 18f, 5f, 18f, 19f, 14f, 19f);
                     break;
 
                 case IconKind.Stop:

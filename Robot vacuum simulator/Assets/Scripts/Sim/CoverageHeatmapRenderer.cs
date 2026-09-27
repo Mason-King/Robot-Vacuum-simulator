@@ -203,8 +203,8 @@ namespace RobotVacuum.Sim
                 new[]
                 {
                     new GradientAlphaKey(0f, 0f),
-                    new GradientAlphaKey(0.8f, 0.06f),
-                    new GradientAlphaKey(0.85f, 1f),
+                    new GradientAlphaKey(0.45f, 0.06f),
+                    new GradientAlphaKey(0.6f, 1f),
                 });
             return gradient;
         }

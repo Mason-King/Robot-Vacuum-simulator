@@ -14,7 +14,7 @@ namespace RobotVacuum.LevelEditor
         public float driveSpeed;
         public float reverseSpeed;
         public float turnSpeed;
-        public float batteryLifeSeconds;
+        public float batteryCapacity;
         public bool useFeet;
 
         /// <summary>Reads the settings a robot currently has.</summary>
@@ -23,7 +23,7 @@ namespace RobotVacuum.LevelEditor
             driveSpeed = robot.DriveSpeedMetersPerSecond,
             reverseSpeed = robot.ReverseSpeedMetersPerSecond,
             turnSpeed = robot.TurnSpeedDegreesPerSecond,
-            batteryLifeSeconds = battery != null ? battery.BatteryLifeSeconds : 0f,
+            batteryCapacity = battery != null ? battery.Capacity : 0f,
         };
 
         /// <summary>
@@ -36,8 +36,8 @@ namespace RobotVacuum.LevelEditor
             robot.SetReverseSpeedMetersPerSecond(reverseSpeed);
             robot.SetTurnSpeedDegreesPerSecond(turnSpeed);
 
-            if (battery != null && !Mathf.Approximately(battery.BatteryLifeSeconds, batteryLifeSeconds))
-                battery.SetBatteryLifeSeconds(batteryLifeSeconds);
+            if (battery != null && !Mathf.Approximately(battery.Capacity, batteryCapacity))
+                battery.SetCapacity(batteryCapacity);
         }
 
         public string FormatSpeed(float metresPerSecond) =>
@@ -49,15 +49,17 @@ namespace RobotVacuum.LevelEditor
             return $"{(int)span.TotalMinutes:00}:{span.Seconds:00}";
         }
 
-        public static string FormatBattery(float currentSeconds, float lifeSeconds)
+        public static string FormatBattery(float currentCharge, float capacity)
         {
-            if (currentSeconds <= 0f) return "Empty";
+            if (currentCharge <= 0f) return "Empty";
 
-            float percent = lifeSeconds > 0f ? currentSeconds / lifeSeconds * 100f : 0f;
-            return $"{percent:0}% · {FormatDuration(currentSeconds)}";
+            float percent = capacity > 0f ? currentCharge / capacity * 100f : 0f;
+            return $"{percent:0}% · {currentCharge:0} units";
         }
 
-        public static bool IsBatteryLow(float currentSeconds, float lifeSeconds) =>
-            lifeSeconds > 0f && currentSeconds <= lifeSeconds * 0.2f;
+        public static bool IsBatteryLow(float currentCharge, float capacity) =>
+            capacity > 0f && currentCharge <= capacity * 0.2f;
+
+        public static string FormatCapacity(float capacity) => $"{capacity:0} units";
     }
 }

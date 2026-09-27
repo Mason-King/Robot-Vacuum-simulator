@@ -1140,6 +1140,16 @@ namespace RobotVacuum.LevelEditor
                 bool selected = i == session.SelectedObstacle;
                 bool hovered = i == hoverObstacle && !selected && drag == Drag.None;
 
+                if (obstacle.kind == ObstacleKind.Cat)
+                {
+                    Color catEdge = selected
+                        ? Accent
+                        : new Color(Mathf.Min(1f, color.r * 1.35f), Mathf.Min(1f, color.g * 1.35f), Mathf.Min(1f, color.b * 1.35f), 1f);
+                    Color fill = hovered ? Color.Lerp(color, Color.white, 0.12f) : color;
+                    PaintCatGlyph(painter, obstacle.center, obstacle.size, obstacle.rotation, fill, catEdge, selected ? 2f : 1.5f);
+                    continue;
+                }
+
                 PolygonPath(painter, corners);
                 painter.fillColor = new Color(color.r, color.g, color.b, obstacle.blocksVacuum ? 1f : 0.4f);
                 painter.Fill(FillRule.NonZero);
@@ -1172,11 +1182,55 @@ namespace RobotVacuum.LevelEditor
         {
             var color = Obstacle.ColorOf(session.ObstacleKind);
 
+            if (session.ObstacleKind == ObstacleKind.Cat)
+            {
+                Vector2 center = Vector2.zero;
+                foreach (Vector2 corner in corners) center += corner;
+                center /= corners.Count;
+                Vector2 xAxis = corners[1] - corners[0];
+                Vector2 yAxis = corners[3] - corners[0];
+                Vector2 size = new Vector2(xAxis.magnitude, yAxis.magnitude);
+                float rotation = Mathf.Atan2(xAxis.y, xAxis.x) * Mathf.Rad2Deg;
+                PaintCatGlyph(painter, center, size, rotation,
+                    new Color(color.r, color.g, color.b, alpha), Accent, 1.5f);
+                return;
+            }
+
             PolygonPath(painter, corners);
             painter.fillColor = new Color(color.r, color.g, color.b, alpha);
             painter.Fill(FillRule.NonZero);
             painter.lineWidth = 1.5f;
             painter.strokeColor = Accent;
+            painter.Stroke();
+        }
+
+        void PaintCatGlyph(Painter2D painter, Vector2 center, Vector2 size, float rotation, Color fill, Color edge, float lineWidth)
+        {
+            Vector2[] silhouette =
+            {
+                new Vector2(-0.34f, -0.42f), new Vector2(0.34f, -0.42f),
+                new Vector2(0.45f, -0.15f), new Vector2(0.34f, 0.02f),
+                new Vector2(0.31f, 0.40f), new Vector2(0.12f, 0.22f),
+                new Vector2(0f, 0.27f), new Vector2(-0.12f, 0.22f),
+                new Vector2(-0.31f, 0.40f), new Vector2(-0.34f, 0.02f),
+                new Vector2(-0.45f, -0.15f),
+            };
+
+            float radians = rotation * Mathf.Deg2Rad;
+            float sin = Mathf.Sin(radians);
+            float cos = Mathf.Cos(radians);
+            var points = new Vector2[silhouette.Length];
+            for (int i = 0; i < silhouette.Length; i++)
+            {
+                Vector2 local = Vector2.Scale(silhouette[i], size);
+                points[i] = center + new Vector2(local.x * cos - local.y * sin, local.x * sin + local.y * cos);
+            }
+
+            PolygonPath(painter, points);
+            painter.fillColor = fill;
+            painter.Fill(FillRule.NonZero);
+            painter.lineWidth = lineWidth;
+            painter.strokeColor = edge;
             painter.Stroke();
         }
 

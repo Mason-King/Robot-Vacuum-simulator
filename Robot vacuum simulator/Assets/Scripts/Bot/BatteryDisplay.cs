@@ -8,7 +8,7 @@ namespace RobotVacuum
         [SerializeField] Battery battery;
         [SerializeField] Vector2 screenPadding = new Vector2(12f, 12f);
 
-        string batteryLifeInput;
+        string capacityInput;
         GUIStyle panelStyle;
         GUIStyle titleStyle;
         GUIStyle valueStyle;
@@ -28,15 +28,15 @@ namespace RobotVacuum
                 battery = FindAnyObjectByType<Battery>();
 
             if (battery != null)
-                batteryLifeInput = battery.BatteryLifeSeconds.ToString("0.0", CultureInfo.InvariantCulture);
+                capacityInput = battery.Capacity.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
         void OnGUI()
         {
             if (battery == null) return;
 
-            float percentage = battery.BatteryLifeSeconds > 0f
-                ? battery.CurrentLifeSeconds / battery.BatteryLifeSeconds * 100f
+            float percentage = battery.Capacity > 0f
+                ? battery.CurrentCharge / battery.Capacity * 100f
                 : 0f;
             float clampedPercentage = Mathf.Clamp01(percentage / 100f);
 
@@ -50,31 +50,25 @@ namespace RobotVacuum
             GUI.Label(new Rect(left + 18f, top + 37f, 220f, 42f),
                 $"{percentage:0}%", valueStyle);
             GUI.Label(new Rect(left + 242f, top + 49f, 100f, 24f),
-                FormatDuration(battery.CurrentLifeSeconds) + " left", mutedStyle);
+                $"{battery.CurrentCharge:0} units", mutedStyle);
 
             Rect progress = new Rect(left + 18f, top + 86f, 324f, 12f);
             GUI.Box(progress, GUIContent.none, progressBackgroundStyle);
             GUI.Box(new Rect(progress.x, progress.y, progress.width * clampedPercentage, progress.height),
                 GUIContent.none, progressFillStyle);
 
-            GUI.Label(new Rect(left + 18f, top + 111f, 145f, 24f), "Battery life", fieldLabelStyle);
-            batteryLifeInput = GUI.TextField(
-                new Rect(left + 142f, top + 106f, 100f, 34f), batteryLifeInput, inputStyle);
+            GUI.Label(new Rect(left + 18f, top + 111f, 145f, 24f), "Capacity (units)", fieldLabelStyle);
+            capacityInput = GUI.TextField(
+                new Rect(left + 142f, top + 106f, 100f, 34f), capacityInput, inputStyle);
 
             if (GUI.Button(new Rect(left + 252f, top + 106f, 90f, 34f), "Apply", buttonStyle)
-                && float.TryParse(batteryLifeInput, NumberStyles.Float, CultureInfo.InvariantCulture,
-                    out float seconds)
-                && seconds >= 0f)
+                && float.TryParse(capacityInput, NumberStyles.Float, CultureInfo.InvariantCulture,
+                    out float capacity)
+                && capacity >= 0f)
             {
-                battery.SetBatteryLifeSeconds(seconds);
-                batteryLifeInput = battery.BatteryLifeSeconds.ToString("0.0", CultureInfo.InvariantCulture);
+                battery.SetCapacity(capacity);
+                capacityInput = battery.Capacity.ToString("0.0", CultureInfo.InvariantCulture);
             }
-        }
-
-        static string FormatDuration(float seconds)
-        {
-            int totalSeconds = Mathf.Max(0, Mathf.RoundToInt(seconds));
-            return $"{totalSeconds / 60:00}:{totalSeconds % 60:00}";
         }
 
         void EnsureStyles()

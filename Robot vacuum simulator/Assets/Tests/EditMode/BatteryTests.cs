@@ -1,5 +1,6 @@
 using NUnit.Framework;
 using RobotVacuum;
+using RobotVacuum.Level;
 using UnityEngine;
 
 namespace RobotVacuum.Tests
@@ -14,55 +15,79 @@ namespace RobotVacuum.Tests
         {
             vacuum = new GameObject("Battery test vacuum");
             battery = vacuum.AddComponent<Battery>();
-            battery.BatteryLifeSeconds = 10f;
-            battery.ResetBattery();
+            battery.Capacity = 10f;
+            battery.ResetCharge();
         }
 
         [TearDown]
         public void TearDown() => Object.DestroyImmediate(vacuum);
 
         [Test]
-        public void Consume_ReducesLife_AndStopsAtZero()
+        public void ConsumeWork_ChargesDistanceAndTurningWithSurfaceResistance()
         {
-            battery.Consume(3.5f);
-            Assert.AreEqual(6.5f, battery.CurrentLifeSeconds, 1e-5f);
+            battery.ConsumeWork(2f, 90f, 2f);
+
+            Assert.AreEqual(4.2f, battery.CurrentCharge, 1e-5f);
             Assert.IsTrue(battery.CanOperate);
 
-            battery.Consume(10f);
-            Assert.AreEqual(0f, battery.CurrentLifeSeconds, 1e-5f);
+            battery.ConsumeWork(10f, 0f, 1f);
+            Assert.AreEqual(0f, battery.CurrentCharge, 1e-5f);
             Assert.IsFalse(battery.CanOperate);
         }
 
         [Test]
-        public void ResetBattery_RestoresConfiguredLife()
+        public void DefaultCarpetUsesMoreChargeThanHardFloorForTheSameWork()
         {
-            battery.Consume(10f);
+            FloorPalette palette = FloorPalette.CreateDefault();
+            try
+            {
+                FloorType hardwood = palette.Get(0);
+                FloorType highCarpet = palette.Get(4);
+                battery.ConsumeWork(1f, 0f, hardwood.energyCostMultiplier);
+                float hardwoodCharge = battery.CurrentCharge;
 
-            battery.ResetBattery();
+                battery.ResetCharge();
+                battery.ConsumeWork(1f, 0f, highCarpet.energyCostMultiplier);
 
-            Assert.AreEqual(10f, battery.CurrentLifeSeconds, 1e-5f);
+                Assert.Less(battery.CurrentCharge, hardwoodCharge);
+            }
+            finally
+            {
+                foreach (FloorType floor in palette.Entries) Object.DestroyImmediate(floor);
+                Object.DestroyImmediate(palette);
+            }
+        }
+
+        [Test]
+        public void ResetCharge_RestoresConfiguredCapacity()
+        {
+            battery.ConsumeWork(10f, 0f, 1f);
+
+            battery.ResetCharge();
+
+            Assert.AreEqual(10f, battery.CurrentCharge, 1e-5f);
             Assert.IsTrue(battery.CanOperate);
         }
 
         [Test]
-        public void BatteryLifeSeconds_ClampsToNonNegative()
+        public void Capacity_ClampsToNonNegative()
         {
-            battery.BatteryLifeSeconds = -5f;
+            battery.Capacity = -5f;
 
-            Assert.AreEqual(0f, battery.BatteryLifeSeconds, 1e-5f);
-            Assert.AreEqual(0f, battery.CurrentLifeSeconds, 1e-5f);
+            Assert.AreEqual(0f, battery.Capacity, 1e-5f);
+            Assert.AreEqual(0f, battery.CurrentCharge, 1e-5f);
             Assert.IsFalse(battery.CanOperate);
         }
 
         [Test]
-        public void SetBatteryLifeSeconds_RechargesDepletedBattery()
+        public void SetCapacity_RechargesDepletedBattery()
         {
-            battery.Consume(10f);
+            battery.ConsumeWork(10f, 0f, 1f);
 
-            battery.SetBatteryLifeSeconds(25f);
+            battery.SetCapacity(25f);
 
-            Assert.AreEqual(25f, battery.BatteryLifeSeconds, 1e-5f);
-            Assert.AreEqual(25f, battery.CurrentLifeSeconds, 1e-5f);
+            Assert.AreEqual(25f, battery.Capacity, 1e-5f);
+            Assert.AreEqual(25f, battery.CurrentCharge, 1e-5f);
             Assert.IsTrue(battery.CanOperate);
         }
     }

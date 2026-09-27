@@ -174,7 +174,7 @@ namespace RobotVacuum.Level
 
             foreach (var obstacle in level.Obstacles)
             {
-                if (obstacle == null) continue;
+                if (obstacle == null || obstacle.kind == ObstacleKind.Cat) continue;
 
                 var corners = obstacle.Corners();
                 var vertices = new List<Vector3>();

@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace RobotVacuum.Level
 {
-    public enum ObstacleKind { Sofa, Bed, Table, Chair, Cabinet, Box }
+    public enum ObstacleKind { Sofa, Bed, Table, Chair, Cabinet, Box, Cat }
 
     /// <summary>
     /// A piece of furniture standing on the floor, as a rotated rectangle. Furniture that blocks the
@@ -24,7 +24,7 @@ namespace RobotVacuum.Level
         [Tooltip("Degrees counter-clockwise.")]
         public float rotation;
 
-        [Tooltip("False when the vacuum fits underneath, like a table or a raised bed.")]
+        [Tooltip("False for pass-under furniture or dynamic actors whose saved footprint must stay cleanable.")]
         public bool blocksVacuum = true;
 
         public List<Vector2> Corners() => LevelData.RectangleOutline(center, size, rotation);
@@ -91,12 +91,13 @@ namespace RobotVacuum.Level
             ObstacleKind.Table => new Vector2(1.4f, 0.8f),
             ObstacleKind.Chair => new Vector2(0.5f, 0.5f),
             ObstacleKind.Cabinet => new Vector2(1f, 0.45f),
+            ObstacleKind.Cat => new Vector2(0.42f, 0.5f),
             _ => new Vector2(0.6f, 0.6f),
         };
 
-        /// <summary>Whether the vacuum usually can't get under this kind of furniture.</summary>
+        /// <summary>Whether this kind blocks the vacuum as a static part of the floor plan.</summary>
         public static bool DefaultBlocks(ObstacleKind kind) =>
-            kind != ObstacleKind.Table && kind != ObstacleKind.Bed && kind != ObstacleKind.Chair;
+            kind != ObstacleKind.Table && kind != ObstacleKind.Bed && kind != ObstacleKind.Chair && kind != ObstacleKind.Cat;
 
         public static Color ColorOf(ObstacleKind kind) => kind switch
         {
@@ -105,6 +106,7 @@ namespace RobotVacuum.Level
             ObstacleKind.Table => new Color(0.56f, 0.40f, 0.27f),
             ObstacleKind.Chair => new Color(0.66f, 0.50f, 0.33f),
             ObstacleKind.Cabinet => new Color(0.40f, 0.33f, 0.28f),
+            ObstacleKind.Cat => new Color(0.83f, 0.48f, 0.27f),
             _ => new Color(0.58f, 0.56f, 0.52f),
         };
     }

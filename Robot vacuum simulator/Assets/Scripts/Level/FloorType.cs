@@ -37,6 +37,10 @@ namespace RobotVacuum.Level
         public float speedMultiplier = 1f;
 
         [Range(0.1f, 4f)]
+        [Tooltip("Multiplies battery work cost while the vacuum travels or turns on this covering.")]
+        public float energyCostMultiplier = 1f;
+
+        [Range(0.1f, 4f)]
         [Tooltip("Suction-seconds needed to clear one unit of dirt. Carpet is harder than hardwood.")]
         public float cleaningEffort = 1f;
 
