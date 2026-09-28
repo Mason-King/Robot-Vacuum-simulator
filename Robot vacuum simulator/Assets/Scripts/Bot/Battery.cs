@@ -24,6 +24,7 @@ namespace RobotVacuum
         }
 
         public float CurrentCharge { get; private set; }
+        public float ChargePercentage => capacity > 0f ? CurrentCharge / capacity * 100f : 0f;
         public bool CanOperate => CurrentCharge > 0f;
 
         void Awake() => ResetCharge();

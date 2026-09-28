@@ -35,9 +35,7 @@ namespace RobotVacuum
         {
             if (battery == null) return;
 
-            float percentage = battery.Capacity > 0f
-                ? battery.CurrentCharge / battery.Capacity * 100f
-                : 0f;
+            float percentage = battery.ChargePercentage;
             float clampedPercentage = Mathf.Clamp01(percentage / 100f);
 
             EnsureStyles();

@@ -70,6 +70,22 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void ChargePercentage_IsRelativeToConfiguredStartingCapacity()
+        {
+            battery.ConsumeWork(2.5f, 0f, 1f);
+
+            Assert.AreEqual(75f, battery.ChargePercentage, 1e-5f);
+        }
+
+        [Test]
+        public void ChargePercentage_IsZeroWhenCapacityIsZero()
+        {
+            battery.SetCapacity(0f);
+
+            Assert.AreEqual(0f, battery.ChargePercentage, 1e-5f);
+        }
+
+        [Test]
         public void Capacity_ClampsToNonNegative()
         {
             battery.Capacity = -5f;
