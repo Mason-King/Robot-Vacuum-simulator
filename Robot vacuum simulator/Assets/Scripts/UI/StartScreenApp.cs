@@ -32,6 +32,7 @@ namespace RobotVacuum.LevelEditor
         HeadlessSimulation run;
         LevelLibrary.Entry running;
         Texture2D resultImage;
+        bool leaving;
         int minutesIndex = 1;
 
         FloorPalette Palette => palette != null ? palette : runtimePalette;
@@ -48,6 +49,9 @@ namespace RobotVacuum.LevelEditor
 
         void OnDestroy()
         {
+            // Stopping a run reports its results, and this screen is on its way out: take the results only
+            // to tidy up the image they carry, not to build a panel nobody will see.
+            leaving = true;
             run?.Stop();
             ClearResultImage();
 
@@ -224,6 +228,8 @@ namespace RobotVacuum.LevelEditor
         {
             run = null;
             resultImage = results.coverage; // handed over with the results; destroyed with the next run
+
+            if (leaving) return; // the scene is going; OnDestroy clears the image straight after this
 
             var screen = Ui.Div(null, "le-screen le-start");
 

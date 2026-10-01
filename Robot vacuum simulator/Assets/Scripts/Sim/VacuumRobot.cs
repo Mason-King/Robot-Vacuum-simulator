@@ -466,13 +466,14 @@ namespace RobotVacuum.Sim
             Brain.Seed(seed);
             Brain.Reset(this);
 
-            if (levelRenderer == null || levelRenderer.Level == null) return;
-
-            transform.position = levelRenderer.LevelToWorld(
-                levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
-
+            // The odometer, battery and body reset whether or not there is a level to stand on; only where
+            // the robot goes depends on one.
             DistanceTravelled = 0f;
             battery.ResetBattery();
+
+            if (levelRenderer != null && levelRenderer.Level != null)
+                transform.position = levelRenderer.LevelToWorld(
+                    levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
 
             if (body != null)
             {

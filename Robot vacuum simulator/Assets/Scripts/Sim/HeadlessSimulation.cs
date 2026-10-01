@@ -160,6 +160,20 @@ namespace RobotVacuum.Sim
             if (!finished) Finish(false);
         }
 
+        /// <summary>
+        /// A scene load or leaving play mode can take this object without the run ever finishing. The time
+        /// settings are global, so they have to go back here too, or whatever comes next runs at many times
+        /// speed with no sign of why.
+        /// </summary>
+        void OnDestroy()
+        {
+            if (finished || runner == null) return; // never started, or already tidied up by Finish
+
+            Time.timeScale = savedTimeScale;
+            Time.maximumDeltaTime = savedMaxDeltaTime;
+            finished = true;
+        }
+
         void Finish(bool batteryRanOut)
         {
             finished = true;
@@ -179,6 +193,10 @@ namespace RobotVacuum.Sim
 
             if (ownsLevel) DestroyNow(level);
             level = null;
+
+            // The mask is keyed to a grid that has just gone, and holding it would keep the whole cell
+            // array alive for as long as the app runs.
+            CoverageImage.Forget();
 
             // Reported before this object goes, so a listener can read Results.
             Finished?.Invoke(Results);

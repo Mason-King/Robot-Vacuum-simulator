@@ -92,6 +92,13 @@ namespace RobotVacuum.LevelEditor
         void OnDestroy()
         {
             run?.Stop();
+
+            // The fast run puts the time scale back itself, but its heatmap is HideAndDontSave, so nothing
+            // else would ever collect it. Stopping reports results; the screen is going, so don't build one.
+            closingFastRun = true;
+            fastRun?.Stop();
+            ClearFastRunImage();
+
             CloseSession();
 
             if (runtimePalette != null)
@@ -905,6 +912,10 @@ namespace RobotVacuum.LevelEditor
         void BeginRun()
         {
             overlay.CloseMenu();
+
+            // A fast run's results may still be up: close them rather than leave two runs on one screen.
+            if (fastRun != null || fastRunImage != null) StopFastRun();
+
             run = new LevelRun(session.Level);
 
             if (vacuumSettings == null) vacuumSettings = VacuumSettings.From(run.Robot, run.Battery);
@@ -916,12 +927,9 @@ namespace RobotVacuum.LevelEditor
 
         void StopRun()
         {
-            // Escape and the Stop button reach both kinds of run; a fast run is the one showing if it is.
-            if (fastRun != null || fastRunImage != null)
-            {
-                StopFastRun();
-                return;
-            }
+            // Escape and the Stop button reach whichever run is showing — and both kinds can be live at
+            // once, since a watched run can be started from a finished fast run's results.
+            if (fastRun != null || fastRunImage != null) StopFastRun();
 
             if (run == null) return;
 
