@@ -79,6 +79,37 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Renderer_CreatesFourLegCollidersForPassUnderFurniture()
+        {
+            level.Obstacles.Add(new Obstacle
+            {
+                center = Vector2.zero, size = new Vector2(1.4f, 0.8f), rotation = 30f, blocksVacuum = false,
+            });
+            var host = new GameObject("Level");
+            try
+            {
+                var renderer = host.AddComponent<LevelRenderer>();
+                renderer.Level = level;
+
+                var colliderRoot = host.transform.Find("Generated/ObstacleColliders");
+                Assert.IsNotNull(colliderRoot);
+                var legs = colliderRoot.GetComponentsInChildren<BoxCollider2D>();
+
+                Assert.AreEqual(4, legs.Length);
+                foreach (var leg in legs)
+                {
+                    Assert.AreEqual(new Vector2(0.08f, 0.08f), leg.size);
+                    Assert.IsTrue(leg.OverlapPoint(leg.bounds.center));
+                    Assert.IsFalse(leg.OverlapPoint(Vector2.zero));
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
         public void Snapshot_RoundTripsFurniture()
         {
             level.Obstacles.Add(new Obstacle

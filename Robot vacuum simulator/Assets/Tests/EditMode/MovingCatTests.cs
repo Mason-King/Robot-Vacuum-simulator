@@ -18,7 +18,7 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void CatUsesASolidDynamicCollider()
+        public void CatUsesASolidColliderMatchingItsDetailedVisual()
         {
             var catObject = new GameObject("Cat test actor");
             try
@@ -29,7 +29,29 @@ namespace RobotVacuum.Tests
 
                 Assert.AreEqual(RigidbodyType2D.Dynamic, body.bodyType);
                 Assert.IsFalse(cat.CollisionShape.isTrigger);
-                Assert.AreEqual(0.15f, cat.CollisionShape.radius, 1e-5f);
+                Assert.AreEqual(1, cat.CollisionShape.pathCount);
+
+                Vector2[] outline = cat.CollisionShape.GetPath(0);
+                MeshFilter[] visuals = catObject.GetComponentsInChildren<MeshFilter>();
+                Assert.AreEqual(3, visuals.Length);
+
+                Mesh silhouette = null;
+                foreach (var visual in visuals)
+                    if (visual.sharedMesh.name == "Cat silhouette") silhouette = visual.sharedMesh;
+                Assert.IsNotNull(silhouette);
+                Assert.AreEqual(outline.Length, silhouette.vertexCount);
+
+                Vector3[] silhouetteVertices = silhouette.vertices;
+                for (int i = 0; i < outline.Length; i++)
+                    Assert.AreEqual(outline[i], new Vector2(silhouetteVertices[i].x, silhouetteVertices[i].y));
+
+                foreach (var visual in visuals)
+                {
+                    if (visual.sharedMesh == silhouette) continue;
+                    foreach (Vector3 vertex in visual.sharedMesh.vertices)
+                        Assert.IsTrue(Poly2D.ContainsPoint(outline, new Vector2(vertex.x, vertex.y)),
+                            $"Visual detail at {vertex} must remain inside the collider silhouette.");
+                }
             }
             finally
             {

@@ -5,22 +5,30 @@ using UnityEngine;
 namespace RobotVacuum.Sim
 {
     [RequireComponent(typeof(Rigidbody2D))]
-    [RequireComponent(typeof(CircleCollider2D))]
+    [RequireComponent(typeof(PolygonCollider2D))]
     public sealed class MovingCat : MonoBehaviour
     {
-        const float Radius = 0.15f;
         const float Speed = 0.45f;
+        static readonly Vector2[] CatSilhouette =
+        {
+            new Vector2(-0.08f, -0.17f), new Vector2(-0.11f, -0.12f), new Vector2(-0.12f, -0.02f),
+            new Vector2(-0.105f, 0.08f), new Vector2(-0.105f, 0.20f), new Vector2(-0.08f, 0.34f),
+            new Vector2(-0.015f, 0.27f), new Vector2(0f, 0.285f), new Vector2(0.015f, 0.27f),
+            new Vector2(0.08f, 0.34f), new Vector2(0.105f, 0.20f), new Vector2(0.105f, 0.08f),
+            new Vector2(0.12f, -0.02f), new Vector2(0.11f, -0.12f), new Vector2(0.08f, -0.17f),
+            new Vector2(0.04f, -0.19f), new Vector2(-0.04f, -0.19f),
+        };
         Rigidbody2D body;
         Vector2 direction;
         Rect bounds;
         float turnTimer;
         System.Random random;
-        Mesh catMesh;
-        Material catMaterial;
+        Mesh[] catMeshes;
+        Material[] catMaterials;
 
         public Vector2 Direction => direction;
         public float MoveSpeed => Speed;
-        public CircleCollider2D CollisionShape { get; private set; }
+        public PolygonCollider2D CollisionShape { get; private set; }
 
         void Awake()
         {
@@ -30,7 +38,7 @@ namespace RobotVacuum.Sim
         void Configure()
         {
             body = GetComponent<Rigidbody2D>();
-            CollisionShape = GetComponent<CircleCollider2D>();
+            CollisionShape = GetComponent<PolygonCollider2D>();
 
             body.bodyType = RigidbodyType2D.Dynamic;
             body.gravityScale = 0f;
@@ -38,9 +46,10 @@ namespace RobotVacuum.Sim
             body.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             body.interpolation = RigidbodyInterpolation2D.Interpolate;
 
-            CollisionShape.radius = Radius;
+            CollisionShape.pathCount = 1;
+            CollisionShape.SetPath(0, CatSilhouette);
             CollisionShape.isTrigger = false;
-            if (catMesh == null) BuildVisual();
+            if (catMeshes == null) BuildVisual();
         }
 
         public void Initialize(Rect movementBounds, Vector2 position, Vector2 initialDirection, int seed)
@@ -67,10 +76,11 @@ namespace RobotVacuum.Sim
             }
 
             Vector2 next = body.position + direction * Speed * dt;
-            float minX = bounds.xMin + Radius;
-            float maxX = bounds.xMax - Radius;
-            float minY = bounds.yMin + Radius;
-            float maxY = bounds.yMax - Radius;
+            Bounds silhouetteBounds = CollisionShape.bounds;
+            float minX = bounds.xMin - silhouetteBounds.min.x + body.position.x;
+            float maxX = bounds.xMax - silhouetteBounds.max.x + body.position.x;
+            float minY = bounds.yMin - silhouetteBounds.min.y + body.position.y;
+            float maxY = bounds.yMax - silhouetteBounds.max.y + body.position.y;
 
             if (next.x < minX || next.x > maxX)
             {
@@ -156,37 +166,66 @@ namespace RobotVacuum.Sim
 
         void BuildVisual()
         {
-            catMesh = new Mesh { name = "Cat silhouette" };
-            var vertices = new List<Vector3>();
-            var triangles = new List<int>();
-            AddEllipse(vertices, triangles, Vector2.zero, new Vector2(0.12f, 0.19f), 20);
-            AddEllipse(vertices, triangles, new Vector2(0f, 0.18f), new Vector2(0.105f, 0.105f), 16);
-            AddTriangle(vertices, triangles, new Vector2(-0.09f, 0.22f), new Vector2(-0.08f, 0.34f), new Vector2(-0.015f, 0.27f));
-            AddTriangle(vertices, triangles, new Vector2(0.015f, 0.27f), new Vector2(0.08f, 0.34f), new Vector2(0.09f, 0.22f));
-            AddTriangle(vertices, triangles, new Vector2(-0.035f, 0.17f), new Vector2(0.035f, 0.17f), new Vector2(0f, 0.13f));
-            catMesh.SetVertices(vertices);
-            catMesh.SetTriangles(triangles, 0);
-            catMesh.RecalculateBounds();
+            var silhouetteVertices = new List<Vector3>(CatSilhouette.Length);
+            foreach (Vector2 point in CatSilhouette)
+                silhouetteVertices.Add(point);
+            CreateVisualLayer(0, "Cat silhouette", silhouetteVertices, new List<int>(Poly2D.Triangulate(CatSilhouette)), new Color(0.83f, 0.48f, 0.27f));
 
-            var visual = new GameObject("Cat visual");
+            var markingVertices = new List<Vector3>();
+            var markingTriangles = new List<int>();
+            AddEllipse(markingVertices, markingTriangles, new Vector2(0f, -0.075f), new Vector2(0.042f, 0.075f), 16);
+            AddTriangle(markingVertices, markingTriangles, new Vector2(-0.078f, 0.30f), new Vector2(-0.052f, 0.30f), new Vector2(-0.075f, 0.245f));
+            AddTriangle(markingVertices, markingTriangles, new Vector2(0.052f, 0.30f), new Vector2(0.078f, 0.30f), new Vector2(0.075f, 0.245f));
+            AddEllipse(markingVertices, markingTriangles, new Vector2(-0.027f, 0.09f), new Vector2(0.025f, 0.018f), 12);
+            AddEllipse(markingVertices, markingTriangles, new Vector2(0.027f, 0.09f), new Vector2(0.025f, 0.018f), 12);
+            CreateVisualLayer(1, "Cat markings", markingVertices, markingTriangles, new Color(0.98f, 0.72f, 0.55f));
+
+            var featureVertices = new List<Vector3>();
+            var featureTriangles = new List<int>();
+            AddEllipse(featureVertices, featureTriangles, new Vector2(-0.034f, 0.145f), new Vector2(0.008f, 0.013f), 10);
+            AddEllipse(featureVertices, featureTriangles, new Vector2(0.034f, 0.145f), new Vector2(0.008f, 0.013f), 10);
+            AddTriangle(featureVertices, featureTriangles, new Vector2(-0.012f, 0.112f), new Vector2(0.012f, 0.112f), new Vector2(0f, 0.098f));
+            AddRibbon(featureVertices, featureTriangles, new Vector2(0f, 0.098f), new Vector2(0f, 0.082f), 0.003f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(0f, 0.082f), new Vector2(-0.012f, 0.075f), 0.003f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(0f, 0.082f), new Vector2(0.012f, 0.075f), 0.003f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(-0.048f, 0.09f), new Vector2(-0.09f, 0.105f), 0.0025f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(-0.048f, 0.084f), new Vector2(-0.095f, 0.084f), 0.0025f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(-0.048f, 0.078f), new Vector2(-0.09f, 0.063f), 0.0025f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(0.048f, 0.09f), new Vector2(0.09f, 0.105f), 0.0025f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(0.048f, 0.084f), new Vector2(0.095f, 0.084f), 0.0025f);
+            AddRibbon(featureVertices, featureTriangles, new Vector2(0.048f, 0.078f), new Vector2(0.09f, 0.063f), 0.0025f);
+            CreateVisualLayer(2, "Cat face", featureVertices, featureTriangles, new Color(0.20f, 0.12f, 0.10f));
+        }
+
+        void CreateVisualLayer(int index, string layerName, List<Vector3> vertices, List<int> triangles, Color color)
+        {
+            var mesh = new Mesh { name = layerName };
+            mesh.SetVertices(vertices);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateBounds();
+            catMeshes ??= new Mesh[3];
+            catMaterials ??= new Material[3];
+            catMeshes[index] = mesh;
+
+            var visual = new GameObject(layerName);
             visual.transform.SetParent(transform, false);
-            visual.transform.localPosition = new Vector3(0f, 0f, -0.04f);
-            visual.AddComponent<MeshFilter>().sharedMesh = catMesh;
+            visual.transform.localPosition = new Vector3(0f, 0f, -0.04f + index * 0.0001f);
+            visual.AddComponent<MeshFilter>().sharedMesh = mesh;
             var renderer = visual.AddComponent<MeshRenderer>();
             var shader = Shader.Find("Universal Render Pipeline/Unlit")
                          ?? Shader.Find("Unlit/Color")
                          ?? Shader.Find("Sprites/Default");
             if (shader != null)
             {
-                catMaterial = new Material(shader)
+                catMaterials[index] = new Material(shader)
                 {
-                    name = "MovingCat (generated)",
+                    name = $"MovingCat {layerName} (generated)",
                     hideFlags = HideFlags.HideAndDontSave,
-                    color = new Color(0.83f, 0.48f, 0.27f),
+                    color = color,
                 };
-                if (catMaterial.HasProperty("_Cull"))
-                    catMaterial.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
-                renderer.sharedMaterial = catMaterial;
+                if (catMaterials[index].HasProperty("_Cull"))
+                    catMaterials[index].SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+                renderer.sharedMaterial = catMaterials[index];
             }
         }
 
@@ -194,13 +233,21 @@ namespace RobotVacuum.Sim
         {
             if (Application.isPlaying)
             {
-                if (catMesh != null) Destroy(catMesh);
-                if (catMaterial != null) Destroy(catMaterial);
+                if (catMeshes != null)
+                    foreach (Mesh mesh in catMeshes)
+                        if (mesh != null) Destroy(mesh);
+                if (catMaterials != null)
+                    foreach (Material material in catMaterials)
+                        if (material != null) Destroy(material);
             }
             else
             {
-                if (catMesh != null) DestroyImmediate(catMesh);
-                if (catMaterial != null) DestroyImmediate(catMaterial);
+                if (catMeshes != null)
+                    foreach (Mesh mesh in catMeshes)
+                        if (mesh != null) DestroyImmediate(mesh);
+                if (catMaterials != null)
+                    foreach (Material material in catMaterials)
+                        if (material != null) DestroyImmediate(material);
             }
         }
 
@@ -231,6 +278,22 @@ namespace RobotVacuum.Sim
             triangles.Add(first);
             triangles.Add(first + 1);
             triangles.Add(first + 2);
+        }
+
+        static void AddRibbon(List<Vector3> vertices, List<int> triangles, Vector2 start, Vector2 end, float width)
+        {
+            Vector2 normal = (end - start).normalized * (width * 0.5f);
+            int first = vertices.Count;
+            vertices.Add(start + normal);
+            vertices.Add(start - normal);
+            vertices.Add(end - normal);
+            vertices.Add(end + normal);
+            triangles.Add(first);
+            triangles.Add(first + 1);
+            triangles.Add(first + 2);
+            triangles.Add(first);
+            triangles.Add(first + 2);
+            triangles.Add(first + 3);
         }
 
         float NextTurnInterval() => NextRange(1.8f, 4.5f);
