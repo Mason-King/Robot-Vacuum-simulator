@@ -111,6 +111,70 @@ namespace RobotVacuum.Sim
             (Mathf.PerlinNoise(Time.time * 0.35f, 0f) - 0.5f) * 2f * robot.WanderDegreesPerSecond;
     }
 
+    public static class MovementBrainExecution
+    {
+        const float MaxSteeringDegreesPerSecond = 360f;
+        const float MaxTurnDegrees = 360f;
+        const float MaxDriveDistance = 100f;
+
+        public static bool TryReset(MovementBrain brain, VacuumRobot robot, out string failure)
+        {
+            failure = null;
+            try
+            {
+                brain.Reset(robot);
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                failure = $"{exception.GetType().Name}: {exception.Message}";
+                return false;
+            }
+        }
+
+        public static bool TrySteer(MovementBrain brain, VacuumRobot robot, float dt, out float steering, out string failure)
+        {
+            steering = 0f;
+            failure = null;
+
+            try
+            {
+                steering = brain.Steer(robot, dt);
+                if (IsFinite(steering) && Mathf.Abs(steering) <= MaxSteeringDegreesPerSecond) return true;
+                failure = $"Invalid steering output: {steering}.";
+            }
+            catch (System.Exception exception)
+            {
+                failure = $"{exception.GetType().Name}: {exception.Message}";
+            }
+
+            return false;
+        }
+
+        public static bool TryAfterBump(MovementBrain brain, VacuumRobot robot, out Manoeuvre manoeuvre, out string failure)
+        {
+            manoeuvre = default;
+            failure = null;
+
+            try
+            {
+                manoeuvre = brain.AfterBump(robot);
+                if (IsFinite(manoeuvre.turn) && Mathf.Abs(manoeuvre.turn) <= MaxTurnDegrees &&
+                    IsFinite(manoeuvre.driveAfter) && manoeuvre.driveAfter >= 0f && manoeuvre.driveAfter <= MaxDriveDistance &&
+                    IsFinite(manoeuvre.turnAfter) && Mathf.Abs(manoeuvre.turnAfter) <= MaxTurnDegrees) return true;
+                failure = "Invalid manoeuvre output.";
+            }
+            catch (System.Exception exception)
+            {
+                failure = $"{exception.GetType().Name}: {exception.Message}";
+            }
+
+            return false;
+        }
+
+        static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
     /// <summary>Straight runs with a slight drift and a random turn at every bump. Simple, thorough eventually, wasteful.</summary>
     public sealed class RandomBounceBrain : MovementBrain
     {

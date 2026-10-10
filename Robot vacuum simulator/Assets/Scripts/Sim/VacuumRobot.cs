@@ -19,6 +19,9 @@ namespace RobotVacuum.Sim
     [RequireComponent(typeof(Battery))]
     public class VacuumRobot : MonoBehaviour
     {
+        const float StalledMovementThreshold = 0.0005f;
+        const float StalledTurnThreshold = 0.05f;
+
         enum State { Driving, Backing, Turning, Shifting }
 
         struct Step
@@ -65,6 +68,7 @@ namespace RobotVacuum.Sim
         MovementBrain brain;
         MovementPattern brainPattern;
         PictureKind brainPicture;
+        bool algorithmFailed;
         float speedScale = 1f;
         float cleaningLimit = 1f;
         Vector2 batterySamplePosition;
@@ -76,6 +80,8 @@ namespace RobotVacuum.Sim
 
         /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
+
+        public bool AlgorithmFailed => algorithmFailed;
 
         public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
 
@@ -114,6 +120,7 @@ namespace RobotVacuum.Sim
                 speedScale = 1f;
                 cleaningLimit = 1f;
                 Print = null;
+                algorithmFailed = false;
             }
         }
 
@@ -164,10 +171,16 @@ namespace RobotVacuum.Sim
                 bool pictureChanged = movementPattern == MovementPattern.Picture && brainPicture != picture;
                 if (brain == null || brainPattern != movementPattern || pictureChanged)
                 {
-                    brain = MovementBrain.Create(movementPattern, picture);
+                    var replacement = MovementBrain.Create(movementPattern, picture);
+                    if (!MovementBrainExecution.TryReset(replacement, this, out string failure))
+                    {
+                        FailAlgorithm($"Reset failed: {failure}");
+                        return null;
+                    }
+
+                    brain = replacement;
                     brainPattern = movementPattern;
                     brainPicture = picture;
-                    brain.Reset(this);
                 }
                 return brain;
             }
@@ -272,6 +285,12 @@ namespace RobotVacuum.Sim
 
             ConsumeCompletedWork();
 
+            if (algorithmFailed)
+            {
+                body.linearVelocity = Vector2.zero;
+                return;
+            }
+
             if (!battery.CanOperate)
             {
                 body.linearVelocity = Vector2.zero;
@@ -316,11 +335,30 @@ namespace RobotVacuum.Sim
                 FloorType floor = levelRenderer != null ? levelRenderer.FloorTypeAtWorld(midpoint) : null;
                 float surfaceMultiplier = floor != null ? floor.energyCostMultiplier : 1f;
                 battery.ConsumeWork(distance, turn, surfaceMultiplier);
+
+                if (IsMotionStalled(distance, turn)) battery.ConsumeStalledTime(Time.fixedDeltaTime);
             }
 
             batterySamplePosition = position;
             batterySampleHeading = heading;
             hasBatterySample = true;
+        }
+
+        bool IsMotionStalled(float distance, float turn)
+        {
+            if (state == State.Turning)
+                return turnSpeed > 0f && Mathf.Abs(Mathf.DeltaAngle(body.rotation, targetHeading)) > 1f &&
+                       turn < StalledTurnThreshold;
+
+            float expectedSpeed = state switch
+            {
+                State.Driving => DriveSpeedNow,
+                State.Backing => reverseSpeed,
+                State.Shifting => DriveSpeedNow,
+                _ => 0f,
+            };
+
+            return expectedSpeed > 0f && distance < StalledMovementThreshold;
         }
 
         void ResetBatteryMotionSample()
@@ -338,7 +376,12 @@ namespace RobotVacuum.Sim
             body.linearVelocity = Forward * speed;
             DistanceTravelled += speed * dt;
 
-            float steer = Brain.Steer(this, dt);
+            if (!MovementBrainExecution.TrySteer(Brain, this, dt, out float steer, out string failure))
+            {
+                FailAlgorithm($"Steering failed: {failure}");
+                return;
+            }
+
             if (steer != 0f) body.MoveRotation(body.rotation + steer * dt);
 
             if (WhiskerBlocked()) BeginBackup();
@@ -414,7 +457,12 @@ namespace RobotVacuum.Sim
             state = State.Backing;
             stateTimer = backupDuration;
 
-            var manoeuvre = Brain.AfterBump(this);
+            if (!MovementBrainExecution.TryAfterBump(Brain, this, out var manoeuvre, out string failure))
+            {
+                FailAlgorithm($"Bump handling failed: {failure}");
+                return;
+            }
+
             steps.Clear();
             steps.Enqueue(new Step { turn = true, amount = manoeuvre.turn });
 
@@ -446,6 +494,20 @@ namespace RobotVacuum.Sim
             }
         }
 
+        void FailAlgorithm(string failure)
+        {
+            if (algorithmFailed) return;
+
+            algorithmFailed = true;
+            state = State.Driving;
+            steps.Clear();
+            speedScale = 0f;
+            cleaningLimit = 0f;
+            Print = null;
+            if (body != null) body.linearVelocity = Vector2.zero;
+            Debug.LogError($"Movement algorithm '{movementPattern}' stopped: {failure}", this);
+        }
+
         void TurnTowardsTarget(float dt)
         {
             float next = Mathf.MoveTowardsAngle(body.rotation, targetHeading, turnSpeed * dt);
@@ -459,10 +521,15 @@ namespace RobotVacuum.Sim
         {
             steps.Clear();
             state = State.Driving;
+            algorithmFailed = false;
             speedScale = 1f;
             cleaningLimit = 1f;
             Print = null;
-            Brain.Reset(this);
+            if (!MovementBrainExecution.TryReset(Brain, this, out string failure))
+            {
+                FailAlgorithm($"Reset failed: {failure}");
+                return;
+            }
 
             if (levelRenderer == null || levelRenderer.Level == null) return;
 

@@ -9,6 +9,12 @@ namespace RobotVacuum.Sim
     public sealed class MovingCat : MonoBehaviour
     {
         const float Speed = 0.45f;
+        const float InterestDistance = 1.7f;
+        const float StartleDistance = 0.42f;
+        const float TurnSpeed = 150f;
+
+        public enum Behavior { Roaming, Investigating, Startled, Resting }
+
         static readonly Vector2[] CatSilhouette =
         {
             new Vector2(-0.08f, -0.17f), new Vector2(-0.11f, -0.12f), new Vector2(-0.12f, -0.02f),
@@ -20,14 +26,23 @@ namespace RobotVacuum.Sim
         };
         Rigidbody2D body;
         Vector2 direction;
+        Vector2 target;
         Rect bounds;
-        float turnTimer;
+        float behaviorTimer;
+        float startleTimer;
         System.Random random;
+        VacuumRobot vacuum;
         Mesh[] catMeshes;
         Material[] catMaterials;
 
         public Vector2 Direction => direction;
-        public float MoveSpeed => Speed;
+        public float MoveSpeed => CurrentBehavior switch
+        {
+            Behavior.Startled => Speed * 1.7f,
+            Behavior.Investigating => Speed * 0.7f,
+            _ => Speed * 0.8f,
+        };
+        public Behavior CurrentBehavior { get; private set; }
         public PolygonCollider2D CollisionShape { get; private set; }
 
         void Awake()
@@ -60,7 +75,10 @@ namespace RobotVacuum.Sim
             transform.position = position;
             direction = initialDirection.sqrMagnitude > 0f ? initialDirection.normalized : Vector2.right;
             random = new System.Random(seed);
-            turnTimer = NextTurnInterval();
+            CurrentBehavior = Behavior.Roaming;
+            behaviorTimer = NextRange(3f, 6f);
+            target = position + direction * NextRange(0.6f, 1.2f);
+            vacuum = FindAnyObjectByType<VacuumRobot>();
         }
 
         void FixedUpdate()
@@ -68,14 +86,60 @@ namespace RobotVacuum.Sim
             if (!Application.isPlaying || random == null) return;
 
             float dt = Time.fixedDeltaTime;
-            turnTimer -= dt;
-            if (turnTimer <= 0f)
+            if (vacuum == null) vacuum = FindAnyObjectByType<VacuumRobot>();
+
+            Vector2 position = body.position;
+            float vacuumDistance = vacuum != null
+                ? Vector2.Distance(position, (Vector2)vacuum.transform.position)
+                : float.PositiveInfinity;
+            float vacuumSpeed = vacuum != null ? vacuum.SpeedMetersPerSecond : 0f;
+            Behavior reaction = ChooseBehavior(vacuumDistance, vacuumSpeed);
+
+            if (reaction == Behavior.Startled)
             {
-                direction = Rotate(direction, NextRange(-55f, 55f));
-                turnTimer = NextTurnInterval();
+                CurrentBehavior = Behavior.Startled;
+                startleTimer = NextRange(1.1f, 1.8f);
+                Vector2 away = position - (Vector2)vacuum.transform.position;
+                if (away.sqrMagnitude <= Mathf.Epsilon) away = -direction;
+                target = position + away.normalized * NextRange(1.2f, 1.8f);
+            }
+            else if (CurrentBehavior == Behavior.Startled && (startleTimer -= dt) <= 0f)
+                BeginRoaming(position);
+
+            if (CurrentBehavior != Behavior.Startled)
+            {
+                if (reaction == Behavior.Investigating)
+                {
+                    CurrentBehavior = Behavior.Investigating;
+                    target = vacuum.transform.position;
+                }
+                else if (CurrentBehavior == Behavior.Investigating)
+                    BeginRoaming(position);
+
+                if (CurrentBehavior == Behavior.Roaming)
+                {
+                    behaviorTimer -= dt;
+                    if ((target - position).sqrMagnitude < 0.12f * 0.12f || behaviorTimer <= 0f)
+                        BeginResting();
+                }
+                else if (CurrentBehavior == Behavior.Resting && (behaviorTimer -= dt) <= 0f)
+                    BeginRoaming(position);
             }
 
-            Vector2 next = body.position + direction * Speed * dt;
+            if (CurrentBehavior == Behavior.Resting)
+            {
+                body.linearVelocity = Vector2.zero;
+                return;
+            }
+
+            Vector2 toTarget = target - position;
+            if (toTarget.sqrMagnitude > Mathf.Epsilon)
+            {
+                float turn = Mathf.Clamp(Vector2.SignedAngle(direction, toTarget), -TurnSpeed * dt, TurnSpeed * dt);
+                direction = Rotate(direction, turn);
+            }
+
+            Vector2 next = position + direction * MoveSpeed * dt;
             Bounds silhouetteBounds = CollisionShape.bounds;
             float minX = bounds.xMin - silhouetteBounds.min.x + body.position.x;
             float maxX = bounds.xMax - silhouetteBounds.max.x + body.position.x;
@@ -93,7 +157,7 @@ namespace RobotVacuum.Sim
                 next.y = Mathf.Clamp(next.y, minY, maxY);
             }
 
-            body.linearVelocity = direction * Speed;
+            body.linearVelocity = direction * MoveSpeed;
         }
 
         void OnCollisionEnter2D(Collision2D collision)
@@ -103,6 +167,40 @@ namespace RobotVacuum.Sim
             Vector2 normal = collision.GetContact(0).normal;
             direction = ReflectDirection(direction, normal);
             direction = Rotate(direction, NextRange(-20f, 20f));
+            if (CurrentBehavior != Behavior.Startled)
+            {
+                if (CurrentBehavior == Behavior.Investigating) CurrentBehavior = Behavior.Roaming;
+                target = body.position + direction * NextRange(0.6f, 1.2f);
+                behaviorTimer = NextRange(2f, 4f);
+            }
+        }
+
+        public static Behavior ChooseBehavior(float vacuumDistance, float vacuumSpeed)
+        {
+            if (vacuumDistance <= StartleDistance) return Behavior.Startled;
+            if (vacuumDistance <= InterestDistance && vacuumSpeed > 0.08f) return Behavior.Investigating;
+            return Behavior.Roaming;
+        }
+
+        void BeginRoaming(Vector2 position)
+        {
+            CurrentBehavior = Behavior.Roaming;
+            behaviorTimer = NextRange(3f, 6f);
+            float minX = bounds.xMin + 0.18f;
+            float maxX = bounds.xMax - 0.18f;
+            float minY = bounds.yMin + 0.18f;
+            float maxY = bounds.yMax - 0.18f;
+            target = new Vector2(
+                NextRange(Mathf.Min(minX, maxX), Mathf.Max(minX, maxX)),
+                NextRange(Mathf.Min(minY, maxY), Mathf.Max(minY, maxY)));
+            if ((target - position).sqrMagnitude < 0.12f * 0.12f)
+                target = position + RandomDirection(random) * 0.5f;
+        }
+
+        void BeginResting()
+        {
+            CurrentBehavior = Behavior.Resting;
+            behaviorTimer = NextRange(0.8f, 2.2f);
         }
 
         public static Vector2 ReflectDirection(Vector2 incoming, Vector2 contactNormal)
@@ -296,7 +394,6 @@ namespace RobotVacuum.Sim
             triangles.Add(first + 3);
         }
 
-        float NextTurnInterval() => NextRange(1.8f, 4.5f);
         float NextRange(float min, float max) => NextRange(random, min, max);
 
         static float NextRange(System.Random random, float min, float max) =>

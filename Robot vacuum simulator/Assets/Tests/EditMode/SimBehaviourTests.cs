@@ -10,6 +10,18 @@ namespace RobotVacuum.Tests
 {
     public class MovementBrainTests
     {
+        sealed class ThrowingBrain : MovementBrain
+        {
+            public override float Steer(VacuumRobot robot, float dt) => throw new InvalidOperationException("brain failed");
+            public override Manoeuvre AfterBump(VacuumRobot robot) => throw new InvalidOperationException("brain failed");
+        }
+
+        sealed class InvalidBrain : MovementBrain
+        {
+            public override float Steer(VacuumRobot robot, float dt) => float.NaN;
+            public override Manoeuvre AfterBump(VacuumRobot robot) => new Manoeuvre(0f, -1f);
+        }
+
         GameObject host;
         VacuumRobot robot;
 
@@ -44,6 +56,28 @@ namespace RobotVacuum.Tests
             robot.Pattern = MovementPattern.Lawnmower;
 
             Assert.AreEqual(MovementPattern.Lawnmower, robot.Pattern);
+        }
+
+        [Test]
+        public void ExecutionBoundary_ContainsThrownBrainFailures()
+        {
+            var brain = new ThrowingBrain();
+
+            Assert.IsFalse(MovementBrainExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
+            Assert.That(steeringFailure, Does.Contain("brain failed"));
+            Assert.IsFalse(MovementBrainExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
+            Assert.That(bumpFailure, Does.Contain("brain failed"));
+        }
+
+        [Test]
+        public void ExecutionBoundary_RejectsInvalidMovementOutputs()
+        {
+            var brain = new InvalidBrain();
+
+            Assert.IsFalse(MovementBrainExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
+            Assert.That(steeringFailure, Does.Contain("Invalid steering"));
+            Assert.IsFalse(MovementBrainExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
+            Assert.That(bumpFailure, Does.Contain("Invalid manoeuvre"));
         }
 
         [Test]

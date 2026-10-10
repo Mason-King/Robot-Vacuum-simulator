@@ -9,6 +9,15 @@ namespace RobotVacuum.Tests
     public class MovingCatTests
     {
         [Test]
+        public void CatInvestigatesMovingVacuumAndStartlesWhenItGetsClose()
+        {
+            Assert.AreEqual(MovingCat.Behavior.Startled, MovingCat.ChooseBehavior(0.3f, 0.5f));
+            Assert.AreEqual(MovingCat.Behavior.Investigating, MovingCat.ChooseBehavior(1.2f, 0.5f));
+            Assert.AreEqual(MovingCat.Behavior.Roaming, MovingCat.ChooseBehavior(1.2f, 0f));
+            Assert.AreEqual(MovingCat.Behavior.Roaming, MovingCat.ChooseBehavior(2f, 0.5f));
+        }
+
+        [Test]
         public void ReflectDirectionTurnsAwayFromContactSurface()
         {
             Vector2 reflected = MovingCat.ReflectDirection(Vector2.right, Vector2.left);

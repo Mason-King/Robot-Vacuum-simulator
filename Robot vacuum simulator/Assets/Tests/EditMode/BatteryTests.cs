@@ -36,6 +36,18 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void ConsumeStalledTime_DrainsSlowlyInProportionToElapsedTime()
+        {
+            battery.ConsumeStalledTime(10f);
+
+            Assert.AreEqual(9.7f, battery.CurrentCharge, 1e-5f);
+
+            battery.ConsumeStalledTime(1000f);
+            Assert.AreEqual(0f, battery.CurrentCharge, 1e-5f);
+            Assert.IsFalse(battery.CanOperate);
+        }
+
+        [Test]
         public void DefaultCarpetUsesMoreChargeThanHardFloorForTheSameWork()
         {
             FloorPalette palette = FloorPalette.CreateDefault();

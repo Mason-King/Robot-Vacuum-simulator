@@ -17,6 +17,10 @@ namespace RobotVacuum
         [Min(0f)]
         [SerializeField] float turnEnergyPerDegree = 0.01f;
 
+        [Tooltip("Battery work units used per second when the vacuum is trying to move but is stuck.")]
+        [Min(0f)]
+        [SerializeField] float stalledEnergyPerSecond = 0.03f;
+
         public float Capacity
         {
             get => capacity;
@@ -35,6 +39,12 @@ namespace RobotVacuum
             float turnCost = Mathf.Abs(turnDegrees) * turnEnergyPerDegree;
             float surfaceCost = Mathf.Max(0f, surfaceMultiplier);
             CurrentCharge = Mathf.Max(0f, CurrentCharge - (distanceCost + turnCost) * surfaceCost);
+        }
+
+        public void ConsumeStalledTime(float seconds)
+        {
+            float timeCost = Mathf.Max(0f, seconds) * stalledEnergyPerSecond;
+            CurrentCharge = Mathf.Max(0f, CurrentCharge - timeCost);
         }
 
         public void SetCapacity(float workUnits)
