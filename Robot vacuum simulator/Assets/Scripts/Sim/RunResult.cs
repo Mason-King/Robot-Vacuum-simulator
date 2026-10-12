@@ -4,10 +4,11 @@ using UnityEngine;
 
 namespace RobotVacuum.Sim
 {
-    // The file that crosses the process boundary going OUT. Numeric results only --
-    // the coverage heatmap is a separate sibling .png (see heatmapImagePath), since
-    // CoverageImage.Create needs a live ExternalModelGrid object, which only exists
-    // inside the Secondary Boot process while it's still running.
+    // The file that crosses the process boundary going OUT. Numbers and the paths
+    // of the other files the run saved next to it (the External Model state and
+    // the three heatmap PNGs -- see RunArtifacts). The images are drawn inside the
+    // Secondary Boot process, but the saved model is plain data, so anything can
+    // redraw them later from external_model.json.
     [Serializable]
     public class RunResult
     {
@@ -17,16 +18,27 @@ namespace RobotVacuum.Sim
         public string levelName;
         public int seed;
         public MovementPattern pattern;
-        public PictureKind picture;
 
+        // Graded average against the target (see ExternalModelData.CoveragePercent).
         public float coveragePercent;
+
+        // Share of cleanable cells that reached the target.
+        public float fullyCleanedPercent;
+
+        // target_max_clean this run was measured against.
+        public float targetMaxClean;
         public float blockedAreaSquareMeters;
         public float simulatedSeconds;
         public float realSeconds;
 
-        // Null/empty when this run had no heatmap to produce (e.g. it failed
-        // before completing), or the coverage image genuinely wasn't built.
+        // Null/empty when a file wasn't produced (e.g. the run failed before
+        // completing). heatmapImagePath is the older single-image field and
+        // points at the Floor Cleanliness PNG.
         public string heatmapImagePath;
+        public string externalModelPath;
+        public string cleanlinessImagePath;
+        public string coverageImagePath;
+        public string overCoverageImagePath;
 
         public static RunResult Failure(string message) =>
             new RunResult { succeeded = false, errorMessage = message };

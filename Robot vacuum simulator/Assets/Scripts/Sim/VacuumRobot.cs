@@ -53,9 +53,6 @@ namespace RobotVacuum.Sim
         [Header("Movement")]
         [SerializeField] MovementPattern movementPattern = MovementPattern.RandomBounce;
 
-        [Tooltip("What the Picture movement pattern draws into the coverage heatmap.")]
-        [SerializeField] PictureKind picture = PictureKind.Heart;
-
         [Tooltip("Seeds every random choice the vacuum makes. The same seed drives the same route each run.")]
         [SerializeField] int seed;
 
@@ -67,10 +64,8 @@ namespace RobotVacuum.Sim
         float targetHeading;
         MovementBrain brain;
         MovementPattern brainPattern;
-        PictureKind brainPicture;
         int brainSeed;
         float speedScale = 1f;
-        float cleaningLimit = 1f;
         readonly Queue<Step> steps = new Queue<Step>();
         readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
@@ -119,22 +114,6 @@ namespace RobotVacuum.Sim
                 steps.Clear();
                 state = State.Driving;
                 speedScale = 1f;
-                cleaningLimit = 1f;
-                Print = null;
-            }
-        }
-
-        /// <summary>What the Picture pattern draws. Changing it starts the drawing again.</summary>
-        public PictureKind Picture
-        {
-            get => picture;
-            set
-            {
-                if (picture == value) return;
-                picture = value;
-                Print = null;
-                steps.Clear();
-                state = State.Driving;
             }
         }
 
@@ -173,19 +152,6 @@ namespace RobotVacuum.Sim
             set => speedScale = Mathf.Clamp01(value);
         }
 
-        /// <summary>
-        /// The cleanest the vacuum may leave the floor under it: 0 is suction off, 1 (the default) no limit.
-        /// The cleaning controller respects it; the Picture pattern shades with it.
-        /// </summary>
-        public float CleaningLimit
-        {
-            get => cleaningLimit;
-            set => cleaningLimit = Mathf.Clamp01(value);
-        }
-
-        /// <summary>A patch of a picture to print straight into the coverage grid, or null. Set by the printing patterns.</summary>
-        public PrintPatch? Print { get; set; }
-
         public LevelData Level => levelRenderer != null ? levelRenderer.Level : null;
 
         /// <summary>
@@ -203,17 +169,15 @@ namespace RobotVacuum.Sim
         {
             get
             {
-                bool pictureChanged = movementPattern == MovementPattern.Picture && brainPicture != picture;
-                if (brain == null || brainPattern != movementPattern || pictureChanged || brainSeed != seed)
+                if (brain == null || brainPattern != movementPattern || brainSeed != seed)
                 {
                     // ??= assigns only if RandomSource is still null -- if SimulationRunner already
                     // injected one, this does nothing; if nobody did (standalone testing), it builds one
                     // from the local seed so the robot still works on its own.
                     RandomSource ??= new RandomProvider((uint)seed);
 
-                    brain = MovementBrain.Create(movementPattern, RandomSource, picture);
+                    brain = MovementBrain.Create(movementPattern, RandomSource);
                     brainPattern = movementPattern;
-                    brainPicture = picture;
                     brainSeed = seed;
                     brain.Reset(this);
                 }
@@ -476,9 +440,7 @@ namespace RobotVacuum.Sim
             steps.Clear();
             state = State.Driving;
             speedScale = 1f;
-            cleaningLimit = 1f;
             SimTime = 0f;
-            Print = null;
 
             // Back to the same random sequence, so a repeat of a run matches it step for step. A fresh
             // RandomProvider from the same seed reproduces the same per-subsystem streams from the top --

@@ -18,7 +18,6 @@ namespace RobotVacuum.Sim
             public bool visuals;
 
             public MovementPattern pattern;
-            public PictureKind picture;
 
             /// <summary>
             /// Seeds every random choice the vacuum makes. The same level, pattern and seed give the same
@@ -26,22 +25,32 @@ namespace RobotVacuum.Sim
             /// </summary>
             public int seed;
 
-            public static Options Visible(MovementPattern pattern = MovementPattern.RandomBounce,
-                PictureKind picture = PictureKind.Heart, int seed = 0) =>
-                new Options { visuals = true, pattern = pattern, picture = picture, seed = seed };
+            /// <summary>
+            /// target_max_clean for this run: the cleanliness each cell is aiming for. Zero or less means
+            /// "use <see cref="HeatmapDefaults.TargetMaxClean"/>".
+            /// </summary>
+            public float targetMaxClean;
+
+            /// <summary>Which view the on-screen heatmap starts in. Can be changed during the run.</summary>
+            public HeatmapMode heatmapMode;
+
+            public static Options Visible(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
+                float targetMaxClean = 0f, HeatmapMode heatmapMode = HeatmapMode.FloorCleanliness) =>
+                new Options { visuals = true, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean, heatmapMode = heatmapMode };
 
             /// <summary>Colliders and coverage only: no meshes, no heatmap.</summary>
-            public static Options Headless(MovementPattern pattern = MovementPattern.RandomBounce,
-                PictureKind picture = PictureKind.Heart, int seed = 0) =>
-                new Options { visuals = false, pattern = pattern, picture = picture, seed = seed };
+            public static Options Headless(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
+                float targetMaxClean = 0f) =>
+                new Options { visuals = false, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean };
         }
 
-        SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning, int seed)
+        SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning, CoverageHeatmapRenderer heatmap, int seed)
         {
             Root = root;
             Level = level;
             Robot = robot;
             Cleaning = cleaning;
+            Heatmap = heatmap;
             Seed = seed;
             Battery = robot != null ? robot.GetComponent<Battery>() : null;
         }
@@ -51,6 +60,9 @@ namespace RobotVacuum.Sim
         public VacuumRobot Robot { get; }
         public VacuumCleaningController Cleaning { get; }
         public Battery Battery { get; }
+
+        /// <summary>The on-screen heatmap, or null for a headless run. Set its Mode to switch views mid-run.</summary>
+        public CoverageHeatmapRenderer Heatmap { get; }
 
         /// <summary>The seed this run was built with.</summary>
         public int Seed { get; }
@@ -80,7 +92,6 @@ namespace RobotVacuum.Sim
             robotObject.transform.SetParent(root.transform, false);
             var robot = robotObject.AddComponent<VacuumRobot>();
             robot.Pattern = options.pattern;
-            robot.Picture = options.picture;
             robot.Seed = options.seed;
 
             // ONE shared instance for the whole run -- see VacuumRobot.RandomSource's doc comment for why
@@ -90,16 +101,19 @@ namespace RobotVacuum.Sim
             robot.RandomSource = new RandomProvider((uint)options.seed);
 
             var cleaning = robotObject.AddComponent<VacuumCleaningController>();
+            cleaning.Initialize(options.targetMaxClean);
 
+            CoverageHeatmapRenderer heatmapRenderer = null;
             if (options.visuals)
             {
                 var heatmap = new GameObject("Coverage Heatmap");
                 heatmap.transform.SetParent(root.transform, false);
-                heatmap.AddComponent<CoverageHeatmapRenderer>();
+                heatmapRenderer = heatmap.AddComponent<CoverageHeatmapRenderer>();
+                heatmapRenderer.Mode = options.heatmapMode;
             }
 
             robot.ResetToSpawn();
-            return new SimulationRunner(root, renderer, robot, cleaning, options.seed);
+            return new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, options.seed);
         }
 
         /// <summary>Puts the vacuum back at its start point and forgets all coverage.</summary>

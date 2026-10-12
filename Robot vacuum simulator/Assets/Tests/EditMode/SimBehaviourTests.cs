@@ -40,8 +40,6 @@ namespace RobotVacuum.Tests
             Assert.IsInstanceOf<SpiralBrain>(MovementBrain.Create(MovementPattern.Spiral, randomSource));
             Assert.IsInstanceOf<WallFollowBrain>(MovementBrain.Create(MovementPattern.WallFollow, randomSource));
             Assert.IsInstanceOf<LawnmowerBrain>(MovementBrain.Create(MovementPattern.Lawnmower, randomSource));
-            Assert.IsInstanceOf<PictureBrain>(MovementBrain.Create(MovementPattern.Picture, randomSource));
-            Assert.IsInstanceOf<JamesBrain>(MovementBrain.Create(MovementPattern.James, randomSource));
         }
 
         [Test]

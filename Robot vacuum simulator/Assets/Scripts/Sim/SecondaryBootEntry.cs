@@ -116,8 +116,8 @@ namespace RobotVacuum.Sim
                 config.level.ApplyTo(level);
 
                 var options = config.headless
-                    ? SimulationRunner.Options.Headless(config.pattern, config.picture, config.seed)
-                    : SimulationRunner.Options.Visible(config.pattern, config.picture, config.seed);
+                    ? SimulationRunner.Options.Headless(config.pattern, config.seed, config.targetMaxClean)
+                    : SimulationRunner.Options.Visible(config.pattern, config.seed, config.targetMaxClean);
 
                 runner = SimulationRunner.Start(level, options);
 
@@ -166,26 +166,19 @@ namespace RobotVacuum.Sim
                     levelName = config.level.name,
                     seed = config.seed,
                     pattern = config.pattern,
-                    picture = config.picture,
                     coveragePercent = runner.CoveragePercent,
                     blockedAreaSquareMeters = runner.BlockedArea,
                     simulatedSeconds = simulatedSeconds,
                     realSeconds = realSeconds,
                 };
 
-                // CoverageImage needs the LIVE grid -- this is the one moment
-                // it still exists, so the heatmap has to be produced here, not
-                // reconstructed later on the Primary side (see RunResult.cs).
+                // Save the External Model and the three heatmap PNGs next to
+                // the result file. This is the one moment the live grid still
+                // exists; after this everything is plain saved data. Written
+                // BEFORE result.json, because that file's existence is what
+                // tells the launcher the run is finished.
                 if (runner.Cleaning != null && runner.Cleaning.Grid != null)
-                {
-                    var texture = CoverageImage.Create(runner.Cleaning.Grid, runner.Level.Level, runner.Level);
-                    if (texture != null)
-                    {
-                        string imagePath = Path.Combine(Path.GetDirectoryName(config.resultPath), "heatmap.png");
-                        File.WriteAllBytes(imagePath, texture.EncodeToPNG());
-                        result.heatmapImagePath = imagePath;
-                    }
-                }
+                    RunArtifacts.Write(runner.Cleaning.Grid.ToData(), Path.GetDirectoryName(config.resultPath), result);
 
                 result.WriteTo(config.resultPath);
 

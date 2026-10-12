@@ -26,7 +26,8 @@ namespace RobotVacuum.Sim
         // terminal condition per SDD 1.3.3 is the vacuum's own battery reaching
         // zero. This just prevents a genuinely stuck run (a bugged algorithm
         // that never drains battery) from hanging forever.
-        const float MaxSimulatedSecondsSafetyCap = 3600f;
+        // The value lives in SimDefaults so TestSimStart shares it.
+        const float MaxSimulatedSecondsSafetyCap = SimDefaults.MaxSimulatedSeconds;
 
         public static bool IsRunning { get; private set; }
 
@@ -46,10 +47,11 @@ namespace RobotVacuum.Sim
         // Screen button ends up calling) keep working unchanged with no
         // playback-speed argument at all, defaulting to real-time. This
         // preserves the exact signature already shown to the teammate
-        // building that button, rather than breaking it.
+        // building that button, rather than breaking it. targetMaxClean is
+        // added the same way: zero or less means "use the default".
         public static void Launch(LevelData level, VacuumSettings settings,
-            MovementPattern pattern, PictureKind picture, int seed,
-            bool headless, Action<RunResult> onComplete, float playbackSpeed = 1f)
+            MovementPattern pattern, int seed,
+            bool headless, Action<RunResult> onComplete, float playbackSpeed = 1f, float targetMaxClean = 0f)
         {
             if (IsRunning)
             {
@@ -65,20 +67,20 @@ namespace RobotVacuum.Sim
                 return;
             }
 
-            string runFolder = Path.Combine(Application.persistentDataPath, "Runs", Guid.NewGuid().ToString("N"));
-            string configPath = Path.Combine(runFolder, "config.json");
-            string resultPath = Path.Combine(runFolder, "result.json");
+            string runFolder = RunArtifacts.NewRunFolder();
+            string configPath = Path.Combine(runFolder, RunArtifacts.ConfigFileName);
+            string resultPath = Path.Combine(runFolder, RunArtifacts.ResultFileName);
 
             var config = new RunConfig
             {
                 level = LevelSnapshot.FromLevel(level, level.name),
                 vacuumSettings = settings,
                 pattern = pattern,
-                picture = picture,
                 seed = seed,
                 simulatedSeconds = MaxSimulatedSecondsSafetyCap,
                 headless = headless,
                 playbackSpeed = playbackSpeed,
+                targetMaxClean = targetMaxClean > 0f ? targetMaxClean : HeatmapDefaults.TargetMaxClean,
                 resultPath = resultPath,
             };
             config.WriteTo(configPath);

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using RobotVacuum.Level;
+using RobotVacuum.Sim;
 
 // ============================================================================
 //
@@ -13,15 +14,16 @@ using RobotVacuum.Level;
 //                        in the project (specifically: obstacle/furniture data)
 //   // TODO: ...      -> known future work, deliberately left for later
 //
-// Purpose: the grid-based structure tracking floor cleanliness state for the
-// External Model (per SDD 4.3). Write-only from the Sim Machine's point of
-// view; never read by the robot.
+// Purpose: the grid-based structure tracking, per cell, the TRUE dwell time
+// and cleanliness for the External Model (per SDD 4.3). Write-only from the
+// Sim Machine's point of view; never read by the robot.
 // ============================================================================
 
 namespace RobotVacuumSim.EnvironmentModel
 {
     // ------------------------------------------------------------------
-    // CellState: the two-field struct we agreed on.
+    // CellState: dwell time + cleanliness (both unbounded, increase-only),
+    // plus the non-cleanable mask and throttle bookkeeping.
     //
     // "struct" instead of "class" is deliberate here: structs are value
     // types (copied by value, stored inline in the array rather than as
@@ -34,26 +36,25 @@ namespace RobotVacuumSim.EnvironmentModel
     // ------------------------------------------------------------------
     public struct CellState
     {
-        // The permanent historical record: how dirty this cell currently
-        // is, on a continuous scale. Never overwritten by furniture moving.
+        // The two permanent historical records for this cell. Both are
+        // ABSOLUTE and UNBOUNDED, and in practice only ever INCREASE:
         //
-        // CONVENTION: 1.0 = fully dirty, 0.0 = fully clean. Chosen (per
-        // Eric) so the value naturally starts at 1 (see DefaultDirtiness
-        // below) and only ever decreases as cleaning happens -- there is
-        // no "super clean" state past 0, and the value is HARD CLAMPED to
-        // the [0, 1] range. The clamp lives in SetDirtiness() below, not
-        // just as a comment/convention -- callers cannot bypass it because
-        // this field is private and only reachable through that method.
-        private float dirtiness;
+        //   dwellSeconds -- the pure time the robot has spent over this cell.
+        //                   No vacuum power, no floor resistance: just seconds.
+        //   cleanliness  -- cleaning actually accomplished, accumulated as
+        //                   (vacuumPower / floorResistance) * seconds. Not
+        //                   capped at the target: going past it is exactly
+        //                   what the OverCoverage view measures.
+        //
+        // Both start at 0 (nothing has happened here yet). There is no
+        // "fully clean" state any more; the goalpost (target_max_clean) is
+        // just a number other code compares against. Private fields with
+        // read-only properties, so Accumulate() below is the only way in.
+        private float dwellSeconds;
+        private float cleanliness;
 
-        // Backing field is private; this property is the only way to read
-        // the value from outside the struct. "get; " with no "set;" makes
-        // it read-only from the outside -- mutation only happens through
-        // SetDirtiness(), which is where the clamp is enforced.
-        public float Dirtiness => dirtiness;
-
-        // The value a freshly-created cell starts at: fully dirty.
-        public const float DefaultDirtiness = 1f;
+        public float DwellSeconds => dwellSeconds;
+        public float Cleanliness => cleanliness;
 
         // The temporary visibility mask: does this cell currently count
         // toward the coverage-percent denominator? True while a blocking
@@ -66,13 +67,14 @@ namespace RobotVacuumSim.EnvironmentModel
         // the vacuum passes under leaves its cells cleanable.
         public bool isNonCleanable;
 
-        // The only way to change dirtiness. Mathf.Clamp01 forces the
-        // result into [0, 1] no matter what value is passed in -- this is
-        // the single enforcement point Eric asked for, so no calling code
-        // anywhere else needs to remember to clamp.
-        public void SetDirtiness(float newValue)
+        // The only way to change the cell. No guard against negative amounts:
+        // the only writer (VacuumCleaningController) adds positive amounts, and
+        // a check on every cell on every tick is cost for nothing. Readers
+        // (coverage, heatmaps) tolerate a value <= 0 by treating it as empty.
+        public void Accumulate(float dwellDeltaSeconds, float cleanlinessDelta)
         {
-            dirtiness = Mathf.Clamp01(newValue);
+            dwellSeconds += dwellDeltaSeconds;
+            cleanliness += cleanlinessDelta;
         }
 
         // ------------------------------------------------------------------
@@ -84,7 +86,7 @@ namespace RobotVacuumSim.EnvironmentModel
         // into CellState means there is only ONE array on the grid, so
         // there's nothing to get out of sync in the first place.
         //
-        // Kept private, same reasoning as "dirtiness" above: nothing
+        // Kept private, same reasoning as the dwell/cleanliness fields above: nothing
         // outside this struct should read or write it directly except
         // through the method below, which is the only place the throttle
         // decision actually gets made.
@@ -103,22 +105,18 @@ namespace RobotVacuumSim.EnvironmentModel
         // "last logged" was. Callers never touch lastLoggedTime directly;
         // they just ask "should I log right now?" and get a yes/no.
         //
-        // CONFIRMED (per Eric): what gets timestamped/logged is always the
-        // resulting ABSOLUTE dirtiness value, never a delta/decrement.
-        // Reconstruction works by "find the latest logged entry at or
-        // before T" -- with absolute values that's a direct read. With
-        // decrements, reconstruction would have to sum every decrement
-        // since the cell's start, and that sum could silently diverge from
-        // truth because the live value is continuously clamped -- a
-        // decrement-sum has no way to know when a clamp absorbed part of a
-        // change between two logged samples. Absolute-value logging avoids
-        // that failure mode entirely. See SetDirtiness(row, col, ...) below
-        // for where the logged value is actually read off the cell.
+        // Telemetry note (the log itself is deferred until after the
+        // prototype): what gets logged should be the cell's ABSOLUTE values
+        // (dwell and cleanliness), never a delta -- reconstruction is then
+        // "find the latest logged entry at or before T", a direct read.
+        // Both values are now unclamped and increase-only, so the old
+        // clamp-divergence worry no longer applies, but absolute values
+        // stay the simplest thing to reconstruct from.
         // ------------------------------------------------------------------
         public bool ShouldLogEvent(float currentSimTime, float minIntervalSeconds)
         {
             // First-ever change to this cell always logs, regardless of
-            // interval -- otherwise a cell's very first dirtiness change
+            // interval -- otherwise a cell's very first change
             // could be silently dropped if it happens at simulated time
             // 0.0 (which would look identical to "already logged at time
             // 0" without this explicit flag).
@@ -188,6 +186,22 @@ namespace RobotVacuumSim.EnvironmentModel
         // SetNonCleanable() so area read-outs don't rescan the grid.
         private int nonCleanableCount;
 
+        // target_max_clean: the cleanliness goalpost. Not a property of any
+        // cell -- it is the yardstick coverage and the heatmaps measure
+        // cells against. Set once at construction from the run's config and
+        // fixed for the whole run (it is NOT changeable mid-run, per Eric).
+        private readonly float targetMaxClean;
+
+        // The shared LATTICE both models sit on. Its anchor is a world point
+        // (the robot's spawn) and cell edges fall at anchor + k * cellSize.
+        // This grid's cell (0,0) sits at lattice index (rowOffset, colOffset),
+        // so lattice index = local index + offset, and a cell here and a cell
+        // in InternalModelGrid with the same lattice index are the same
+        // physical square.
+        private readonly Vector2 latticeAnchor;
+        private readonly int rowOffset;
+        private readonly int colOffset;
+
         // Stored so future population/recompute work (see the stubs below)
         // has the same LevelData/LevelRenderer pair available without
         // re-threading them through every method call. LevelRenderer
@@ -204,8 +218,7 @@ namespace RobotVacuumSim.EnvironmentModel
         // logging (SDD 7.2), but that reasoning doesn't actually transfer:
         // entity position changes continuously through space and needs a
         // high sample rate to avoid visibly "teleporting" in replay. Cell
-        // dirtiness just fades from 1 toward 0 as the robot dwells -- the
-        // RIGHT rate for that depends on how fast a full clean pass
+        // values just grow as the robot dwells -- the RIGHT rate for that depends on how fast a full clean pass
         // actually takes, which depends on the 3.14 cleaning-effectiveness
         // formula. That formula doesn't exist in concrete form yet.
         //
@@ -228,12 +241,20 @@ namespace RobotVacuumSim.EnvironmentModel
         // silent wrong answer. In normal use within the real scene, always
         // pass the actual LevelRenderer so the conversion is correct even
         // if that transform is ever offset or rotated.
+        //
+        // latticeAnchorWorld: the world point the shared lattice passes
+        // through (the robot's spawn in normal use). When given, this grid's
+        // corner is snapped DOWN onto that lattice, which moves it by less
+        // than one cell. When null (quick tests), the lattice is anchored at
+        // the grid's own corner, as before.
         // ------------------------------------------------------------------
-        public ExternalModelGrid(LevelData level, LevelRenderer levelRenderer, float cellSizeMeters)
+        public ExternalModelGrid(LevelData level, LevelRenderer levelRenderer, float cellSizeMeters,
+            float targetMaxClean = HeatmapDefaults.TargetMaxClean, Vector2? latticeAnchorWorld = null)
         {
             this.level = level;
             this.levelRenderer = levelRenderer;
             this.cellSizeMeters = cellSizeMeters;
+            this.targetMaxClean = Mathf.Max(0f, targetMaxClean);
 
             // LevelData.Bounds() is computed purely from Room.outline
             // points, which live in LEVEL-LOCAL space (confirmed by
@@ -278,31 +299,33 @@ namespace RobotVacuumSim.EnvironmentModel
             Vector2 worldMax = Vector2.Max(worldCornerA, worldCornerB);
             Vector2 worldSize = worldMax - worldMin;
 
-            this.originWorld = worldMin;
+            if (latticeAnchorWorld.HasValue)
+            {
+                // Snap the corner down onto the lattice (FloorToInt, not an
+                // int cast, so negative offsets round the right way).
+                latticeAnchor = latticeAnchorWorld.Value;
+                colOffset = Mathf.FloorToInt((worldMin.x - latticeAnchor.x) / cellSizeMeters);
+                rowOffset = Mathf.FloorToInt((worldMin.y - latticeAnchor.y) / cellSizeMeters);
+                this.originWorld = latticeAnchor + new Vector2(colOffset * cellSizeMeters, rowOffset * cellSizeMeters);
+            }
+            else
+            {
+                latticeAnchor = worldMin;
+                this.originWorld = worldMin;
+            }
 
+            // Size from the (possibly snapped) corner to the far corner.
             // Mathf.CeilToInt rounds up: if the floor plan doesn't divide
             // evenly by cell size, we'd rather have one extra partial row/col
             // than silently clip off real floor area.
-            this.cols = Mathf.CeilToInt(worldSize.x / cellSizeMeters);
-            this.rows = Mathf.CeilToInt(worldSize.y / cellSizeMeters);
+            this.cols = Mathf.CeilToInt((worldMax.x - originWorld.x) / cellSizeMeters);
+            this.rows = Mathf.CeilToInt((worldMax.y - originWorld.y) / cellSizeMeters);
 
             cells = new CellState[rows, cols];
 
-            // Explicitly initialize every cell to the default-dirty,
-            // non-blocked state. C# would actually zero-initialize this
-            // automatically (default struct values), but we set it
-            // explicitly here so the "default to Dirty" decision is
-            // visible in the code, not an invisible side effect of
-            // array allocation.
-            for (int r = 0; r < rows; r++)
-            {
-                for (int c = 0; c < cols; c++)
-                {
-                    CellState newCell = new CellState { isNonCleanable = false };
-                    newCell.SetDirtiness(CellState.DefaultDirtiness); // starts fully dirty (1.0)
-                    cells[r, c] = newCell;
-                }
-            }
+            // C# zero-initializes the array, which is exactly the starting
+            // state we want: no dwell, no cleanliness, not excluded. Nothing
+            // to set per cell.
         }
 
         // ------------------------------------------------------------------
@@ -350,57 +373,38 @@ namespace RobotVacuumSim.EnvironmentModel
         }
 
         // ------------------------------------------------------------------
-        // Takes currentSimTime because the throttle decision (inside
-        // CellState.ShouldLogEvent) needs it. Whatever calls this
-        // (presumably the Sim Machine, once it exists) must pass the
-        // current simulated time, not just a row/col/value.
+        // The write path. Adds time and cleanliness to one cell: the robot
+        // calls this for every cell under its footprint each tick. Takes
+        // currentSimTime because the throttle decision (inside
+        // CellState.ShouldLogEvent) needs it.
         // ------------------------------------------------------------------
-        public void SetDirtiness(int row, int col, float newValue, float currentSimTime)
+        public void Accumulate(int row, int col, float dwellDeltaSeconds, float cleanlinessDelta, float currentSimTime)
         {
-            // --- Part 1: update the LIVE value. Always happens, every
-            // call, no throttling. This is what CalculateCoveragePercent()
-            // reads, and per SDD 7.3 that must stay authoritative at full
-            // tick resolution regardless of what the replay log does. ---
+            // Part 1: update the LIVE values. Always happens, every call,
+            // no throttling -- coverage must stay authoritative at full tick
+            // resolution regardless of what the replay log does.
             CellState cell = cells[row, col];
-            cell.SetDirtiness(newValue);
+            cell.Accumulate(dwellDeltaSeconds, cleanlinessDelta);
 
-            // --- Part 2: ask the cell itself whether enough time has
-            // passed to log this change. All the bookkeeping (when did
-            // this cell last log, has it ever logged before) lives inside
-            // CellState -- this method just acts on the yes/no answer. ---
+            // Part 2: ask the cell whether enough time has passed to log.
             bool shouldLog = cell.ShouldLogEvent(currentSimTime, EventLogIntervalSeconds);
 
-            // Write the cell back to the array AFTER both mutations above --
-            // remember cells[row, col] would hand back a stale COPY if read
-            // again mid-method, so both SetDirtiness and ShouldLogEvent had
-            // to run on this same local "cell" copy before it goes back in.
+            // Write the copy back AFTER both mutations (cells[row, col]
+            // returns a COPY of a struct, so mutating it does nothing until
+            // it is stored back).
             cells[row, col] = cell;
 
             if (shouldLog)
-            {
-                // Logging the ABSOLUTE post-clamp value (cell.Dirtiness),
-                // never a delta -- see the CONFIRMED note on
-                // CellState.ShouldLogEvent above for why.
-                EmitCellStateChangeEvent(row, col, cell.Dirtiness, currentSimTime);
-            }
+                EmitCellStateChangeEvent(row, col, cell.DwellSeconds, cell.Cleanliness, currentSimTime);
         }
 
         // ------------------------------------------------------------------
-        // STUB: actually writing a {cellID, time, value} event out to
-        // wherever the run's Action Log / telemetry storage lives (SDD 7.1).
-        //
-        // PENDING: Run Results Storage mechanism isn't built yet. For now
-        // this just defines the shape of what needs to happen -- swap the
-        // body for a real call once that storage exists.
+        // STUB: writing a {cellID, time, dwell, cleanliness} event out to
+        // the run's telemetry. Deferred until after the first prototype.
         // ------------------------------------------------------------------
-        private void EmitCellStateChangeEvent(int row, int col, float dirtinessValue, float simTime)
+        private void EmitCellStateChangeEvent(int row, int col, float dwellSeconds, float cleanliness, float simTime)
         {
-            // TODO: replace with a real call once telemetry storage exists.
-            // Expected shape: append { cellID: (row, col), time: simTime,
-            // value: dirtinessValue } to this run's cell-state event log,
-            // same {ID, time, value} pattern as the furniture entity log
-            // (SDD 7.2), reconstructed later via "find latest entry at or
-            // before T."
+            // TODO (post-prototype): append the absolute values to the run's cell-state event log.
         }
 
         public void SetNonCleanable(int row, int col, bool isNonCleanable)
@@ -430,50 +434,108 @@ namespace RobotVacuumSim.EnvironmentModel
         // footprint/query logic.
         public Vector2 OriginWorld => originWorld;
 
+        // target_max_clean, in cleanliness units. Fixed for the run.
+        public float TargetMaxClean => targetMaxClean;
+
+        // The shared lattice (see the field comments above).
+        public Vector2 LatticeAnchor => latticeAnchor;
+        public int RowOffset => rowOffset;
+        public int ColOffset => colOffset;
+
         // ------------------------------------------------------------------
         // Coverage percentage, respecting the non-cleanable mask.
         //
-        // This directly implements "dirty by default, not marked against
-        // the total until uncovered": isNonCleanable cells are excluded
-        // entirely, not counted as dirty.
+        // Graded average (matches 3.14/3.15): each cleanable cell
+        // contributes min(cleanliness / target, 1) -- half the target counts
+        // as half clean, anything at or past the target counts as fully
+        // clean and no more, so overshooting one cell cannot make up for
+        // missing another. Non-cleanable cells (under blocking furniture)
+        // are excluded from numerator and denominator.
         //
-        // SUM/AVERAGE approach (per Eric, matches 3.14/3.15's graded
-        // cleaning effectiveness): each cleanable cell contributes its
-        // OWN partial cleanliness, not just a binary clean/not-clean vote.
-        // A cell sitting at dirtiness 0.3 contributes 0.7 "clean units" to
-        // the total, same as if 70% of that one cell had been fully
-        // cleaned. Since dirtiness is 1=dirty/0=clean, "how clean" a cell
-        // is is (1 - dirtiness); summing that across all cleanable cells
-        // and dividing by the count gives the average fractional
-        // cleanliness, which we then express as a percentage.
-        //
-        // NOTE: cells under blocking furniture are marked non-cleanable by
-        // PopulateFromLevelObject(), so they drop out of this denominator.
+        // INFERENCE, not confirmed: this exact formula is Claude's reading
+        // of "coverage against the target". CalculateFullyCleanedPercent()
+        // below is the strict alternative (share of cells at the target).
         // ------------------------------------------------------------------
         public float CalculateCoveragePercent()
         {
             int cleanableCellCount = 0;
-            float summedCleanliness = 0f;
+            float summed = 0f;
 
             for (int row = 0; row < rows; row++)
             {
                 for (int col = 0; col < cols; col++)
                 {
-                    if (cells[row, col].isNonCleanable)
-                    {
-                        continue; // excluded entirely, per 1.7.6
-                    }
+                    if (cells[row, col].isNonCleanable) continue;
                     cleanableCellCount++;
-                    summedCleanliness += (1f - cells[row, col].Dirtiness);
+                    summed += ExternalModelData.CleanFraction(cells[row, col].Cleanliness, targetMaxClean);
                 }
             }
 
-            if (cleanableCellCount == 0)
+            return cleanableCellCount == 0 ? 0f : summed / cleanableCellCount * 100f;
+        }
+
+        // The share of cleanable cells that have reached the target, 0 to 100.
+        public float CalculateFullyCleanedPercent()
+        {
+            int cleanableCellCount = 0;
+            int reached = 0;
+
+            for (int row = 0; row < rows; row++)
             {
-                return 0f; // avoid divide-by-zero on a degenerate/empty floor plan
+                for (int col = 0; col < cols; col++)
+                {
+                    if (cells[row, col].isNonCleanable) continue;
+                    cleanableCellCount++;
+                    if (cells[row, col].Cleanliness >= targetMaxClean) reached++;
+                }
             }
 
-            return summedCleanliness / cleanableCellCount * 100f;
+            return cleanableCellCount == 0 ? 0f : reached / (float)cleanableCellCount * 100f;
+        }
+
+        // ------------------------------------------------------------------
+        // Copies the grid into a plain saveable object (see
+        // ExternalModelData). Also records which cells lie outside every
+        // room, so a picture drawn from the data alone can leave them clear.
+        // The room test runs once per cell, so call this at save time, not
+        // every frame.
+        // ------------------------------------------------------------------
+        public ExternalModelData ToData()
+        {
+            var data = new ExternalModelData
+            {
+                rows = rows,
+                cols = cols,
+                cellSizeMeters = cellSizeMeters,
+                originX = originWorld.x,
+                originY = originWorld.y,
+                targetMaxClean = targetMaxClean,
+                dwellSeconds = new float[rows * cols],
+                cleanliness = new float[rows * cols],
+                nonCleanable = new bool[rows * cols],
+                outsideRooms = new bool[rows * cols],
+            };
+
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    int index = data.Index(row, col);
+                    CellState cell = cells[row, col];
+                    data.dwellSeconds[index] = cell.DwellSeconds;
+                    data.cleanliness[index] = cell.Cleanliness;
+                    data.nonCleanable[index] = cell.isNonCleanable;
+
+                    if (level != null)
+                    {
+                        Vector2 world = GridIndexToWorldCenter(row, col);
+                        Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
+                        data.outsideRooms[index] = level.RoomIndexAt(point) < 0;
+                    }
+                }
+            }
+
+            return data;
         }
 
         // ------------------------------------------------------------------

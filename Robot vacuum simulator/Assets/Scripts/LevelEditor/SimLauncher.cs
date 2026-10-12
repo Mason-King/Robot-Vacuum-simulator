@@ -21,9 +21,6 @@ namespace RobotVacuum.LevelEditor
         /// <summary>The movement algorithm chosen last, carried between the editor's run and the simulator.</summary>
         public static MovementPattern MovementPattern { get; set; }
 
-        /// <summary>What the Picture pattern draws, carried the same way.</summary>
-        public static PictureKind Picture { get; set; }
-
         public static bool OpenStartScreen() => Load(StartScenePath);
 
         public static bool OpenLevelEditor() => Load(EditorScenePath);
@@ -100,7 +97,6 @@ namespace RobotVacuum.LevelEditor
             foreach (var robot in Object.FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
             {
                 robot.Pattern = MovementPattern;
-                robot.Picture = Picture;
                 robot.ResetToSpawn();
             }
 
@@ -151,7 +147,6 @@ namespace RobotVacuum.LevelEditor
             returnPath = null;
             fallbackPalette = null;
             MovementPattern = MovementPattern.RandomBounce;
-            Picture = PictureKind.Heart;
         }
     }
 }

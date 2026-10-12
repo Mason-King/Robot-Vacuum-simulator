@@ -20,7 +20,6 @@ namespace RobotVacuum.Sim
 
         public VacuumSettings vacuumSettings;
         public MovementPattern pattern;
-        public PictureKind picture;
         public int seed;
         public float simulatedSeconds;
         public bool headless;
@@ -29,6 +28,10 @@ namespace RobotVacuum.Sim
         // Irrelevant in headless -- that always runs at a fixed fast multiplier
         // regardless, since nobody's watching it.
         public float playbackSpeed = 1f;
+
+        // target_max_clean: the cleanliness goalpost this run is measured against.
+        // A file written before this field existed reads as the default.
+        public float targetMaxClean = HeatmapDefaults.TargetMaxClean;
 
         // Secondary Boot writes its RunResult here. Decided by Primary Boot
         // (not a fixed convention) so multiple concurrent/batched runs never

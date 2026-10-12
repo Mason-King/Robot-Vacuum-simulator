@@ -69,7 +69,7 @@ namespace RobotVacuum.Sim
             Debug.Log("SecondaryBootTestTrigger: launching...");
 
             SecondaryBootLauncher.Launch(testLevel, settings, MovementPattern.RandomBounce,
-                PictureKind.Heart, seed, headless, OnComplete, playbackSpeed);
+                seed, headless, OnComplete, playbackSpeed);
         }
 
         void OnComplete(RunResult result)
