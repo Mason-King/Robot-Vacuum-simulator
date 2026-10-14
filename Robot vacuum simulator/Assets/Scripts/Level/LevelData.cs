@@ -152,6 +152,24 @@ namespace RobotVacuum.Level
         /// <summary>How far a doorway can sit from a wall edge and still cut it.</summary>
         public float DoorwaySnapDistance => Mathf.Max(wallThickness, 0.12f);
 
+        /// <summary>True when a doorway already cuts the specified room edge.</summary>
+        public bool HasDoorwayOnWall(int roomIndex, int edge)
+        {
+            var room = GetRoom(roomIndex);
+            if (room == null || edge < 0 || edge >= room.EdgeCount) return false;
+
+            Vector2 start = room.EdgeStart(edge);
+            Vector2 end = room.EdgeEnd(edge);
+            foreach (var doorway in doorways)
+            {
+                if (doorway != null &&
+                    Poly2D.DistanceToSegment(doorway.center, start, end, out _) <= DoorwaySnapDistance)
+                    return true;
+            }
+
+            return false;
+        }
+
         void OnValidate()
         {
             wallThickness = Mathf.Max(0.01f, wallThickness);
@@ -169,8 +187,11 @@ namespace RobotVacuum.Level
         public Room GetRoom(int index) =>
             index >= 0 && index < rooms.Count ? rooms[index] : null;
 
-        public FloorType FloorTypeOf(Room room) =>
-            room != null && palette != null ? palette.Get(room.floorIndex) : null;
+        public FloorType FloorTypeOf(Room room)
+        {
+            var floor = room != null && palette != null ? palette.Get(room.floorIndex) : null;
+            return floor != null && floor.isFloor ? floor : null;
+        }
 
         public Color ColorOf(Room room)
         {
@@ -190,7 +211,8 @@ namespace RobotVacuum.Level
         public Room RoomAt(Vector2 point) => GetRoom(RoomIndexAt(point));
 
         /// <summary>Floor covering under a point, or null when the point is outside every room.</summary>
-        public FloorType FloorTypeAt(Vector2 point) => FloorTypeOf(RoomAt(point));
+        public FloorType FloorTypeAt(Vector2 point) =>
+            LevelGeometry.IsInsideWall(this, point) ? null : FloorTypeOf(RoomAt(point));
 
         /// <summary>Index of the top-most furniture containing <paramref name="point"/>, or -1.</summary>
         public int ObstacleIndexAt(Vector2 point)

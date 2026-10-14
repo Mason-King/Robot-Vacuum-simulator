@@ -36,36 +36,36 @@ namespace RobotVacuum.Tests
             robot.SetDriveSpeedMetersPerSecond(0.8f);
             robot.SetReverseSpeedMetersPerSecond(0.4f);
             robot.SetTurnSpeedDegreesPerSecond(200f);
-            battery.SetBatteryLifeSeconds(120f);
+            battery.SetCapacity(120f);
 
             var settings = VacuumSettings.From(robot, battery);
 
             Assert.AreEqual(0.8f, settings.driveSpeed, 1e-5f);
             Assert.AreEqual(0.4f, settings.reverseSpeed, 1e-5f);
             Assert.AreEqual(200f, settings.turnSpeed, 1e-5f);
-            Assert.AreEqual(120f, settings.batteryLifeSeconds, 1e-5f);
+            Assert.AreEqual(120f, settings.batteryCapacity, 1e-5f);
             Assert.IsFalse(settings.useFeet);
         }
 
         [Test]
-        public void ApplyTo_SetsSpeeds_AndOnlyRechargesWhenBatteryLifeChanges()
+        public void ApplyTo_SetsSpeeds_AndOnlyRechargesWhenCapacityChanges()
         {
-            battery.SetBatteryLifeSeconds(100f);
-            battery.Consume(40f);
-            var settings = new VacuumSettings { driveSpeed = 1.2f, reverseSpeed = 0.5f, turnSpeed = 400f, batteryLifeSeconds = 100f };
+            battery.SetCapacity(100f);
+            battery.ConsumeWork(40f, 0f, 1f);
+            var settings = new VacuumSettings { driveSpeed = 1.2f, reverseSpeed = 0.5f, turnSpeed = 400f, batteryCapacity = 100f };
 
             settings.ApplyTo(robot, battery);
 
             Assert.AreEqual(1.2f, robot.DriveSpeedMetersPerSecond, 1e-5f);
             Assert.AreEqual(0.5f, robot.ReverseSpeedMetersPerSecond, 1e-5f);
             Assert.AreEqual(400f, robot.TurnSpeedDegreesPerSecond, 1e-5f);
-            Assert.AreEqual(60f, battery.CurrentLifeSeconds, 1e-4f, "an unchanged battery life must not recharge");
+            Assert.AreEqual(60f, battery.CurrentCharge, 1e-4f, "an unchanged capacity must not recharge");
 
-            settings.batteryLifeSeconds = 250f;
+            settings.batteryCapacity = 250f;
             settings.ApplyTo(robot, battery);
 
-            Assert.AreEqual(250f, battery.BatteryLifeSeconds, 1e-5f);
-            Assert.AreEqual(250f, battery.CurrentLifeSeconds, 1e-5f);
+            Assert.AreEqual(250f, battery.Capacity, 1e-5f);
+            Assert.AreEqual(250f, battery.CurrentCharge, 1e-5f);
         }
 
         [Test]
@@ -92,13 +92,13 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(expected, VacuumSettings.FormatDuration(seconds));
         }
 
-        [TestCase(300f, 300f, "100% · 05:00")]
-        [TestCase(75f, 300f, "25% · 01:15")]
+        [TestCase(300f, 300f, "100% · 300 units")]
+        [TestCase(75f, 300f, "25% · 75 units")]
         [TestCase(0f, 300f, "Empty")]
         [TestCase(0f, 0f, "Empty")]
-        public void FormatBattery_ShowsPercentAndTimeLeft(float current, float life, string expected)
+        public void FormatBattery_ShowsPercentAndCharge(float current, float capacity, string expected)
         {
-            Assert.AreEqual(expected, VacuumSettings.FormatBattery(current, life));
+            Assert.AreEqual(expected, VacuumSettings.FormatBattery(current, capacity));
         }
 
         [TestCase(60f, 300f, true)]
