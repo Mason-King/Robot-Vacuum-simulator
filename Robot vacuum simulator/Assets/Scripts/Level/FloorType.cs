@@ -15,6 +15,9 @@ namespace RobotVacuum.Level
     {
         public string displayName = "Floor";
 
+        [Tooltip("Whether this type is a floor covering that rooms can use.")]
+        public bool isFloor = true;
+
         [Tooltip("Colour the room is filled with, and the swatch shown in the level editor. " +
                  "With a texture or pattern this tints it.")]
         [FormerlySerializedAs("editorColor")]

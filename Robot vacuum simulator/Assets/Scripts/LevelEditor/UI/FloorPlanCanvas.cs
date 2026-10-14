@@ -132,6 +132,13 @@ namespace RobotVacuum.LevelEditor
             set => spaceHeld = value;
         }
 
+        public void SetShiftHeld(bool value)
+        {
+            if (shiftHeld == value) return;
+            shiftHeld = value;
+            Invalidate();
+        }
+
         public void Unbind()
         {
             session.LevelChanged -= OnLevelChanged;
@@ -265,12 +272,12 @@ namespace RobotVacuum.LevelEditor
                 case EditorTool.Select: BeginSelect(evt.clickCount, evt.pointerId); break;
 
                 case EditorTool.Rect:
-                    rectStart = session.Snap(cursorLevel, zoom);
+                    rectStart = SnapPoint(cursorLevel);
                     BeginDrag(Drag.RectCreate, evt.pointerId);
                     break;
 
                 case EditorTool.Obstacle:
-                    rectStart = session.Snap(cursorLevel, zoom);
+                    rectStart = SnapPoint(cursorLevel);
                     BeginDrag(Drag.ObstacleCreate, evt.pointerId);
                     break;
 
@@ -281,7 +288,7 @@ namespace RobotVacuum.LevelEditor
                 case EditorTool.Doorway: session.PlaceDoorway(cursorLevel); break;
 
                 case EditorTool.Spawn:
-                    session.SetSpawn(session.Snap(cursorLevel, zoom));
+                    session.SetSpawn(SnapPoint(cursorLevel));
                     BeginDrag(Drag.Spawn, evt.pointerId);
                     dragRecorded = true;
                     break;
@@ -371,6 +378,9 @@ namespace RobotVacuum.LevelEditor
             cursorInside = contentRect.Contains(cursorLocal);
             shiftHeld = shift;
         }
+
+        Vector2 SnapPoint(Vector2 point, int skipRoom = -1, int skipVertex = -1) =>
+            shiftHeld ? point : session.Snap(point, zoom, skipRoom, skipVertex);
 
         void BeginDrag(Drag kind, int pointerId)
         {
@@ -573,7 +583,7 @@ namespace RobotVacuum.LevelEditor
 
                 case Drag.Spawn:
                     RecordOnce("Move Vacuum Start");
-                    session.Level.RobotSpawn = session.Snap(cursorLevel, zoom);
+                    session.Level.RobotSpawn = SnapPoint(cursorLevel);
                     session.NotifyLiveChange();
                     break;
             }
@@ -603,7 +613,12 @@ namespace RobotVacuum.LevelEditor
             if (dragVertex < 0 || dragVertex >= room.outline.Count) return;
 
             RecordOnce("Move Point");
-            room.outline[dragVertex] = session.Snap(cursorLevel, zoom, dragRoom, dragVertex);
+            Vector2 target = SnapPoint(cursorLevel, dragRoom, dragVertex);
+            var proposed = new List<Vector2>(room.outline);
+            proposed[dragVertex] = target;
+            if (!session.CanPlaceRoom(proposed, dragRoom)) return;
+
+            room.outline[dragVertex] = target;
             session.NotifyLiveChange();
         }
 
@@ -613,7 +628,10 @@ namespace RobotVacuum.LevelEditor
             if (room == null || dragOriginalOutline.Count != room.outline.Count) return;
 
             Vector2 target = dragAnchor + (cursorLevel - pressLevel);
-            Vector2 offset = session.Snap(target, zoom, dragRoom) - dragAnchor;
+            Vector2 offset = SnapPoint(target, dragRoom) - dragAnchor;
+            var proposed = new List<Vector2>(dragOriginalOutline.Count);
+            foreach (Vector2 point in dragOriginalOutline) proposed.Add(point + offset);
+            if (!session.CanPlaceRoom(proposed, dragRoom)) return;
 
             RecordOnce("Move Room");
             for (int v = 0; v < room.outline.Count; v++) room.outline[v] = dragOriginalOutline[v] + offset;
@@ -630,7 +648,8 @@ namespace RobotVacuum.LevelEditor
 
             // Grid snapping only: snapping a piece's centre to a room corner would park it on the wall.
             RecordOnce("Move Furniture");
-            session.MoveObstacleLive(dragObstacle, session.SnapToGridStep(dragObstacleOrigin + (cursorLevel - pressLevel)));
+            Vector2 target = dragObstacleOrigin + (cursorLevel - pressLevel);
+            session.MoveObstacleLive(dragObstacle, shiftHeld ? target : session.SnapToGridStep(target));
         }
 
         /// <summary>Resizes from a corner or side handle, keeping the opposite corner or side where it was.</summary>
@@ -641,7 +660,7 @@ namespace RobotVacuum.LevelEditor
 
             RecordOnce("Resize Furniture");
 
-            Vector2 target = session.Snap(cursorLevel, zoom);
+            Vector2 target = shiftHeld ? cursorLevel : session.Snap(cursorLevel, zoom);
             Vector2 center, size;
             if (dragHandleIsSide)
                 Obstacle.ResizeFromSide(dragObstacleOrigin, dragOriginalSize, obstacle.rotation, dragHandle, target, out center, out size);
@@ -686,7 +705,7 @@ namespace RobotVacuum.LevelEditor
 
         Vector2 RectEnd(out Vector2 min, out Vector2 max)
         {
-            Vector2 end = session.Snap(cursorLevel, zoom);
+            Vector2 end = SnapPoint(cursorLevel);
             min = Vector2.Min(rectStart, end);
             max = Vector2.Max(rectStart, end);
 
@@ -730,7 +749,7 @@ namespace RobotVacuum.LevelEditor
 
         void AddPenPoint()
         {
-            Vector2 snapped = session.Snap(cursorLevel, zoom);
+            Vector2 snapped = SnapPoint(cursorLevel);
 
             if (penPoints.Count >= 3 && Vector2.Distance(snapped, penPoints[0]) <= EditorSession.HandlePixels * 1.6f / zoom)
             {
@@ -780,13 +799,13 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            wallStart = session.Snap(cursorLevel, zoom);
+            wallStart = SnapPoint(cursorLevel);
             BeginDrag(Drag.WallCreate, pointerId);
         }
 
         Vector2 WallEnd()
         {
-            Vector2 end = session.Snap(cursorLevel, zoom);
+            Vector2 end = SnapPoint(cursorLevel);
             if (!shiftHeld) return end;
 
             // Shift locks to the nearest 45°.
@@ -863,7 +882,7 @@ namespace RobotVacuum.LevelEditor
 
                 case EditorTool.Pen:
                     hoverPenClose = penPoints.Count >= 3 &&
-                        Vector2.Distance(session.Snap(point, zoom), penPoints[0]) <= EditorSession.HandlePixels * 1.6f / zoom;
+                        Vector2.Distance(SnapPoint(point), penPoints[0]) <= EditorSession.HandlePixels * 1.6f / zoom;
                     break;
             }
         }
@@ -946,7 +965,7 @@ namespace RobotVacuum.LevelEditor
             }
             else if (session.Tool == EditorTool.Pen && penPoints.Count > 0 && cursorInside)
             {
-                text = Ui.FormatMetres(Vector2.Distance(penPoints[penPoints.Count - 1], session.Snap(cursorLevel, zoom)));
+                text = Ui.FormatMetres(Vector2.Distance(penPoints[penPoints.Count - 1], SnapPoint(cursorLevel)));
             }
             else if (drag == Drag.ObstacleHandle && dragMoved && session.GetObstacle(dragObstacle) != null)
             {
@@ -1529,7 +1548,7 @@ namespace RobotVacuum.LevelEditor
 
                 case EditorTool.Obstacle when cursorInside && drag == Drag.None:
                     PaintObstacleGhost(painter,
-                        LevelData.RectangleOutline(session.Snap(cursorLevel, zoom), Obstacle.DefaultSize(session.ObstacleKind)), 0.3f);
+                        LevelData.RectangleOutline(SnapPoint(cursorLevel), Obstacle.DefaultSize(session.ObstacleKind)), 0.3f);
                     break;
 
                 case EditorTool.Wall when drag == Drag.WallCreate:
@@ -1543,7 +1562,7 @@ namespace RobotVacuum.LevelEditor
                     break;
 
                 case EditorTool.Spawn when cursorInside && drag == Drag.None:
-                    PaintRobot(painter, session.Snap(cursorLevel, zoom), 0.45f);
+                    PaintRobot(painter, SnapPoint(cursorLevel), 0.45f);
                     break;
             }
 
@@ -1552,7 +1571,7 @@ namespace RobotVacuum.LevelEditor
             if (drawing && cursorInside && drag != Drag.Pan)
             {
                 // A small reticle shows exactly where the next point will land after snapping.
-                Vector2 snapped = ToLocal(drag == Drag.WallCreate ? WallEnd() : session.Snap(cursorLevel, zoom));
+                Vector2 snapped = ToLocal(drag == Drag.WallCreate ? WallEnd() : SnapPoint(cursorLevel));
                 StrokeCircle(painter, snapped, 4.5f, 1.5f, Accent);
                 FillCircle(painter, snapped, 1.5f, Accent);
             }
@@ -1579,7 +1598,7 @@ namespace RobotVacuum.LevelEditor
 
             if (cursorInside)
             {
-                Vector2 target = hoverPenClose ? penPoints[0] : session.Snap(cursorLevel, zoom);
+                Vector2 target = hoverPenClose ? penPoints[0] : SnapPoint(cursorLevel);
                 StrokeLine(painter, penPoints[penPoints.Count - 1], target, 1.5f, new Color(Accent.r, Accent.g, Accent.b, 0.6f));
             }
             painter.lineCap = LineCap.Butt;

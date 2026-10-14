@@ -444,7 +444,7 @@ namespace RobotVacuum.LevelEditor
                 "le-toggle", TooltipSide.Above);
             Ui.Div(bar, "le-bar__divider");
 
-            snapToggle = Ui.IconButton(bar, IconKind.Magnet, "Snap to grid", () => session.SnapToGrid = !session.SnapToGrid,
+            snapToggle = Ui.IconButton(bar, IconKind.Magnet, "Snap to grid · hold Shift to temporarily disable snapping", () => session.SnapToGrid = !session.SnapToGrid,
                 "le-toggle", TooltipSide.Above);
 
             VisualElement stepButton = null;
@@ -550,11 +550,11 @@ namespace RobotVacuum.LevelEditor
             hintLabel.text = session.Tool switch
             {
                 EditorTool.Select => "Drag rooms to move · drag corners to reshape · drag a midpoint to add a corner",
-                EditorTool.Rect => "Drag to draw a room · hold Shift for a square",
+                EditorTool.Rect => "Drag to draw a room · hold Shift to disable snapping and draw a square",
                 EditorTool.Pen => canvas != null && canvas.PenPointCount >= 3
                     ? "Click the first point or press Enter to finish · Backspace removes a point"
                     : "Click to place corners",
-                EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall",
+                EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall · hold Shift to disable snapping",
                 EditorTool.Doorway => "Click on a wall to cut a doorway",
                 EditorTool.Spawn => "Click to set where the vacuum starts",
                 EditorTool.Obstacle => $"Drag to size a {Obstacle.DefaultName(session.ObstacleKind).ToLowerInvariant()}, or click to drop one · change the kind in the panel",
@@ -676,6 +676,9 @@ namespace RobotVacuum.LevelEditor
 
             for (int i = 0; i < Palette.Count; i++)
             {
+                var floor = Palette.Get(i);
+                if (floor != null && !floor.isFloor) continue;
+
                 int index = i;
                 var swatch = Ui.Swatch(row, Palette.ColorOf(i), i == current ? "le-menu__swatch le-menu__swatch--selected" : "le-menu__swatch");
                 Ui.Tooltip(swatch, Palette.LabelOf(i), TooltipSide.Above);
@@ -699,6 +702,8 @@ namespace RobotVacuum.LevelEditor
         void OnKeyDown(KeyDownEvent evt)
         {
             if (evt.keyCode == KeyCode.None) return;
+            if ((evt.keyCode == KeyCode.LeftShift || evt.keyCode == KeyCode.RightShift) && canvas != null)
+                canvas.SetShiftHeld(true);
 
             if (evt.keyCode == KeyCode.Escape && overlay.Dismiss())
             {
@@ -724,6 +729,8 @@ namespace RobotVacuum.LevelEditor
         void OnKeyUp(KeyUpEvent evt)
         {
             if (evt.keyCode == KeyCode.Space && canvas != null) canvas.SpaceHeld = false;
+            if ((evt.keyCode == KeyCode.LeftShift || evt.keyCode == KeyCode.RightShift) && canvas != null)
+                canvas.SetShiftHeld(false);
         }
 
         bool HandleCommandShortcut(KeyDownEvent evt, bool typing)

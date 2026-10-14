@@ -313,8 +313,14 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- rooms
 
-        public void AddRoom(List<Vector2> outline)
+        public bool AddRoom(List<Vector2> outline)
         {
+            if (!CanPlaceRoom(outline))
+            {
+                Notice?.Invoke("Rooms can't overlap other rooms.");
+                return false;
+            }
+
             Edit("Add Room", () =>
             {
                 var room = new Room
@@ -331,6 +337,21 @@ namespace RobotVacuum.LevelEditor
             });
 
             SelectionChanged?.Invoke();
+            return true;
+        }
+
+        public bool CanPlaceRoom(IList<Vector2> outline, int ignoreRoom = -1)
+        {
+            if (outline == null || outline.Count < 3) return false;
+
+            for (int i = 0; i < Level.Rooms.Count; i++)
+            {
+                var room = Level.Rooms[i];
+                if (i == ignoreRoom || room == null || !room.IsValid) continue;
+                if (Poly2D.InteriorsOverlap(outline, room.outline)) return false;
+            }
+
+            return true;
         }
 
         string NextRoomName()
@@ -367,18 +388,25 @@ namespace RobotVacuum.LevelEditor
             var source = Level.GetRoom(index);
             if (source == null || !source.IsValid) return;
 
+            var copyOutline = new List<Vector2>(source.outline);
+            var offset = new Vector2(Poly2D.Bounds(source.outline).width + 0.4f, 0f);
+            for (int v = 0; v < copyOutline.Count; v++) copyOutline[v] += offset;
+            if (!CanPlaceRoom(copyOutline))
+            {
+                Notice?.Invoke("Rooms can't overlap other rooms.");
+                return;
+            }
+
             Edit("Duplicate Room", () =>
             {
                 var copy = new Room
                 {
                     name = source.name + " copy",
                     floorIndex = source.floorIndex,
-                    outline = new List<Vector2>(source.outline),
+                    outline = copyOutline,
                     wallEdges = new List<bool>(source.wallEdges ?? new List<bool>()),
                 };
 
-                var offset = new Vector2(Poly2D.Bounds(source.outline).width + 0.4f, 0f);
-                for (int v = 0; v < copy.outline.Count; v++) copy.outline[v] += offset;
                 copy.SyncWallEdges();
 
                 selectedRoom = Level.AddRoom(copy);
@@ -414,6 +442,12 @@ namespace RobotVacuum.LevelEditor
             var room = Level.GetRoom(roomIndex);
             if (room == null || room.HasWall(edge) == present) return;
 
+            if (!present && Level.HasDoorwayOnWall(roomIndex, edge))
+            {
+                Notice?.Invoke("Remove the doorway before deleting this wall.");
+                return;
+            }
+
             Edit(present ? "Restore Wall" : "Remove Wall", () => room.SetWall(edge, present));
         }
 
@@ -421,6 +455,16 @@ namespace RobotVacuum.LevelEditor
         {
             var room = Level.GetRoom(roomIndex);
             if (room == null) return;
+
+            if (!present)
+            {
+                for (int edge = 0; edge < room.EdgeCount; edge++)
+                {
+                    if (!room.HasWall(edge) || !Level.HasDoorwayOnWall(roomIndex, edge)) continue;
+                    Notice?.Invoke("Remove the doorway before deleting this wall.");
+                    return;
+                }
+            }
 
             Edit(present ? "Add All Walls" : "Remove All Walls", () => room.SetAllWalls(present));
         }
@@ -459,6 +503,13 @@ namespace RobotVacuum.LevelEditor
             if (roomA < 0)
             {
                 Notice?.Invoke("Click on a wall to place a doorway");
+                return false;
+            }
+
+            if (TryFindAnyEdge(snapped, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
+                Level.HasDoorwayOnWall(wallRoom, wallEdge))
+            {
+                Notice?.Invoke("This wall already has a doorway.");
                 return false;
             }
 

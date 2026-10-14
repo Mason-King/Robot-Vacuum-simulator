@@ -341,6 +341,8 @@ namespace RobotVacuum.LevelEditor
             {
                 int index = i;
                 var floor = palette.Get(i);
+                if (floor != null && !floor.isFloor) continue;
+
                 var card = Ui.Div(grid, i == selected ? "le-floor-card le-floor-card--selected" : "le-floor-card");
                 Ui.Swatch(card, palette.ColorOf(i), "le-floor-card__swatch");
 
