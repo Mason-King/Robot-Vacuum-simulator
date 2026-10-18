@@ -33,7 +33,7 @@ namespace RobotVacuum.LevelEditor
             (EditorTool.Wall, IconKind.Wall, "Walls", "W"),
             (EditorTool.Doorway, IconKind.Doorway, "Doorway", "D"),
             (EditorTool.Spawn, IconKind.Spawn, "Vacuum start", "S"),
-            (EditorTool.Obstacle, IconKind.Obstacle, "Furniture", "O"),
+            (EditorTool.Obstacle, IconKind.Obstacle, "Objects", "O"),
         };
 
         VisualElement root;
@@ -443,7 +443,7 @@ namespace RobotVacuum.LevelEditor
                 "le-toggle", TooltipSide.Above);
             Ui.Div(bar, "le-bar__divider");
 
-            snapToggle = Ui.IconButton(bar, IconKind.Magnet, "Snap to grid", () => session.SnapToGrid = !session.SnapToGrid,
+            snapToggle = Ui.IconButton(bar, IconKind.Magnet, "Snap to grid · hold Shift to temporarily disable snapping", () => session.SnapToGrid = !session.SnapToGrid,
                 "le-toggle", TooltipSide.Above);
 
             VisualElement stepButton = null;
@@ -549,11 +549,11 @@ namespace RobotVacuum.LevelEditor
             hintLabel.text = session.Tool switch
             {
                 EditorTool.Select => "Drag rooms to move · drag corners to reshape · drag a midpoint to add a corner",
-                EditorTool.Rect => "Drag to draw a room · hold Shift for a square",
+                EditorTool.Rect => "Drag to draw a room · hold Shift to disable snapping and draw a square",
                 EditorTool.Pen => canvas != null && canvas.PenPointCount >= 3
                     ? "Click the first point or press Enter to finish · Backspace removes a point"
                     : "Click to place corners",
-                EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall",
+                EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall · hold Shift to disable snapping",
                 EditorTool.Doorway => "Click on a wall to cut a doorway",
                 EditorTool.Spawn => "Click to set where the vacuum starts",
                 EditorTool.Obstacle => $"Drag to size a {Obstacle.DefaultName(session.ObstacleKind).ToLowerInvariant()}, or click to drop one · change the kind in the panel",
@@ -570,7 +570,7 @@ namespace RobotVacuum.LevelEditor
             Ui.SetClass(pointsToggle, "le-toggle--on", session.SnapToVertices);
             snapLabel.text = FormatStep(session.SnapIncrement);
             snapLabel.parent.SetEnabled(session.SnapToGrid);
-            RefreshHint(); // the furniture hint names the kind, which is an option
+            RefreshHint(); // the object hint names the selected kind
         }
 
         void RefreshViewReadouts()
@@ -604,7 +604,7 @@ namespace RobotVacuum.LevelEditor
                 entries.Add(passItem);
                 entries.Add(MenuEntry.Separator());
                 entries.Add(MenuEntry.Item("Duplicate", () => session.DuplicateObstacle(obstacleIndex), IconKind.Duplicate, Shortcut("D")));
-                entries.Add(MenuEntry.Item("Delete furniture", () => session.DeleteObstacle(obstacleIndex), IconKind.Trash, "⌫", danger: true));
+                entries.Add(MenuEntry.Item("Delete object", () => session.DeleteObstacle(obstacleIndex), IconKind.Trash, "⌫", danger: true));
 
                 overlay.ShowMenu(panelPosition, entries);
                 return;
@@ -637,7 +637,7 @@ namespace RobotVacuum.LevelEditor
                         () => session.SetWall(wallRoom, wallEdge, !present), present ? IconKind.WallsOff : IconKind.WallsOn));
                 }
 
-                entries.Add(MenuEntry.Item("Place furniture here",
+                entries.Add(MenuEntry.Item("Place object here",
                     () => session.AddObstacle(session.Snap(point, canvas.Zoom), Obstacle.DefaultSize(session.ObstacleKind)), IconKind.Obstacle));
 
                 entries.Add(MenuEntry.Separator());
@@ -659,7 +659,7 @@ namespace RobotVacuum.LevelEditor
                 entries.Add(MenuEntry.Item("Draw rectangle room", () => session.Tool = EditorTool.Rect, IconKind.Rect, "R"));
                 entries.Add(MenuEntry.Item("Draw pen room", () => session.Tool = EditorTool.Pen, IconKind.Pen, "P"));
                 entries.Add(MenuEntry.Item("Start vacuum here", () => session.SetSpawn(session.Snap(point, canvas.Zoom)), IconKind.Spawn));
-                entries.Add(MenuEntry.Item("Place furniture here",
+                entries.Add(MenuEntry.Item("Place object here",
                     () => session.AddObstacle(session.Snap(point, canvas.Zoom), Obstacle.DefaultSize(session.ObstacleKind)), IconKind.Obstacle));
                 entries.Add(MenuEntry.Separator());
                 entries.Add(MenuEntry.Item("Fit floor plan", canvas.FrameAll, IconKind.Fit, "F"));
@@ -675,6 +675,9 @@ namespace RobotVacuum.LevelEditor
 
             for (int i = 0; i < Palette.Count; i++)
             {
+                var floor = Palette.Get(i);
+                if (floor != null && !floor.isFloor) continue;
+
                 int index = i;
                 var swatch = Ui.Swatch(row, Palette.ColorOf(i), i == current ? "le-menu__swatch le-menu__swatch--selected" : "le-menu__swatch");
                 Ui.Tooltip(swatch, Palette.LabelOf(i), TooltipSide.Above);
@@ -698,6 +701,8 @@ namespace RobotVacuum.LevelEditor
         void OnKeyDown(KeyDownEvent evt)
         {
             if (evt.keyCode == KeyCode.None) return;
+            if ((evt.keyCode == KeyCode.LeftShift || evt.keyCode == KeyCode.RightShift) && canvas != null)
+                canvas.SetShiftHeld(true);
 
             if (evt.keyCode == KeyCode.Escape && overlay.Dismiss())
             {
@@ -723,6 +728,8 @@ namespace RobotVacuum.LevelEditor
         void OnKeyUp(KeyUpEvent evt)
         {
             if (evt.keyCode == KeyCode.Space && canvas != null) canvas.SpaceHeld = false;
+            if ((evt.keyCode == KeyCode.LeftShift || evt.keyCode == KeyCode.RightShift) && canvas != null)
+                canvas.SetShiftHeld(false);
         }
 
         bool HandleCommandShortcut(KeyDownEvent evt, bool typing)
@@ -935,6 +942,13 @@ namespace RobotVacuum.LevelEditor
             Ui.Tooltip(simSpeed, "Simulation speed");
             bar.Add(simSpeed);
 
+            var pauseButton = Ui.IconButton(bar, IconKind.Pause, "Pause or resume the simulation",
+                () => run?.TogglePause(), "le-btn--ghost");
+            if (run != null) run.PauseStateChanged += paused =>
+            {
+                pauseButton.Q<IconElement>().Kind = paused ? IconKind.Play : IconKind.Pause;
+            };
+
             VisualElement settingsButton = null;
             settingsButton = Ui.Button(bar, "Settings", IconKind.Spawn, () => ShowVacuumSettings(settingsButton), "le-btn--ghost");
             Ui.Tooltip(settingsButton, "Vacuum speed and battery");
@@ -971,9 +985,9 @@ namespace RobotVacuum.LevelEditor
 
                 if (run.Battery != null)
                 {
-                    battery.text = VacuumSettings.FormatBattery(run.Battery.CurrentLifeSeconds, run.Battery.BatteryLifeSeconds);
+                    battery.text = VacuumSettings.FormatBattery(run.Battery.CurrentCharge, run.Battery.Capacity);
                     Ui.SetClass(battery, "le-run-stat__value--warn",
-                        VacuumSettings.IsBatteryLow(run.Battery.CurrentLifeSeconds, run.Battery.BatteryLifeSeconds));
+                        VacuumSettings.IsBatteryLow(run.Battery.CurrentCharge, run.Battery.Capacity));
                 }
 
                 distance.text = Ui.FormatMetres(robot != null ? robot.DistanceTravelled : 0f);
@@ -1012,9 +1026,9 @@ namespace RobotVacuum.LevelEditor
             AddVacuumSetting(panel, "Drive speed", 0.05f, 2f, settings.driveSpeed, settings.FormatSpeed, v => settings.driveSpeed = v);
             AddVacuumSetting(panel, "Reverse speed", 0.05f, 1.5f, settings.reverseSpeed, settings.FormatSpeed, v => settings.reverseSpeed = v);
             AddVacuumSetting(panel, "Turn speed", 30f, 720f, settings.turnSpeed, v => $"{v:0} °/s", v => settings.turnSpeed = v);
-            AddVacuumSetting(panel, "Battery life", 10f, 1800f, settings.batteryLifeSeconds, VacuumSettings.FormatDuration,
-                v => settings.batteryLifeSeconds = v);
-            Ui.Text(panel, "Changing battery life recharges the vacuum.", "le-empty-hint");
+            AddVacuumSetting(panel, "Battery capacity", 10f, 1800f, settings.batteryCapacity, VacuumSettings.FormatCapacity,
+                v => settings.batteryCapacity = v);
+            Ui.Text(panel, "Changing battery capacity recharges the vacuum.", "le-empty-hint");
 
             return panel;
         }
@@ -1047,6 +1061,10 @@ namespace RobotVacuum.LevelEditor
         readonly CameraState savedCamera;
         readonly float savedTimeScale;
         readonly float startTime;
+        float playbackSpeed = 1f;
+        bool isPaused;
+
+        public event Action<bool> PauseStateChanged;
 
         struct CameraState
         {
@@ -1084,6 +1102,7 @@ namespace RobotVacuum.LevelEditor
             heatmap.AddComponent<CoverageHeatmapRenderer>();
 
             Robot.ResetToSpawn();
+            MovingCat.SpawnPlacedCats(renderer, root.transform);
 
             camera = Camera.main;
             if (camera == null)
@@ -1112,6 +1131,7 @@ namespace RobotVacuum.LevelEditor
         public VacuumCleaningController Cleaning { get; }
         public Battery Battery { get; }
         public float Elapsed => (Time.time - startTime);
+        public bool IsPaused => isPaused;
 
         void FrameCamera()
         {
@@ -1126,10 +1146,22 @@ namespace RobotVacuum.LevelEditor
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 
-        public void SetSpeed(float multiplier) => Time.timeScale = multiplier;
+        public void SetSpeed(float multiplier)
+        {
+            playbackSpeed = Mathf.Max(0.01f, multiplier);
+            if (!isPaused) Time.timeScale = playbackSpeed;
+        }
+
+        public void TogglePause()
+        {
+            isPaused = !isPaused;
+            Time.timeScale = isPaused ? 0f : playbackSpeed;
+            PauseStateChanged?.Invoke(isPaused);
+        }
 
         public void Stop()
         {
+            PauseStateChanged = null;
             Time.timeScale = savedTimeScale;
 
             if (!createdCamera && camera != null)

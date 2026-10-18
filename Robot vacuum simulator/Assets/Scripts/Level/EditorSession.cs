@@ -107,7 +107,7 @@ namespace RobotVacuum.LevelEditor
             set => SetOption(ref paintFloor, Mathf.Max(0, value));
         }
 
-        /// <summary>The kind of furniture the Furniture tool places next.</summary>
+        /// <summary>The kind of object the Objects tool places next.</summary>
         public ObstacleKind ObstacleKind
         {
             get => obstacleKind;
@@ -313,8 +313,14 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- rooms
 
-        public void AddRoom(List<Vector2> outline)
+        public bool AddRoom(List<Vector2> outline)
         {
+            if (!CanPlaceRoom(outline))
+            {
+                Notice?.Invoke("Rooms can't overlap other rooms.");
+                return false;
+            }
+
             Edit("Add Room", () =>
             {
                 var room = new Room
@@ -331,6 +337,21 @@ namespace RobotVacuum.LevelEditor
             });
 
             SelectionChanged?.Invoke();
+            return true;
+        }
+
+        public bool CanPlaceRoom(IList<Vector2> outline, int ignoreRoom = -1)
+        {
+            if (outline == null || outline.Count < 3) return false;
+
+            for (int i = 0; i < Level.Rooms.Count; i++)
+            {
+                var room = Level.Rooms[i];
+                if (i == ignoreRoom || room == null || !room.IsValid) continue;
+                if (Poly2D.InteriorsOverlap(outline, room.outline)) return false;
+            }
+
+            return true;
         }
 
         string NextRoomName()
@@ -367,18 +388,25 @@ namespace RobotVacuum.LevelEditor
             var source = Level.GetRoom(index);
             if (source == null || !source.IsValid) return;
 
+            var copyOutline = new List<Vector2>(source.outline);
+            var offset = new Vector2(Poly2D.Bounds(source.outline).width + 0.4f, 0f);
+            for (int v = 0; v < copyOutline.Count; v++) copyOutline[v] += offset;
+            if (!CanPlaceRoom(copyOutline))
+            {
+                Notice?.Invoke("Rooms can't overlap other rooms.");
+                return;
+            }
+
             Edit("Duplicate Room", () =>
             {
                 var copy = new Room
                 {
                     name = source.name + " copy",
                     floorIndex = source.floorIndex,
-                    outline = new List<Vector2>(source.outline),
+                    outline = copyOutline,
                     wallEdges = new List<bool>(source.wallEdges ?? new List<bool>()),
                 };
 
-                var offset = new Vector2(Poly2D.Bounds(source.outline).width + 0.4f, 0f);
-                for (int v = 0; v < copy.outline.Count; v++) copy.outline[v] += offset;
                 copy.SyncWallEdges();
 
                 selectedRoom = Level.AddRoom(copy);
@@ -414,6 +442,12 @@ namespace RobotVacuum.LevelEditor
             var room = Level.GetRoom(roomIndex);
             if (room == null || room.HasWall(edge) == present) return;
 
+            if (!present && Level.HasDoorwayOnWall(roomIndex, edge))
+            {
+                Notice?.Invoke("Remove the doorway before deleting this wall.");
+                return;
+            }
+
             Edit(present ? "Restore Wall" : "Remove Wall", () => room.SetWall(edge, present));
         }
 
@@ -421,6 +455,16 @@ namespace RobotVacuum.LevelEditor
         {
             var room = Level.GetRoom(roomIndex);
             if (room == null) return;
+
+            if (!present)
+            {
+                for (int edge = 0; edge < room.EdgeCount; edge++)
+                {
+                    if (!room.HasWall(edge) || !Level.HasDoorwayOnWall(roomIndex, edge)) continue;
+                    Notice?.Invoke("Remove the doorway before deleting this wall.");
+                    return;
+                }
+            }
 
             Edit(present ? "Add All Walls" : "Remove All Walls", () => room.SetAllWalls(present));
         }
@@ -459,6 +503,13 @@ namespace RobotVacuum.LevelEditor
             if (roomA < 0)
             {
                 Notice?.Invoke("Click on a wall to place a doorway");
+                return false;
+            }
+
+            if (TryFindAnyEdge(snapped, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
+                Level.HasDoorwayOnWall(wallRoom, wallEdge))
+            {
+                Notice?.Invoke("This wall already has a doorway.");
                 return false;
             }
 
@@ -530,12 +581,12 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- furniture
 
-        /// <summary>Places furniture of the current <see cref="ObstacleKind"/> and selects it.</summary>
+        /// <summary>Places an object of the current <see cref="ObstacleKind"/> and selects it.</summary>
         public void AddObstacle(Vector2 center, Vector2 size, float rotation = 0f)
         {
             var kind = obstacleKind;
 
-            Edit("Add Furniture", () =>
+            Edit($"Add {Obstacle.DefaultName(kind)}", () =>
             {
                 Level.Obstacles.Add(new Obstacle
                 {
@@ -577,7 +628,7 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
-            Edit("Delete Furniture", () =>
+            Edit($"Delete {obstacle.name}", () =>
             {
                 Level.Obstacles.RemoveAt(index);
                 selectedObstacle = -1;
@@ -592,7 +643,7 @@ namespace RobotVacuum.LevelEditor
             var source = GetObstacle(index);
             if (source == null) return;
 
-            Edit("Duplicate Furniture", () =>
+            Edit($"Duplicate {source.name}", () =>
             {
                 var copy = source.Clone();
                 copy.name = source.name + " copy";
@@ -613,7 +664,7 @@ namespace RobotVacuum.LevelEditor
             next = next?.Trim();
             if (obstacle == null || string.IsNullOrEmpty(next) || obstacle.name == next) return;
 
-            Edit("Rename Furniture", () => obstacle.name = next);
+            Edit($"Rename {obstacle.name}", () => obstacle.name = next);
         }
 
         /// <summary>
@@ -627,7 +678,7 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null || obstacle.kind == kind) return;
 
-            Edit("Furniture Kind", () =>
+            Edit("Object Kind", () =>
             {
                 if (obstacle.name.StartsWith(Obstacle.DefaultName(obstacle.kind), StringComparison.Ordinal))
                     obstacle.name = NextObstacleName(kind, index);
@@ -640,7 +691,7 @@ namespace RobotVacuum.LevelEditor
         public void SetObstacleBlocks(int index, bool blocks)
         {
             var obstacle = GetObstacle(index);
-            if (obstacle == null || obstacle.blocksVacuum == blocks) return;
+            if (obstacle == null || obstacle.kind == ObstacleKind.Cat || obstacle.blocksVacuum == blocks) return;
 
             Edit(blocks ? "Block Vacuum" : "Let Vacuum Pass", () => obstacle.blocksVacuum = blocks);
         }

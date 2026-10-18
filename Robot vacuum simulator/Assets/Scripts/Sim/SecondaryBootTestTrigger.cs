@@ -62,7 +62,7 @@ namespace RobotVacuum.Sim
                 driveSpeed = driveSpeed,
                 reverseSpeed = reverseSpeed,
                 turnSpeed = turnSpeed,
-                batteryLifeSeconds = batteryLifeSeconds,
+                batteryCapacity = batteryLifeSeconds,
                 useFeet = false,
             };
 

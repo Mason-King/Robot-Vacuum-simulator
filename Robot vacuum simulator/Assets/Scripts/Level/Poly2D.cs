@@ -178,6 +178,50 @@ namespace RobotVacuum.Level
             return true;
         }
 
+        /// <summary>True when two polygons share any interior area; boundary contact alone is allowed.</summary>
+        public static bool InteriorsOverlap(IList<Vector2> a, IList<Vector2> b)
+        {
+            if (a == null || a.Count < 3 || b == null || b.Count < 3) return false;
+
+            for (int i = 0; i < a.Count; i++)
+                if (IsStrictlyInside(b, a[i])) return true;
+            for (int i = 0; i < b.Count; i++)
+                if (IsStrictlyInside(a, b[i])) return true;
+
+            if (HasTriangleInteriorInside(a, b) || HasTriangleInteriorInside(b, a)) return true;
+
+            for (int i = 0; i < a.Count; i++)
+            {
+                Vector2 a1 = a[i], a2 = a[(i + 1) % a.Count];
+                for (int j = 0; j < b.Count; j++)
+                    if (SegmentsIntersect(a1, a2, b[j], b[(j + 1) % b.Count])) return true;
+            }
+
+            return false;
+        }
+
+        static bool HasTriangleInteriorInside(IList<Vector2> source, IList<Vector2> target)
+        {
+            int[] triangles = Triangulate(source);
+            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                Vector2 interior = (source[triangles[i]] + source[triangles[i + 1]] + source[triangles[i + 2]]) / 3f;
+                if (IsStrictlyInside(target, interior)) return true;
+            }
+
+            return false;
+        }
+
+        static bool IsStrictlyInside(IList<Vector2> polygon, Vector2 point)
+        {
+            const float boundaryTolerance = 1e-5f;
+            for (int i = 0; i < polygon.Count; i++)
+                if (DistanceToSegment(point, polygon[i], polygon[(i + 1) % polygon.Count], out _) <= boundaryTolerance)
+                    return false;
+
+            return ContainsPoint(polygon, point);
+        }
+
         public static float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
 
         public static bool PointInTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)

@@ -19,6 +19,57 @@ namespace RobotVacuum.Level
     /// </summary>
     public static class LevelGeometry
     {
+        /// <summary>True when a point lies within the solid width of a wall, excluding doorway gaps.</summary>
+        public static bool IsInsideWall(LevelData level, Vector2 point)
+        {
+            if (level == null) return false;
+
+            float halfThickness = level.WallThickness * 0.5f;
+            float snapDistance = level.DoorwaySnapDistance;
+
+            for (int roomIndex = 0; roomIndex < level.Rooms.Count; roomIndex++)
+            {
+                var room = level.Rooms[roomIndex];
+                if (room == null || !room.IsValid) continue;
+
+                for (int edge = 0; edge < room.EdgeCount; edge++)
+                {
+                    if (!room.HasWall(edge)) continue;
+                    if (InsideSolidWall(point, room.EdgeStart(edge), room.EdgeEnd(edge), halfThickness, snapDistance, level.Doorways))
+                        return true;
+                }
+            }
+
+            foreach (var stroke in level.WallStrokes)
+                if (stroke != null && InsideSolidWall(point, stroke.a, stroke.b, halfThickness, snapDistance, level.Doorways))
+                    return true;
+
+            return false;
+        }
+
+        static bool InsideSolidWall(
+            Vector2 point, Vector2 start, Vector2 end, float halfThickness, float snapDistance, List<Doorway> doorways)
+        {
+            float length = Vector2.Distance(start, end);
+            if (length < 1e-4f) return false;
+
+            float distance = Poly2D.DistanceToSegment(point, start, end, out float pointT);
+            if (distance > halfThickness) return false;
+
+            foreach (var doorway in doorways)
+            {
+                if (doorway == null) continue;
+
+                float doorwayDistance = Poly2D.DistanceToSegment(doorway.center, start, end, out float doorwayT);
+                if (doorwayDistance > snapDistance) continue;
+
+                float halfGap = doorway.width * 0.5f / length;
+                if (Mathf.Abs(pointT - doorwayT) <= halfGap) return false;
+            }
+
+            return true;
+        }
+
         /// <summary>
         /// Every room edge, split around any doorway sitting on it. A doorway near an edge
         /// shared by two rooms cuts both walls, which is what opens the connection.

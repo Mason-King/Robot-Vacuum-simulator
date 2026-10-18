@@ -16,6 +16,7 @@ namespace RobotVacuum.Level
     {
         const string GeneratedRootName = "Generated";
         const float PassableRimWidth = 0.06f;
+        const float PassableLegSize = 0.08f;
 
         [SerializeField] LevelData level;
         [SerializeField] bool rebuildOnEnable = true;
@@ -179,8 +180,8 @@ namespace RobotVacuum.Level
         }
 
         /// <summary>
-        /// Furniture that blocks the vacuum is solid with a collider. Furniture the vacuum passes under is
-        /// only a rim with no collider, so the floor and its coverage stay visible beneath it.
+        /// Furniture that blocks the vacuum is solid with a collider. Pass-under furniture has only four
+        /// corner colliders, leaving its center open so the floor and coverage stay visible beneath it.
         /// </summary>
         void BuildObstacles()
         {
@@ -188,7 +189,7 @@ namespace RobotVacuum.Level
 
             foreach (var obstacle in level.Obstacles)
             {
-                if (obstacle == null) continue;
+                if (obstacle == null || obstacle.kind == ObstacleKind.Cat) continue;
 
                 var corners = obstacle.Corners();
                 var vertices = new List<Vector3>();
@@ -216,8 +217,6 @@ namespace RobotVacuum.Level
                 mesh.RecalculateBounds();
                 if (drawMeshes) CreateMeshObject($"Obstacle_{obstacle.name}", mesh, Obstacle.ColorOf(obstacle.kind));
 
-                if (!obstacle.blocksVacuum) continue;
-
                 if (colliderRoot == null)
                 {
                     colliderRoot = new GameObject("ObstacleColliders").transform;
@@ -228,7 +227,26 @@ namespace RobotVacuum.Level
                 body.transform.SetParent(colliderRoot, false);
                 body.transform.localPosition = obstacle.center;
                 body.transform.localRotation = Quaternion.Euler(0f, 0f, obstacle.rotation);
-                body.AddComponent<BoxCollider2D>().size = obstacle.size;
+
+                if (obstacle.blocksVacuum)
+                {
+                    body.AddComponent<BoxCollider2D>().size = obstacle.size;
+                    continue;
+                }
+
+                float legSize = Mathf.Min(PassableLegSize, obstacle.size.x * 0.5f, obstacle.size.y * 0.5f);
+                float halfX = obstacle.size.x * 0.5f - legSize * 0.5f;
+                float halfY = obstacle.size.y * 0.5f - legSize * 0.5f;
+                for (int xSign = -1; xSign <= 1; xSign += 2)
+                {
+                    for (int ySign = -1; ySign <= 1; ySign += 2)
+                    {
+                        var leg = new GameObject($"Leg_{xSign}_{ySign}");
+                        leg.transform.SetParent(body.transform, false);
+                        leg.transform.localPosition = new Vector3(xSign * halfX, ySign * halfY, 0f);
+                        leg.AddComponent<BoxCollider2D>().size = Vector2.one * legSize;
+                    }
+                }
             }
         }
 

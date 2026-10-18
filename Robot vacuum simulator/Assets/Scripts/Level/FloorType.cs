@@ -15,6 +15,9 @@ namespace RobotVacuum.Level
     {
         public string displayName = "Floor";
 
+        [Tooltip("Whether this type is a floor covering that rooms can use.")]
+        public bool isFloor = true;
+
         [Tooltip("Colour the room is filled with, and the swatch shown in the level editor. " +
                  "With a texture or pattern this tints it.")]
         [FormerlySerializedAs("editorColor")]
@@ -35,6 +38,10 @@ namespace RobotVacuum.Level
         [Range(0.1f, 2f)]
         [Tooltip("Multiplies the vacuum's drive speed while it is on this covering.")]
         public float speedMultiplier = 1f;
+
+        [Range(0.1f, 4f)]
+        [Tooltip("Multiplies battery work cost while the vacuum travels or turns on this covering.")]
+        public float energyCostMultiplier = 1f;
 
         [Range(0.1f, 4f)]
         [Tooltip("Suction-seconds needed to clear one unit of dirt. Carpet is harder than hardwood.")]

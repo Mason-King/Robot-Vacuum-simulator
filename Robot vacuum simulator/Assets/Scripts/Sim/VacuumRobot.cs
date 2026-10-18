@@ -19,6 +19,9 @@ namespace RobotVacuum.Sim
     [RequireComponent(typeof(Battery))]
     public class VacuumRobot : MonoBehaviour
     {
+        const float StalledMovementThreshold = 0.0005f;
+        const float StalledTurnThreshold = 0.05f;
+
         enum State { Driving, Backing, Turning, Shifting }
 
         struct Step
@@ -64,8 +67,14 @@ namespace RobotVacuum.Sim
         float targetHeading;
         MovementBrain brain;
         MovementPattern brainPattern;
+
         int brainSeed;
+        bool algorithmFailed;
         float speedScale = 1f;
+        Vector2 batterySamplePosition;
+        float batterySampleHeading;
+        bool hasBatterySample;
+
         readonly Queue<Step> steps = new Queue<Step>();
         readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
@@ -78,6 +87,8 @@ namespace RobotVacuum.Sim
         /// this rather than <see cref="Time.time"/>, which counts from app start and is scaled by run speed.
         /// </summary>
         public float SimTime { get; private set; }
+
+        public bool AlgorithmFailed => algorithmFailed;
 
         public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
 
@@ -114,6 +125,7 @@ namespace RobotVacuum.Sim
                 steps.Clear();
                 state = State.Driving;
                 speedScale = 1f;
+                algorithmFailed = false;
             }
         }
 
@@ -176,10 +188,16 @@ namespace RobotVacuum.Sim
                     // from the local seed so the robot still works on its own.
                     RandomSource ??= new RandomProvider((uint)seed);
 
-                    brain = MovementBrain.Create(movementPattern, RandomSource);
+                    var replacement = MovementBrain.Create(movementPattern, RandomSource);
+                    if (!MovementBrainExecution.TryReset(replacement, this, out string failure))
+                    {
+                        FailAlgorithm($"Reset failed: {failure}");
+                        return null;
+                    }
+
+                    brain = replacement;
                     brainPattern = movementPattern;
                     brainSeed = seed;
-                    brain.Reset(this);
                 }
                 return brain;
             }
@@ -237,6 +255,8 @@ namespace RobotVacuum.Sim
             ConfigureComponents();
             if (levelRenderer == null)
                 levelRenderer = FindAnyObjectByType<LevelRenderer>(FindObjectsInactive.Include);
+
+            ResetBatteryMotionSample();
         }
 
         void OnEnable()
@@ -280,6 +300,14 @@ namespace RobotVacuum.Sim
         {
             if (!Application.isPlaying || body == null) return;
 
+            ConsumeCompletedWork();
+
+            if (algorithmFailed)
+            {
+                body.linearVelocity = Vector2.zero;
+                return;
+            }
+
             if (!battery.CanOperate)
             {
                 body.linearVelocity = Vector2.zero;
@@ -312,13 +340,66 @@ namespace RobotVacuum.Sim
 
         }
 
+        void ConsumeCompletedWork()
+        {
+            Vector2 position = body.position;
+            float heading = body.rotation;
+
+            if (hasBatterySample)
+            {
+                float distance = Vector2.Distance(batterySamplePosition, position);
+                float turn = Mathf.Abs(Mathf.DeltaAngle(batterySampleHeading, heading));
+                Vector2 midpoint = (batterySamplePosition + position) * 0.5f;
+                FloorType floor = levelRenderer != null ? levelRenderer.FloorTypeAtWorld(midpoint) : null;
+                float surfaceMultiplier = floor != null ? floor.energyCostMultiplier : 1f;
+                battery.ConsumeWork(distance, turn, surfaceMultiplier);
+
+                if (IsMotionStalled(distance, turn)) battery.ConsumeStalledTime(Time.fixedDeltaTime);
+            }
+
+            batterySamplePosition = position;
+            batterySampleHeading = heading;
+            hasBatterySample = true;
+        }
+
+        bool IsMotionStalled(float distance, float turn)
+        {
+            if (state == State.Turning)
+                return turnSpeed > 0f && Mathf.Abs(Mathf.DeltaAngle(body.rotation, targetHeading)) > 1f &&
+                       turn < StalledTurnThreshold;
+
+            float expectedSpeed = state switch
+            {
+                State.Driving => DriveSpeedNow,
+                State.Backing => reverseSpeed,
+                State.Shifting => DriveSpeedNow,
+                _ => 0f,
+            };
+
+            return expectedSpeed > 0f && distance < StalledMovementThreshold;
+        }
+
+        void ResetBatteryMotionSample()
+        {
+            if (body == null) return;
+
+            batterySamplePosition = body.position;
+            batterySampleHeading = body.rotation;
+            hasBatterySample = true;
+        }
+
         void Drive(float dt)
         {
             float speed = DriveSpeedNow;
             body.linearVelocity = Forward * speed;
             DistanceTravelled += speed * dt;
 
-            float steer = Brain.Steer(this, dt);
+            if (!MovementBrainExecution.TrySteer(Brain, this, dt, out float steer, out string failure))
+            {
+                FailAlgorithm($"Steering failed: {failure}");
+                return;
+            }
+
             if (steer != 0f) body.MoveRotation(body.rotation + steer * dt);
 
             if (WhiskerBlocked()) BeginBackup();
@@ -394,7 +475,12 @@ namespace RobotVacuum.Sim
             state = State.Backing;
             stateTimer = backupDuration;
 
-            var manoeuvre = Brain.AfterBump(this);
+            if (!MovementBrainExecution.TryAfterBump(Brain, this, out var manoeuvre, out string failure))
+            {
+                FailAlgorithm($"Bump handling failed: {failure}");
+                return;
+            }
+
             steps.Clear();
             steps.Enqueue(new Step { turn = true, amount = manoeuvre.turn });
 
@@ -426,6 +512,18 @@ namespace RobotVacuum.Sim
             }
         }
 
+        void FailAlgorithm(string failure)
+        {
+            if (algorithmFailed) return;
+
+            algorithmFailed = true;
+            state = State.Driving;
+            steps.Clear();
+            speedScale = 0f;
+            if (body != null) body.linearVelocity = Vector2.zero;
+            Debug.LogError($"Movement algorithm '{movementPattern}' stopped: {failure}", this);
+        }
+
         void TurnTowardsTarget(float dt)
         {
             float next = Mathf.MoveTowardsAngle(body.rotation, targetHeading, turnSpeed * dt);
@@ -439,6 +537,7 @@ namespace RobotVacuum.Sim
         {
             steps.Clear();
             state = State.Driving;
+            algorithmFailed = false;
             speedScale = 1f;
             SimTime = 0f;
 
@@ -447,8 +546,14 @@ namespace RobotVacuum.Sim
             // see VacuumRobot.RandomSource's doc comment for why this has to be a real rebuild, not just
             // telling the existing shared instance to rewind.
             RandomSource = new RandomProvider((uint)seed);
-            Brain.AssignRandomSource(RandomSource);
-            Brain.Reset(this);
+            var activeBrain = Brain;
+            if (activeBrain == null) return; // creation failed and was already reported
+            activeBrain.AssignRandomSource(RandomSource);
+            if (!MovementBrainExecution.TryReset(activeBrain, this, out string failure))
+            {
+                FailAlgorithm($"Reset failed: {failure}");
+                return;
+            }
 
             if (levelRenderer == null || levelRenderer.Level == null) return;
 
@@ -456,7 +561,7 @@ namespace RobotVacuum.Sim
                 levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
 
             DistanceTravelled = 0f;
-            battery.ResetBattery();
+            battery.ResetCharge();
 
             if (body != null)
             {
@@ -466,6 +571,7 @@ namespace RobotVacuum.Sim
                 body.rotation = 0f;
                 body.linearVelocity = Vector2.zero;
             }
+            ResetBatteryMotionSample();
         }
 
         // ---------------------------------------------------------------- visual

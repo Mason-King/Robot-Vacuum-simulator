@@ -27,6 +27,7 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Table));
             Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Bed));
             Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Chair));
+            Assert.IsFalse(Obstacle.DefaultBlocks(ObstacleKind.Cat));
             Assert.IsTrue(Obstacle.DefaultBlocks(ObstacleKind.Sofa));
             Assert.IsTrue(Obstacle.DefaultBlocks(ObstacleKind.Cabinet));
             Assert.IsTrue(Obstacle.DefaultBlocks(ObstacleKind.Box));
@@ -78,6 +79,37 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Renderer_CreatesFourLegCollidersForPassUnderFurniture()
+        {
+            level.Obstacles.Add(new Obstacle
+            {
+                center = Vector2.zero, size = new Vector2(1.4f, 0.8f), rotation = 30f, blocksVacuum = false,
+            });
+            var host = new GameObject("Level");
+            try
+            {
+                var renderer = host.AddComponent<LevelRenderer>();
+                renderer.Level = level;
+
+                var colliderRoot = host.transform.Find("Generated/ObstacleColliders");
+                Assert.IsNotNull(colliderRoot);
+                var legs = colliderRoot.GetComponentsInChildren<BoxCollider2D>();
+
+                Assert.AreEqual(4, legs.Length);
+                foreach (var leg in legs)
+                {
+                    Assert.AreEqual(new Vector2(0.08f, 0.08f), leg.size);
+                    Assert.IsTrue(leg.OverlapPoint(leg.bounds.center));
+                    Assert.IsFalse(leg.OverlapPoint(Vector2.zero));
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
         public void Snapshot_RoundTripsFurniture()
         {
             level.Obstacles.Add(new Obstacle
@@ -106,6 +138,24 @@ namespace RobotVacuum.Tests
             {
                 Object.DestroyImmediate(other);
             }
+        }
+
+        [Test]
+        public void Snapshot_RoundTripsPlacedCatAsPassable()
+        {
+            level.Obstacles.Add(new Obstacle
+            {
+                name = "Miso", kind = ObstacleKind.Cat, center = new Vector2(0.6f, 0.3f),
+                size = Obstacle.DefaultSize(ObstacleKind.Cat), blocksVacuum = true,
+            });
+
+            var snapshot = LevelSnapshot.Parse(LevelSnapshot.Serialize(level, "Flat"));
+            var cat = snapshot.obstacles.Single();
+
+            Assert.AreEqual("Miso", cat.name);
+            Assert.AreEqual(ObstacleKind.Cat, cat.kind);
+            TestLevels.AssertNear(new Vector2(0.6f, 0.3f), cat.center);
+            Assert.IsFalse(cat.blocksVacuum);
         }
 
         [Test]
@@ -185,7 +235,7 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(table.blocksVacuum);
             TestLevels.AssertNear(new Vector2(0.5f, 0.2f), table.center);
             Assert.AreEqual(-1, session.SelectedRoom);
-            Assert.AreEqual("Add Furniture", session.UndoLabel);
+            Assert.AreEqual("Add Table", session.UndoLabel);
 
             session.AddObstacle(Vector2.zero, Vector2.one);
             Assert.AreEqual("Table 2", session.SelectedObstacleData.name);

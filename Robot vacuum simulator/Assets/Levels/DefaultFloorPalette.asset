@@ -140,6 +140,7 @@ MonoBehaviour:
   m_Name: Wall
   m_EditorClassIdentifier: Assembly-CSharp::RobotVacuum.Level.FloorType
   displayName: Wall
+  isFloor: 0
   editorColor: {r: 0.22745098, g: 0.24705882, b: 0.29411766, a: 1}
   traversable: 0
   speedMultiplier: 1
