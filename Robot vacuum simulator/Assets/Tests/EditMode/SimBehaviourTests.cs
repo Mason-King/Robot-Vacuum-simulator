@@ -88,6 +88,7 @@ namespace RobotVacuum.Tests
         public void RandomBounce_TurnsWithinTheRobotsRange()
         {
             var brain = new RandomBounceBrain();
+            brain.AssignRandomSource(new RandomProvider(1u));
 
             for (int i = 0; i < 25; i++)
             {
@@ -104,6 +105,8 @@ namespace RobotVacuum.Tests
         public void Spiral_WidensOverTime_BouncesAfterABump_ThenSpiralsAgain()
         {
             var brain = new SpiralBrain();
+            brain.AssignRandomSource(new RandomProvider(1u));
+            
             brain.Reset(robot);
             const float dt = 0.02f;
 
