@@ -281,9 +281,9 @@ namespace RobotVacuum.LevelEditor
         string ToolHint() => tool switch
         {
             Tool.Select => "Drag a room to move it, drag its dots to reshape. Double-click an edge to add a point. Right-click for more.",
-            Tool.Rect => "Drag out a rectangle to create a room. Hold Shift for a perfect square.",
+            Tool.Rect => "Drag out a rectangle to create a room. Hold Shift to disable snapping and draw a square.",
             Tool.Pen => "Click to drop points. Click the first point again, or press Enter, to close the room. Backspace undoes a point, Esc cancels.",
-            Tool.Wall => "Click a room edge to remove or restore that one wall. Drag in open space to draw a free-standing wall; Shift locks to 0/45/90°. Click a free-standing wall to delete it.",
+            Tool.Wall => "Click a room edge to remove or restore that one wall. Drag in open space to draw a free-standing wall; Shift disables snapping and locks to 0/45/90°. Click a free-standing wall to delete it.",
             Tool.Doorway => "Click on a wall to cut a doorway. The two nearest rooms get linked.",
             Tool.Spawn => "Click to move the vacuum's starting point.",
             _ => string.Empty,
@@ -311,6 +311,7 @@ namespace RobotVacuum.LevelEditor
             }
 
             if (EditorGUI.EndChangeCheck()) Repaint();
+            EditorGUILayout.LabelField("Hold Shift while drawing or moving to disable snapping.", EditorStyles.miniLabel);
         }
 
         void DrawPalette()
@@ -332,6 +333,9 @@ namespace RobotVacuum.LevelEditor
 
             for (int i = 0; i < level.Palette.Count; i++)
             {
+                var floor = level.Palette.Get(i);
+                if (floor != null && !floor.isFloor) continue;
+
                 var row = EditorGUILayout.GetControlRect(false, 20f);
                 bool isActive = selected != null ? selected.floorIndex == i : paintFloor == i;
 
@@ -784,8 +788,13 @@ namespace RobotVacuum.LevelEditor
                     var room = level.GetRoom(dragRoom);
                     if (room == null || dragVertex < 0 || dragVertex >= room.outline.Count) break;
 
+                    Vector2 snapped = Snap(point, dragRoom, dragVertex);
+                    var proposed = new List<Vector2>(room.outline);
+                    proposed[dragVertex] = snapped;
+                    if (!CanPlaceRoom(proposed, dragRoom)) break;
+
                     Undo.RecordObject(level, "Move Point");
-                    room.outline[dragVertex] = Snap(point, dragRoom, dragVertex);
+                    room.outline[dragVertex] = snapped;
                     MarkLevelChanged();
                     break;
                 }
@@ -797,6 +806,10 @@ namespace RobotVacuum.LevelEditor
 
                     Vector2 delta = point - dragLastLevel;
                     if (delta.sqrMagnitude < 1e-10f) break;
+
+                    var proposed = new List<Vector2>(room.outline.Count);
+                    foreach (Vector2 corner in room.outline) proposed.Add(corner + delta);
+                    if (!CanPlaceRoom(proposed, dragRoom)) break;
 
                     Undo.RecordObject(level, "Move Room");
                     for (int v = 0; v < room.outline.Count; v++) room.outline[v] += delta;
@@ -922,6 +935,12 @@ namespace RobotVacuum.LevelEditor
             {
                 var room = level.Rooms[roomIndex];
                 bool present = room.HasWall(edgeIndex);
+
+                if (!present && level.HasDoorwayOnWall(roomIndex, edgeIndex))
+                {
+                    ShowNotification(new GUIContent("Remove the doorway before deleting this wall"));
+                    return;
+                }
 
                 Undo.RecordObject(level, present ? "Delete Wall" : "Restore Wall");
                 room.SetWall(edgeIndex, !present);
@@ -1091,6 +1110,9 @@ namespace RobotVacuum.LevelEditor
                 {
                     for (int i = 0; i < level.Palette.Count; i++)
                     {
+                        var floor = level.Palette.Get(i);
+                        if (floor != null && !floor.isFloor) continue;
+
                         int captured = i;
                         menu.AddItem(
                             new GUIContent("Floor Covering/" + level.Palette.LabelOf(i)),
@@ -1109,7 +1131,13 @@ namespace RobotVacuum.LevelEditor
                     bool present = level.Rooms[wallRoom].HasWall(wallEdge);
                     menu.AddItem(new GUIContent(present ? "Delete This Wall" : "Restore This Wall"), false, () =>
                     {
-                        Undo.RecordObject(level, present ? "Delete Wall" : "Restore Wall");
+                        if (!present && level.HasDoorwayOnWall(wallRoom, wallEdge))
+                        {
+                            ShowNotification(new GUIContent("Remove the doorway before deleting this wall"));
+                            return;
+                        }
+
+                        Undo.RecordObject(level, present ? "Restore Wall" : "Delete Wall");
                         level.Rooms[wallRoom].SetWall(wallEdge, !present);
                         MarkLevelChanged();
                     });
@@ -1117,6 +1145,13 @@ namespace RobotVacuum.LevelEditor
 
                 menu.AddItem(new GUIContent("Walls/Remove All"), false, () =>
                 {
+                    for (int edge = 0; edge < room.EdgeCount; edge++)
+                    {
+                        if (!room.HasWall(edge) || !level.HasDoorwayOnWall(roomIndex, edge)) continue;
+                        ShowNotification(new GUIContent("Remove the doorway before deleting this wall"));
+                        return;
+                    }
+
                     Undo.RecordObject(level, "Remove Walls");
                     room.SetAllWalls(false);
                     MarkLevelChanged();
@@ -1408,6 +1443,8 @@ namespace RobotVacuum.LevelEditor
 
         Vector2 Snap(Vector2 point, int skipRoom = -1, int skipVertex = -1)
         {
+            if (Event.current != null && Event.current.shift) return point;
+
             if (snapToVertices)
             {
                 float threshold = HandlePixels * 1.4f / zoom;
@@ -1546,6 +1583,13 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
+            if (TryFindAnyEdge(snapped, level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
+                level.HasDoorwayOnWall(wallRoom, wallEdge))
+            {
+                ShowNotification(new GUIContent("This wall already has a doorway"));
+                return;
+            }
+
             Undo.RecordObject(level, "Place Doorway");
             level.Doorways.Add(new Doorway { roomA = roomA, roomB = roomB, center = snapped, width = 0.9f });
             selectedDoorway = level.Doorways.Count - 1;
@@ -1558,8 +1602,26 @@ namespace RobotVacuum.LevelEditor
             return room != null ? room.name : "Outside";
         }
 
+        bool CanPlaceRoom(IList<Vector2> outline, int ignoreRoom = -1)
+        {
+            for (int i = 0; i < level.Rooms.Count; i++)
+            {
+                var room = level.Rooms[i];
+                if (i == ignoreRoom || room == null || !room.IsValid) continue;
+                if (Poly2D.InteriorsOverlap(outline, room.outline)) return false;
+            }
+
+            return outline != null && outline.Count >= 3;
+        }
+
         void AddRoom(List<Vector2> outline)
         {
+            if (!CanPlaceRoom(outline))
+            {
+                ShowNotification(new GUIContent("Rooms can't overlap other rooms"));
+                return;
+            }
+
             Undo.RecordObject(level, "Add Room");
 
             var room = new Room
@@ -1581,16 +1643,22 @@ namespace RobotVacuum.LevelEditor
             var source = level.GetRoom(index);
             if (source == null) return;
 
+            var outline = new List<Vector2>(source.outline);
+            var offset = new Vector2(Poly2D.Bounds(source.outline).width + 0.4f, 0f);
+            for (int v = 0; v < outline.Count; v++) outline[v] += offset;
+            if (!CanPlaceRoom(outline))
+            {
+                ShowNotification(new GUIContent("Rooms can't overlap other rooms"));
+                return;
+            }
+
             Undo.RecordObject(level, "Duplicate Room");
             var copy = new Room
             {
                 name = source.name + " Copy",
                 floorIndex = source.floorIndex,
-                outline = new List<Vector2>(source.outline),
+                outline = outline,
             };
-
-            var offset = new Vector2(Poly2D.Bounds(source.outline).width + 0.4f, 0f);
-            for (int v = 0; v < copy.outline.Count; v++) copy.outline[v] += offset;
 
             selectedRoom = level.AddRoom(copy);
             MarkLevelChanged();

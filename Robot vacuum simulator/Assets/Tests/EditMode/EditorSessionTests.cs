@@ -316,6 +316,28 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void AddRoom_RefusesOverlappingRoomsButAllowsSharedEdges()
+        {
+            Assert.IsFalse(session.AddRoom(TestLevels.Square(new Vector2(-0.5f, -0.5f), 1f)));
+            Assert.IsFalse(session.AddRoom(new List<Vector2>(Room(0).outline)));
+            Assert.AreEqual(1, session.Level.Rooms.Count);
+            Assert.IsFalse(session.CanUndo);
+            Assert.AreEqual("Rooms can't overlap other rooms.", notices.Last());
+
+            Assert.IsTrue(session.AddRoom(TestLevels.Square(new Vector2(2f, -1.5f), 2f)));
+            Assert.AreEqual(2, session.Level.Rooms.Count);
+        }
+
+        [Test]
+        public void AddRoom_RefusesPartialOverlap()
+        {
+            Assert.IsFalse(session.AddRoom(TestLevels.Square(new Vector2(1f, -0.5f), 2f)));
+
+            Assert.AreEqual(1, session.Level.Rooms.Count);
+            Assert.IsFalse(session.CanUndo);
+        }
+
+        [Test]
         public void AddRoom_SkipsNamesAlreadyInUse()
         {
             session.AddRoom(FarSquare());
@@ -420,6 +442,28 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void SetWall_RefusesToRemoveAWallWithADoorway()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(0f, -1.5f)));
+
+            session.SetWall(0, 0, false);
+
+            Assert.IsTrue(Room(0).HasWall(0));
+            Assert.AreEqual("Remove the doorway before deleting this wall.", notices.Last());
+        }
+
+        [Test]
+        public void SetAllWalls_RefusesWhenAnyWallHasADoorway()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(0f, -1.5f)));
+
+            session.SetAllWalls(0, false);
+
+            Assert.AreEqual(4, session.WallCount(Room(0)));
+            Assert.AreEqual("Remove the doorway before deleting this wall.", notices.Last());
+        }
+
+        [Test]
         public void InsertVertex_KeepsWallFlagsOnTheRightEdges()
         {
             session.SetWall(0, 2, false); // top wall
@@ -483,6 +527,17 @@ namespace RobotVacuum.Tests
 
             var doorway = session.Level.Doorways.Last();
             CollectionAssert.AreEquivalent(new[] { 0, 1 }, new[] { doorway.roomA, doorway.roomB });
+        }
+
+        [Test]
+        public void PlaceDoorway_RefusesASecondDoorwayOnTheSameWall()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(0f, -1.5f)));
+
+            Assert.IsFalse(session.PlaceDoorway(new Vector2(1f, -1.5f)));
+
+            Assert.AreEqual(1, session.Level.Doorways.Count);
+            Assert.AreEqual("This wall already has a doorway.", notices.Last());
         }
 
         [Test]

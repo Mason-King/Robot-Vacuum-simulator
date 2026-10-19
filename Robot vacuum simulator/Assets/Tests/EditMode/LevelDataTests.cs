@@ -253,6 +253,41 @@ namespace RobotVacuum.Tests
             }
         }
 
+        [Test]
+        public void FloorTypeAt_DoesNotReturnFloorForSolidWallPoints()
+        {
+            var palette = FloorPalette.CreateDefault();
+            FloorType wall = null;
+            try
+            {
+                wall = ScriptableObject.CreateInstance<FloorType>();
+                wall.displayName = "Wall";
+                wall.isFloor = false;
+                palette.Add(wall);
+                level.Palette = palette;
+                Vector2 nearBottomWall = new Vector2(0f, -1.49f);
+
+                Assert.IsNull(level.FloorTypeAt(nearBottomWall));
+                Assert.IsNotNull(level.FloorTypeAt(new Vector2(0f, -1.4f)));
+
+                level.Doorways.Add(new Doorway { roomA = 0, center = new Vector2(0f, -1.5f), width = 0.9f });
+                Assert.AreEqual("Hardwood", level.FloorTypeAt(nearBottomWall).Label);
+                level.Doorways.Clear();
+
+                level.Rooms[0].SetWall(0, false);
+                Assert.AreEqual("Hardwood", level.FloorTypeAt(nearBottomWall).Label);
+
+                level.Rooms[0].floorIndex = palette.Count - 1;
+                Assert.IsNull(level.FloorTypeAt(level.Rooms[0].Center), "non-floor palette entries aren't room coverings");
+            }
+            finally
+            {
+                foreach (var floor in palette.Entries)
+                    if (floor != wall) Object.DestroyImmediate(floor);
+                Object.DestroyImmediate(palette);
+            }
+        }
+
         [TestCase(0f)]
         [TestCase(37f)]
         [TestCase(90f)]

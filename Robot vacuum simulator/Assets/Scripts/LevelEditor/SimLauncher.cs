@@ -104,6 +104,8 @@ namespace RobotVacuum.LevelEditor
                 robot.ResetToSpawn();
             }
 
+            MovingCat.SpawnPlacedCats(renderer, renderer.transform);
+
             if (Camera.main != null) FrameCamera(Camera.main, WorldBounds(renderer, level));
 
             new GameObject("Simulator HUD").AddComponent<SimHud>().Show(level);
