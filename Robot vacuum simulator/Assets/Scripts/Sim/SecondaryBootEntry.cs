@@ -129,7 +129,9 @@ namespace RobotVacuum.Sim
                 // used. Graphics mode uses whatever playback speed the caller
                 // asked for (default real-time) -- 100x would make a live
                 // robot impossible to actually see moving.
-                Time.timeScale = config.headless ? 100f : config.playbackSpeed;
+                SimulationSpeed.Apply(
+                    config.headless ? SimulationSpeed.MaxPlaybackSpeed : config.playbackSpeed,
+                    Time.maximumDeltaTime);
             }
 
             void ApplySettings(VacuumSettings settings, VacuumRobot robot, Battery battery)

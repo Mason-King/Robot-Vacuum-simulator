@@ -52,6 +52,15 @@ namespace RobotVacuum.Sim
         [Tooltip("PENDING: no persistent 'current settings' instance was found anywhere in the project. Wire this to wherever that ends up living. Left unset, the robot gets zero drive speed and will silently not move -- not a crash, easy to mistake for a bug.")]
         [SerializeField] VacuumSettings vacuumSettingsOverride;
 
+        void Awake()
+        {
+            if (speedSlider == null) return;
+
+            speedSlider.minValue = 1f;
+            speedSlider.maxValue = SimulationSpeed.MaxPlaybackSpeed;
+            speedSlider.wholeNumbers = false;
+        }
+
         public void OnRunButtonClicked()
         {
             if (editorSession == null || editorSession.Level == null)

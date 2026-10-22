@@ -24,7 +24,7 @@ namespace RobotVacuum.Sim
         public float simulatedSeconds;
         public bool headless;
 
-        // How fast Graphics-mode plays back (Time.timeScale while watching).
+        // How fast Graphics-mode plays back (up to 100x Time.timeScale while watching).
         // Irrelevant in headless -- that always runs at a fixed fast multiplier
         // regardless, since nobody's watching it.
         public float playbackSpeed = 1f;

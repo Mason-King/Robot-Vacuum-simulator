@@ -47,6 +47,57 @@ namespace RobotVacuum.Level
             return false;
         }
 
+        /// <summary>True when a polygon footprint overlaps any solid wall, including its thickness.</summary>
+        public static bool FootprintOverlapsWall(LevelData level, IList<Vector2> footprint)
+        {
+            if (level == null || footprint == null || footprint.Count < 3) return false;
+
+            float clearance = Mathf.Max(0f, level.WallThickness * 0.5f - 1e-4f);
+            foreach (var wall in CollectWallSegments(level))
+            {
+                if (Poly2D.ContainsPoint(footprint, wall.a) || Poly2D.ContainsPoint(footprint, wall.b))
+                    return true;
+
+                for (int i = 0; i < footprint.Count; i++)
+                {
+                    Vector2 a = footprint[i];
+                    Vector2 b = footprint[(i + 1) % footprint.Count];
+                    if (SegmentsIntersect(a, b, wall.a, wall.b)) return true;
+                    if (Poly2D.DistanceToSegment(wall.a, a, b, out _) < clearance ||
+                        Poly2D.DistanceToSegment(wall.b, a, b, out _) < clearance ||
+                        Poly2D.DistanceToSegment(a, wall.a, wall.b, out _) < clearance ||
+                        Poly2D.DistanceToSegment(b, wall.a, wall.b, out _) < clearance)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool SegmentsIntersect(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+        {
+            const float tolerance = 1e-6f;
+            float abC = Poly2D.Cross(b - a, c - a);
+            float abD = Poly2D.Cross(b - a, d - a);
+            float cdA = Poly2D.Cross(d - c, a - c);
+            float cdB = Poly2D.Cross(d - c, b - c);
+
+            if (((abC > tolerance && abD < -tolerance) || (abC < -tolerance && abD > tolerance)) &&
+                ((cdA > tolerance && cdB < -tolerance) || (cdA < -tolerance && cdB > tolerance)))
+                return true;
+
+            return Mathf.Abs(abC) <= tolerance && IsOnSegment(a, b, c, tolerance) ||
+                   Mathf.Abs(abD) <= tolerance && IsOnSegment(a, b, d, tolerance) ||
+                   Mathf.Abs(cdA) <= tolerance && IsOnSegment(c, d, a, tolerance) ||
+                   Mathf.Abs(cdB) <= tolerance && IsOnSegment(c, d, b, tolerance);
+        }
+
+        static bool IsOnSegment(Vector2 a, Vector2 b, Vector2 point, float tolerance) =>
+            point.x >= Mathf.Min(a.x, b.x) - tolerance &&
+            point.x <= Mathf.Max(a.x, b.x) + tolerance &&
+            point.y >= Mathf.Min(a.y, b.y) - tolerance &&
+            point.y <= Mathf.Max(a.y, b.y) + tolerance;
+
         static bool InsideSolidWall(
             Vector2 point, Vector2 start, Vector2 end, float halfThickness, float snapDistance, List<Doorway> doorways)
         {

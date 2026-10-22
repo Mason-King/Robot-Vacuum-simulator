@@ -20,6 +20,9 @@ namespace RobotVacuum.Level
         [Tooltip("Index into the level's floor palette.")]
         public int floorIndex;
 
+        [Tooltip("Room rotation in degrees, used by the editor's rotation controls.")]
+        public float rotation;
+
         [Tooltip("One flag per outline edge. False means that wall has been deleted.")]
         public List<bool> wallEdges = new List<bool>();
 

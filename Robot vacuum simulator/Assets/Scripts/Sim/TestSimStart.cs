@@ -49,7 +49,7 @@ namespace RobotVacuum.Sim
                 seed = request.seed,
                 simulatedSeconds = SafetyCapSeconds,
                 headless = request.headless,
-                playbackSpeed = request.playbackSpeed,
+                playbackSpeed = request.headless ? 100f : SimulationSpeed.ClampPlaybackSpeed(request.playbackSpeed),
                 targetMaxClean = runner.Cleaning != null ? runner.Cleaning.TargetMaxClean : HeatmapDefaults.TargetMaxClean,
                 resultPath = Path.Combine(runFolder, RunArtifacts.ResultFileName),
             };
@@ -73,6 +73,7 @@ namespace RobotVacuum.Sim
             float simulatedSeconds;
             float realSeconds;
             float originalTimeScale;
+            float originalMaximumDeltaTime;
 
             public void Begin(TestSimRunRequest request, SimulationRunner runner, string runFolder, Action<RunResult> onComplete)
             {
@@ -82,7 +83,8 @@ namespace RobotVacuum.Sim
                 this.onComplete = onComplete;
 
                 originalTimeScale = Time.timeScale;
-                Time.timeScale = request.headless ? 100f : Mathf.Max(request.playbackSpeed, 0.01f);
+                originalMaximumDeltaTime = Time.maximumDeltaTime;
+                SimulationSpeed.Apply(request.headless ? 100f : request.playbackSpeed, originalMaximumDeltaTime);
             }
 
             void FixedUpdate()
@@ -104,6 +106,7 @@ namespace RobotVacuum.Sim
             {
                 enabled = false;
                 Time.timeScale = originalTimeScale;
+                Time.maximumDeltaTime = originalMaximumDeltaTime;
 
                 var result = new RunResult
                 {

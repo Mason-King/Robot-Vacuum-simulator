@@ -182,6 +182,7 @@ MonoBehaviour:
   m_Name: Furniture
   m_EditorClassIdentifier: Assembly-CSharp::RobotVacuum.Level.FloorType
   displayName: Furniture
+  isFloor: 0
   editorColor: {r: 0.3529412, g: 0.27450982, b: 0.21176471, a: 1}
   traversable: 0
   speedMultiplier: 1

@@ -79,6 +79,17 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void FootprintOverlapsWall_DetectsWallThicknessAndAllowsDoorways()
+        {
+            var footprint = LevelData.RectangleOutline(new Vector2(1.82f, 0f), new Vector2(0.4f, 0.4f));
+
+            Assert.IsTrue(LevelGeometry.FootprintOverlapsWall(level, footprint));
+
+            level.Doorways.Add(new Doorway { center = new Vector2(2f, 0f), width = 1f });
+            Assert.IsFalse(LevelGeometry.FootprintOverlapsWall(level, footprint));
+        }
+
+        [Test]
         public void Renderer_CreatesFourLegCollidersForPassUnderFurniture()
         {
             level.Obstacles.Add(new Obstacle
@@ -249,6 +260,52 @@ namespace RobotVacuum.Tests
             var obstacle = session.GetObstacle(0);
             TestLevels.AssertNear(Vector2.one * Obstacle.MinSize, obstacle.size);
             Assert.AreEqual(270f, obstacle.rotation, 1e-4f);
+        }
+
+        [Test]
+        public void MoveObstacleLive_StopsBeforeFurnitureCrossesAWall()
+        {
+            session.Level.WallStrokes.Add(new WallStroke
+            {
+                a = new Vector2(0f, -1f),
+                b = new Vector2(0f, 1f),
+            });
+            session.AddObstacle(new Vector2(-1f, 0f), new Vector2(0.5f, 0.5f));
+
+            session.MoveObstacleLive(0, new Vector2(1f, 0f));
+
+            Assert.Less(session.GetObstacle(0).center.x, 0f);
+            Assert.Greater(session.GetObstacle(0).center.x, -0.5f);
+        }
+
+        [Test]
+        public void SetObstacleRotationLive_RejectsRotationThatSweepsThroughAWall()
+        {
+            session.Level.WallStrokes.Add(new WallStroke
+            {
+                a = new Vector2(0f, -1f),
+                b = new Vector2(0f, 1f),
+            });
+            session.AddObstacle(new Vector2(-0.5f, 0f), new Vector2(1.2f, 0.2f), 90f);
+
+            session.SetObstacleRotationLive(0, 270f);
+
+            Assert.AreEqual(90f, session.GetObstacle(0).rotation, 1e-4f);
+        }
+
+        [Test]
+        public void SetObstacleSizeLive_RejectsResizeThatOverlapsAWall()
+        {
+            session.Level.WallStrokes.Add(new WallStroke
+            {
+                a = new Vector2(0f, -1f),
+                b = new Vector2(0f, 1f),
+            });
+            session.AddObstacle(new Vector2(-0.5f, 0f), new Vector2(0.5f, 0.5f));
+
+            session.SetObstacleSizeLive(0, new Vector2(1.2f, 0.5f));
+
+            TestLevels.AssertNear(new Vector2(0.5f, 0.5f), session.GetObstacle(0).size);
         }
 
         [Test]

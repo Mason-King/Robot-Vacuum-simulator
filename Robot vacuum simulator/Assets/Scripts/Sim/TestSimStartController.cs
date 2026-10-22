@@ -57,6 +57,15 @@ namespace RobotVacuum.Sim
         [Header("Vacuum settings source")]
         [SerializeField] VacuumSettings vacuumSettingsOverride;
 
+        void Awake()
+        {
+            if (speedSlider == null) return;
+
+            speedSlider.minValue = 1f;
+            speedSlider.maxValue = SimulationSpeed.MaxPlaybackSpeed;
+            speedSlider.wholeNumbers = false;
+        }
+
         public void OnRunButtonClicked()
         {
             if (editorSession == null || editorSession.Level == null)
