@@ -7,6 +7,7 @@ namespace RobotVacuum.LevelEditor
     /// The vacuum's tunable drive and battery settings. The editor keeps one of these so changes
     /// carry over from run to run, even though every run builds a fresh robot.
     /// </summary>
+    [System.Serializable]
     public sealed class VacuumSettings
     {
         public const float MetresToFeet = 3.28084f;
