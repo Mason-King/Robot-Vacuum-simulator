@@ -79,7 +79,9 @@ namespace RobotVacuum.Sim
                 seed = seed,
                 simulatedSeconds = MaxSimulatedSecondsSafetyCap,
                 headless = headless,
-                playbackSpeed = playbackSpeed,
+                playbackSpeed = headless
+                    ? SimulationSpeed.MaxPlaybackSpeed
+                    : SimulationSpeed.ClampPlaybackSpeed(playbackSpeed),
                 targetMaxClean = targetMaxClean > 0f ? targetMaxClean : HeatmapDefaults.TargetMaxClean,
                 resultPath = resultPath,
             };
