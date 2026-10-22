@@ -14,9 +14,6 @@ namespace RobotVacuum.LevelEditor
     [DisallowMultipleComponent]
     public sealed class SimHud : MonoBehaviour
     {
-        static readonly float[] Speeds = { 0.5f, 1f, 2f, 4f, 8f };
-        static readonly string[] SpeedLabels = { "0.5×", "1×", "2×", "4×", "8×" };
-
         PanelSettings panelSettings;
         LevelData level;
         VacuumCleaningController cleaning;
@@ -26,6 +23,7 @@ namespace RobotVacuum.LevelEditor
         OverlayLayer overlay;
         float startTime;
         float savedTimeScale = 1f;
+        float savedMaximumDeltaTime;
         float playbackSpeed = 1f;
         bool isPaused;
         bool leaving;
@@ -48,6 +46,7 @@ namespace RobotVacuum.LevelEditor
             level = handedLevel;
             Rebind();
             savedTimeScale = Time.timeScale;
+            savedMaximumDeltaTime = Time.maximumDeltaTime;
 
             var root = UiPanel.Create(transform, "Simulator HUD", 1f, out panelSettings);
             root.pickingMode = PickingMode.Ignore;
@@ -68,11 +67,12 @@ namespace RobotVacuum.LevelEditor
             Ui.Tooltip(settingsButton, "Vacuum speed and battery");
 
             // Scales simulated time, so the robot, cleaning and the runtime readout stay together.
-            var speed = new Segmented(SpeedLabels, Array.IndexOf(Speeds, 1f));
-            speed.SelectionChanged += index =>
+            Ui.Text(bar, "Speed", "le-field-label");
+            var speed = new ValueSlider(0.5f, SimulationSpeed.MaxPlaybackSpeed, 1f, value => $"{value:0.##}×", true);
+            speed.ValueChanged += value =>
             {
-                playbackSpeed = Speeds[index];
-                if (!isPaused) Time.timeScale = playbackSpeed;
+                playbackSpeed = SimulationSpeed.ClampPlaybackSpeed(value);
+                if (!isPaused) SimulationSpeed.Apply(playbackSpeed, savedMaximumDeltaTime);
             };
             Ui.Tooltip(speed, "Simulation speed");
             bar.Add(speed);
@@ -81,7 +81,8 @@ namespace RobotVacuum.LevelEditor
             pauseButton = Ui.IconButton(bar, IconKind.Pause, "Pause or resume the simulation", () =>
             {
                 isPaused = !isPaused;
-                Time.timeScale = isPaused ? 0f : playbackSpeed;
+                if (isPaused) Time.timeScale = 0f;
+                else SimulationSpeed.Apply(playbackSpeed, savedMaximumDeltaTime);
                 pauseButton.Q<IconElement>().Kind = isPaused ? IconKind.Play : IconKind.Pause;
             }, "le-btn--ghost");
 
@@ -228,6 +229,7 @@ namespace RobotVacuum.LevelEditor
         {
             isPaused = false;
             Time.timeScale = savedTimeScale;
+            Time.maximumDeltaTime = savedMaximumDeltaTime;
             overlay = null;
             if (panelSettings != null) Destroy(panelSettings);
             if (level != null) Destroy(level);

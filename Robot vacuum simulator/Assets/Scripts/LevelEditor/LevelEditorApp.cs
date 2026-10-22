@@ -937,8 +937,9 @@ namespace RobotVacuum.LevelEditor
             Ui.Button(bar, "Stop", IconKind.Stop, StopRun, "le-btn--ghost");
             Ui.IconButton(bar, IconKind.Undo, "Restart", () => run?.Restart(), "le-btn--ghost");
 
-            var simSpeed = new Segmented(new[] { "1×", "2×", "4×", "8×" }, 0);
-            simSpeed.SelectionChanged += index => run?.SetSpeed(Mathf.Pow(2f, index));
+            Ui.Text(bar, "Speed", "le-field-label");
+            var simSpeed = new ValueSlider(1f, SimulationSpeed.MaxPlaybackSpeed, 1f, value => $"{value:0.##}×", true);
+            simSpeed.ValueChanged += value => run?.SetSpeed(value);
             Ui.Tooltip(simSpeed, "Simulation speed");
             bar.Add(simSpeed);
 
@@ -1060,6 +1061,7 @@ namespace RobotVacuum.LevelEditor
         readonly bool createdCamera;
         readonly CameraState savedCamera;
         readonly float savedTimeScale;
+        readonly float savedMaximumDeltaTime;
         readonly float startTime;
         float playbackSpeed = 1f;
         bool isPaused;
@@ -1080,6 +1082,7 @@ namespace RobotVacuum.LevelEditor
         {
             this.level = level;
             savedTimeScale = Time.timeScale;
+            savedMaximumDeltaTime = Time.maximumDeltaTime;
             startTime = Time.time;
 
             root = new GameObject("Level Run");
@@ -1148,14 +1151,15 @@ namespace RobotVacuum.LevelEditor
 
         public void SetSpeed(float multiplier)
         {
-            playbackSpeed = Mathf.Max(0.01f, multiplier);
-            if (!isPaused) Time.timeScale = playbackSpeed;
+            playbackSpeed = SimulationSpeed.ClampPlaybackSpeed(multiplier);
+            if (!isPaused) SimulationSpeed.Apply(playbackSpeed, savedMaximumDeltaTime);
         }
 
         public void TogglePause()
         {
             isPaused = !isPaused;
-            Time.timeScale = isPaused ? 0f : playbackSpeed;
+            if (isPaused) Time.timeScale = 0f;
+            else SimulationSpeed.Apply(playbackSpeed, savedMaximumDeltaTime);
             PauseStateChanged?.Invoke(isPaused);
         }
 
@@ -1163,6 +1167,7 @@ namespace RobotVacuum.LevelEditor
         {
             PauseStateChanged = null;
             Time.timeScale = savedTimeScale;
+            Time.maximumDeltaTime = savedMaximumDeltaTime;
 
             if (!createdCamera && camera != null)
             {

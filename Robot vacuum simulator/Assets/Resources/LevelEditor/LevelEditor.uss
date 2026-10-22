@@ -1478,6 +1478,17 @@
     margin: 0 8px 0 4px;
 }
 
+.le-run-bar .le-field-label {
+    margin: 0 4px;
+    white-space: nowrap;
+}
+
+.le-run-bar .le-slider {
+    width: 210px;
+    margin: 0 8px 0 4px;
+    flex-shrink: 0;
+}
+
 /* ------------------------------------------------------------ start screen */
 
 .le-start {

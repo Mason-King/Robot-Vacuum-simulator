@@ -413,6 +413,47 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void SetRoomRotationLive_RotatesRoomAndLinkedDoorway_AndUndoRestoresBoth()
+        {
+            session.Level.Doorways.Add(new Doorway
+            {
+                roomA = 0,
+                roomB = 1,
+                center = new Vector2(0f, 1.5f),
+            });
+            Vector2 center = Poly2D.Centroid(Room(0).outline);
+            Vector2 originalCorner = Room(0).outline[0];
+            Vector2 originalDoorway = session.Level.Doorways[0].center;
+            session.Checkpoint("Rotate Room");
+
+            session.SetRoomRotationLive(0, 90f);
+            session.Commit();
+
+            TestLevels.AssertNear(center + new Vector2(-(originalCorner - center).y, (originalCorner - center).x), Room(0).outline[0]);
+            TestLevels.AssertNear(center + new Vector2(-(originalDoorway - center).y, (originalDoorway - center).x), session.Level.Doorways[0].center);
+            Assert.AreEqual(90f, Room(0).rotation, 1e-4f);
+
+            session.Undo();
+
+            TestLevels.AssertNear(originalCorner, Room(0).outline[0]);
+            TestLevels.AssertNear(originalDoorway, session.Level.Doorways[0].center);
+            Assert.AreEqual(0f, Room(0).rotation, 1e-4f);
+        }
+
+        [Test]
+        public void SetRoomRotationLive_RejectsRotationThatOverlapsAnotherRoom()
+        {
+            Assert.IsTrue(session.AddRoom(TestLevels.Square(new Vector2(-0.5f, 1.6f), 1f)));
+            session.Checkpoint("Rotate Room");
+
+            session.SetRoomRotationLive(0, 90f);
+            session.Commit();
+
+            Assert.AreEqual(0f, Room(0).rotation, 1e-4f);
+            TestLevels.AssertNear(new Vector2(-2f, -1.5f), Room(0).outline[0]);
+        }
+
+        [Test]
         public void SetWall_RemovesAndRestoresOneWall()
         {
             session.SetWall(0, 1, false);
