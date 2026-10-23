@@ -12,10 +12,10 @@ namespace RobotVacuum.Sim
     /// <item><c>external_model.json</c>: the saved External Model (<see cref="ExternalModelData"/>). The analysis screen draws from this.</item>
     /// <item>Three PNGs, one per <see cref="HeatmapMode"/>: export-only, for analysis outside the program.</item>
     /// <item><c>result.json</c>: the numbers (<see cref="RunResult"/>). Its existence is what marks a run as finished.</item>
-    /// <item><c>config.json</c>: the run's inputs (only for runs started through Secondary Boot).</item>
+    /// <item><c>config.json</c>: the run's inputs (<see cref="RunConfig"/>), written when the run starts.</item>
     /// </list>
-    /// The real Secondary Boot and the in-process TestSimStart both write through <see cref="Write"/>, so a
-    /// test run looks exactly like a real one to anything reading the folder.
+    /// Every run writes through <see cref="Write"/>, whatever started it, so all run folders look the same
+    /// to anything reading them.
     /// </summary>
     public static class RunArtifacts
     {

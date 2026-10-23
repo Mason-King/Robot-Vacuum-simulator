@@ -5,38 +5,32 @@ using UnityEngine;
 
 namespace RobotVacuum.Sim
 {
-    // The file that actually crosses the process boundary going IN. Everything
-    // Secondary Boot needs to build and run a simulation, with nothing left to
-    // ask the Primary process for afterwards -- once this file is written, the
-    // two processes have no further connection until RunResult comes back.
+    /// <summary>
+    /// A run's inputs, saved as config.json in its run folder when the run starts. Everything needed to
+    /// rebuild the same run: the floor plan as it was, and the resolved settings (defaults filled in, the
+    /// concrete seed). It is the SDD's Config Snapshot: an immutable copy, never a live pointer to a
+    /// Profile or level file that may change later.
+    /// </summary>
     [Serializable]
     public class RunConfig
     {
-        // LevelSnapshot is already the project's proven JSON-serializable level
-        // format (used for save/load) -- nested directly here rather than
-        // double-encoded as a JSON-string-inside-a-JSON-string, so the file is
-        // readable/debuggable by just opening it.
+        /// <summary>The floor plan, nested as plain JSON so the file is readable by just opening it.</summary>
         public LevelSnapshot level;
 
-        public VacuumSettings vacuumSettings;
-        public MovementPattern pattern;
-        public int seed;
-        public float simulatedSeconds;
+        /// <summary>The run's settings with every default resolved (see <see cref="RunSettings.Resolved"/>).</summary>
+        public RunSettings settings;
+
+        /// <summary>Whether the run was headless. Recorded so Graphics and headless runs can be compared (2.17).</summary>
         public bool headless;
 
-        // How fast Graphics-mode plays back (Time.timeScale while watching).
-        // Irrelevant in headless -- that always runs at a fixed fast multiplier
-        // regardless, since nobody's watching it.
-        public float playbackSpeed = 1f;
+        /// <summary>
+        /// The program's safety cap on simulated seconds when this run started. Not a setting: it is
+        /// recorded only so a run that hit it can be explained later.
+        /// </summary>
+        public float maxSimulatedSeconds = SimDefaults.MaxSimulatedSeconds;
 
-        // target_max_clean: the cleanliness goalpost this run is measured against.
-        // A file written before this field existed reads as the default.
-        public float targetMaxClean = HeatmapDefaults.TargetMaxClean;
-
-        // Secondary Boot writes its RunResult here. Decided by Primary Boot
-        // (not a fixed convention) so multiple concurrent/batched runs never
-        // collide on the same output file.
-        public string resultPath;
+        /// <summary>When the run started, UTC, ISO 8601.</summary>
+        public string startedUtc;
 
         public void WriteTo(string path)
         {

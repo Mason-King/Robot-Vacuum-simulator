@@ -15,7 +15,7 @@ namespace RobotVacuum.Sim
 
         /// <summary>
         /// Safety backstop on simulated seconds (24 h). The battery running out is the real stop condition.
-        /// SecondaryBootLauncher and TestSimStart both read this, so there is one source.
+        /// A program safeguard, not a run setting: every run reads it from here, so there is one source.
         /// </summary>
         public const float MaxSimulatedSeconds = 86400f;
 
