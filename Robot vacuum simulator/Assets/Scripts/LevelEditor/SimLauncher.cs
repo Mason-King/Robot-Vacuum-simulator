@@ -76,10 +76,20 @@ namespace RobotVacuum.LevelEditor
             camera.transform.rotation = Quaternion.identity;
         }
 
+        /// <summary>
+        /// The palette runs fall back to when a level has none: the built-in default, created once and kept
+        /// alive across scene loads.
+        /// </summary>
+        public static FloorPalette DefaultPalette() => FallbackPalette();
+
         static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
             if (scene.path != SimScenePath) return;
             SceneManager.sceneLoaded -= OnSceneLoaded;
+
+            // A scene with a SimTestDriver builds and runs the level itself: the driver has already taken the
+            // handed-over level in its Awake, and it adds the camera framing and the HUD. Nothing to do here.
+            if (Object.FindAnyObjectByType<SimTestDriver>() != null) return;
 
             // Runs after every Awake in the scene but before any Start, so the robot has not moved yet.
             var orphan = LevelHandoff.CancelPending();
