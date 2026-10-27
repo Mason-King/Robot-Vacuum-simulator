@@ -7,7 +7,7 @@ namespace RobotVacuum.LevelEditor
 {
     public enum EditorTool { Select, Rect, Pen, Wall, Doorway, Spawn, Obstacle }
 
-    public enum IssueSeverity { Warning, Error }
+    public enum IssueSeverity { Warning, Error, Critical }
 
     public struct LevelIssue
     {
@@ -642,12 +642,6 @@ namespace RobotVacuum.LevelEditor
                 rotation = Mathf.Repeat(rotation, 360f),
                 blocksVacuum = Obstacle.DefaultBlocks(kind),
             };
-            if (LevelGeometry.FootprintOverlapsWall(Level, obstacle.Corners()))
-            {
-                Notice?.Invoke("Furniture can't overlap walls.");
-                return;
-            }
-
             Edit($"Add {Obstacle.DefaultName(kind)}", () =>
             {
                 Level.Obstacles.Add(obstacle);
@@ -700,12 +694,6 @@ namespace RobotVacuum.LevelEditor
             var copy = source.Clone();
             copy.name = source.name + " copy";
             copy.center += new Vector2(source.Bounds.width + 0.2f, 0f);
-            if (!CanTransformObstacle(copy, copy.center, copy.size, copy.rotation))
-            {
-                Notice?.Invoke("Furniture can't overlap walls.");
-                return;
-            }
-
             Edit($"Duplicate {source.name}", () =>
             {
                 Level.Obstacles.Add(copy);
@@ -762,24 +750,9 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
-            Vector2 start = obstacle.center;
-            float distance = Vector2.Distance(start, center);
-            int steps = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(0.001f, Level.WallThickness * 0.5f)));
-            bool changed = false;
-
-            for (int step = 1; step <= steps; step++)
-            {
-                obstacle.center = Vector2.Lerp(start, center, step / (float)steps);
-                if (LevelGeometry.FootprintOverlapsWall(Level, obstacle.Corners()))
-                {
-                    obstacle.center = Vector2.Lerp(start, center, (step - 1f) / steps);
-                    changed |= obstacle.center != start;
-                    break;
-                }
-                changed = true;
-            }
-
-            if (changed) NotifyLiveChange();
+            if (obstacle.center == center) return;
+            obstacle.center = center;
+            NotifyLiveChange();
         }
 
         public void SetObstacleSizeLive(int index, Vector2 size)
@@ -788,8 +761,6 @@ namespace RobotVacuum.LevelEditor
             if (obstacle == null) return;
 
             size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
-            if (!CanTransformObstacle(obstacle, obstacle.center, size, obstacle.rotation)) return;
-
             obstacle.size = size;
             NotifyLiveChange();
         }
@@ -800,8 +771,6 @@ namespace RobotVacuum.LevelEditor
             if (obstacle == null) return;
 
             float rotation = Mathf.Repeat(degrees, 360f);
-            if (!CanTransformObstacle(obstacle, obstacle.center, obstacle.size, rotation)) return;
-
             obstacle.rotation = rotation;
             NotifyLiveChange();
         }
@@ -813,38 +782,9 @@ namespace RobotVacuum.LevelEditor
             if (obstacle == null) return;
 
             size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
-            if (!CanTransformObstacle(obstacle, center, size, obstacle.rotation)) return;
-
             obstacle.center = center;
             obstacle.size = size;
             NotifyLiveChange();
-        }
-
-        bool CanTransformObstacle(Obstacle obstacle, Vector2 center, Vector2 size, float rotation)
-        {
-            size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
-            rotation = Mathf.Repeat(rotation, 360f);
-
-            float stepDistance = Mathf.Max(0.001f, Level.WallThickness * 0.5f);
-            float radius = Mathf.Max(obstacle.size.magnitude, size.magnitude) * 0.5f;
-            float rotationDistance = radius * Mathf.Abs(Mathf.DeltaAngle(obstacle.rotation, rotation)) * Mathf.Deg2Rad;
-            float travel = Vector2.Distance(obstacle.center, center) +
-                           Vector2.Distance(obstacle.size, size) * 0.5f +
-                           rotationDistance;
-            int steps = Mathf.Max(1, Mathf.CeilToInt(travel / stepDistance));
-            float rotationDelta = Mathf.DeltaAngle(obstacle.rotation, rotation);
-
-            for (int step = 1; step <= steps; step++)
-            {
-                float t = step / (float)steps;
-                var outline = LevelData.RectangleOutline(
-                    Vector2.Lerp(obstacle.center, center, t),
-                    Vector2.Lerp(obstacle.size, size, t),
-                    obstacle.rotation + rotationDelta * t);
-                if (LevelGeometry.FootprintOverlapsWall(Level, outline)) return false;
-            }
-
-            return true;
         }
 
         public int FindObstacle(Vector2 point) => Level.ObstacleIndexAt(point);
@@ -1097,6 +1037,14 @@ namespace RobotVacuum.LevelEditor
             foreach (var obstacle in Level.Obstacles)
             {
                 if (obstacle == null) continue;
+
+                if (LevelGeometry.FootprintOverlapsWall(Level, obstacle.Corners()))
+                    issues.Add(new LevelIssue
+                    {
+                        severity = IssueSeverity.Critical,
+                        roomIndex = -1,
+                        message = $"Critical: {obstacle.name} overlaps a wall. Clear the collision before starting a simulation.",
+                    });
 
                 if (Level.RoomIndexAt(obstacle.center) < 0)
                     issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = $"{obstacle.name} isn't inside any room." });

@@ -152,7 +152,13 @@ namespace RobotVacuum.LevelEditor
 
             foreach (var issue in issues)
             {
-                var row = Ui.Div(card, issue.severity == IssueSeverity.Error ? "le-check le-check--error" : "le-check le-check--warning");
+                string issueClass = issue.severity switch
+                {
+                    IssueSeverity.Critical => "le-check le-check--critical",
+                    IssueSeverity.Error => "le-check le-check--error",
+                    _ => "le-check le-check--warning",
+                };
+                var row = Ui.Div(card, issueClass);
                 row.Add(new IconElement(IconKind.Warning));
                 Ui.Text(row, issue.message, "le-check__text");
 
