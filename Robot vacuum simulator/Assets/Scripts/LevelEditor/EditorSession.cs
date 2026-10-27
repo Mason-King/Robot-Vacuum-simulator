@@ -30,7 +30,8 @@ namespace RobotVacuum.LevelEditor
         public const float MaxDoorwayWidth = 3f;
         public const float DefaultDoorwayWidth = 0.9f;
 
-        public static readonly float[] SnapSteps = { 0.05f, 0.1f, 0.25f, 0.5f, 1f };
+        /// <summary>Grid steps in metres; the editor offers <see cref="Ui.SnapSteps"/> for the chosen units.</summary>
+        public static float[] SnapSteps => Ui.SnapSteps;
 
         readonly EditHistory history = new EditHistory();
         string savedState;
@@ -46,7 +47,7 @@ namespace RobotVacuum.LevelEditor
         bool snapToVertices = true;
         bool showGrid = true;
         bool newRoomsHaveWalls = true;
-        float snapIncrement = 0.25f;
+        float snapIncrement = SimConfig.UseFeet ? 0.1524f : 0.25f; // 6 in, or 25 cm
 
         public EditorSession(LevelSnapshot snapshot, FloorPalette palette, string filePath)
         {
@@ -435,6 +436,36 @@ namespace RobotVacuum.LevelEditor
             if (room == null || room.floorIndex == floor) return;
 
             Edit("Floor Covering", () => room.floorIndex = floor);
+        }
+
+        /// <summary>Gives every room the same floor covering, as one undo step.</summary>
+        public void SetAllRoomFloors(int floor)
+        {
+            PaintFloor = floor;
+
+            bool changes = false;
+            foreach (var room in Level.Rooms)
+                if (room != null && room.floorIndex != floor) changes = true;
+            if (!changes) return;
+
+            Edit("Floor Covering for Whole House", () =>
+            {
+                foreach (var room in Level.Rooms)
+                    if (room != null) room.floorIndex = floor;
+            });
+        }
+
+        /// <summary>The covering every room shares, or -1 when rooms differ or there are none.</summary>
+        public int SharedFloor()
+        {
+            int shared = -1;
+            foreach (var room in Level.Rooms)
+            {
+                if (room == null) continue;
+                if (shared < 0) shared = room.floorIndex;
+                else if (shared != room.floorIndex) return -1;
+            }
+            return shared;
         }
 
         public void SetWall(int roomIndex, int edge, bool present)
@@ -958,6 +989,22 @@ namespace RobotVacuum.LevelEditor
             return bestPoint;
         }
 
+        /// <summary>A dialog message naming the rooms the vacuum can escape from, or null when there are none.</summary>
+        public static string DescribeOpenings(LevelData level)
+        {
+            var names = new List<string>();
+            foreach (var opening in LevelGeometry.FindOpenings(level))
+            {
+                var room = level.GetRoom(opening.roomIndex);
+                string name = room != null && !string.IsNullOrEmpty(room.name) ? room.name : "A room";
+                if (!names.Contains(name)) names.Add(name);
+            }
+
+            if (names.Count == 0) return null;
+            return $"{string.Join(", ", names)} {(names.Count == 1 ? "has" : "have")} a gap in the outside wall wide enough for the vacuum. " +
+                   "It will drive out of the floor plan and keep going, and the run will be meaningless. Add the missing wall to fix it.";
+        }
+
         /// <summary>Everything that would stop the level playing the way it looks.</summary>
         public List<LevelIssue> Validate()
         {
@@ -972,6 +1019,18 @@ namespace RobotVacuum.LevelEditor
                     issues.Add(new LevelIssue { severity = IssueSeverity.Error, roomIndex = i, message = $"{room.name} has fewer than 3 corners." });
                 else if (!Poly2D.IsSimple(room.outline))
                     issues.Add(new LevelIssue { severity = IssueSeverity.Error, roomIndex = i, message = $"{room.name}'s outline crosses itself." });
+            }
+
+            var leakyRooms = new HashSet<int>();
+            foreach (var opening in LevelGeometry.FindOpenings(Level))
+            {
+                if (!leakyRooms.Add(opening.roomIndex)) continue;
+                issues.Add(new LevelIssue
+                {
+                    severity = IssueSeverity.Error,
+                    roomIndex = opening.roomIndex,
+                    message = $"{NameOfRoom(opening.roomIndex)} has an open wall to the outside. The vacuum will drive out and keep going.",
+                });
             }
 
             foreach (var doorway in Level.Doorways)

@@ -17,7 +17,7 @@ namespace RobotVacuum.Sim
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
     [RequireComponent(typeof(Battery))]
-    public class VacuumRobot : MonoBehaviour
+    public class VacuumRobot : MonoBehaviour, ISimStepper
     {
         const float StalledMovementThreshold = 0.0005f;
         const float StalledTurnThreshold = 0.05f;
@@ -78,10 +78,27 @@ namespace RobotVacuum.Sim
         readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
 
+        /// <summary>An algorithm that moves less than this in <see cref="NoProgressSeconds"/> is treated as stuck.</summary>
+        const float NoProgressDistance = 0.05f;
+        const float NoProgressSeconds = 120f;
+
+        float wanderPhase;
+        Vector2 progressAnchor;
+        float progressTimer;
+
         /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
 
+        /// <summary>Simulated seconds this robot has run since its last reset.</summary>
+        public float SimTime { get; private set; }
+
+        /// <summary>A per-run offset into the wander noise, drawn from the run's seed.</summary>
+        public float WanderPhase => wanderPhase;
+
         public bool AlgorithmFailed => algorithmFailed;
+
+        /// <summary>Why the algorithm was stopped, or null while it runs.</summary>
+        public string FailureReason { get; private set; }
 
         public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
 
@@ -281,9 +298,19 @@ namespace RobotVacuum.Sim
 
         void FixedUpdate()
         {
+            // With a SimEngine in the scene, it steps the robot in a fixed order instead.
+            if (SimEngine.Active == null) Advance(Time.fixedDeltaTime);
+        }
+
+        void ISimStepper.Step(float dt) => Advance(dt);
+
+        /// <summary>Advances the robot by one fixed step of <paramref name="dt"/> simulated seconds.</summary>
+        public void Advance(float dt)
+        {
             if (!Application.isPlaying || body == null) return;
 
-            ConsumeCompletedWork();
+            SimTime += dt;
+            ConsumeCompletedWork(dt);
 
             if (algorithmFailed)
             {
@@ -297,7 +324,10 @@ namespace RobotVacuum.Sim
                 return;
             }
 
-            float dt = Time.fixedDeltaTime;
+            // Running costs something every second, whether or not the vacuum is moving.
+            battery.ConsumeOperatingTime(dt);
+            WatchProgress(dt);
+            if (algorithmFailed) return;
 
             switch (state)
             {
@@ -322,7 +352,22 @@ namespace RobotVacuum.Sim
 
         }
 
-        void ConsumeCompletedWork()
+        /// <summary>Stops an algorithm that has left the vacuum going nowhere, so a stuck run can't run forever.</summary>
+        void WatchProgress(float dt)
+        {
+            Vector2 position = body.position;
+            if (Vector2.Distance(position, progressAnchor) > NoProgressDistance)
+            {
+                progressAnchor = position;
+                progressTimer = 0f;
+                return;
+            }
+
+            if ((progressTimer += dt) >= NoProgressSeconds)
+                FailAlgorithm($"No progress for {NoProgressSeconds:0} s: the algorithm appears stuck in a loop.");
+        }
+
+        void ConsumeCompletedWork(float dt)
         {
             Vector2 position = body.position;
             float heading = body.rotation;
@@ -336,7 +381,7 @@ namespace RobotVacuum.Sim
                 float surfaceMultiplier = floor != null ? floor.energyCostMultiplier : 1f;
                 battery.ConsumeWork(distance, turn, surfaceMultiplier);
 
-                if (IsMotionStalled(distance, turn)) battery.ConsumeStalledTime(Time.fixedDeltaTime);
+                if (IsMotionStalled(distance, turn)) battery.ConsumeStalledTime(dt);
             }
 
             batterySamplePosition = position;
@@ -499,6 +544,7 @@ namespace RobotVacuum.Sim
             if (algorithmFailed) return;
 
             algorithmFailed = true;
+            FailureReason = failure;
             state = State.Driving;
             steps.Clear();
             speedScale = 0f;
@@ -522,6 +568,10 @@ namespace RobotVacuum.Sim
             steps.Clear();
             state = State.Driving;
             algorithmFailed = false;
+            FailureReason = null;
+            SimTime = 0f;
+            progressTimer = 0f;
+            wanderPhase = SimRandom.Range(0f, 1000f);
             speedScale = 1f;
             cleaningLimit = 1f;
             Print = null;
@@ -535,11 +585,20 @@ namespace RobotVacuum.Sim
 
             transform.position = levelRenderer.LevelToWorld(
                 levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
+            transform.rotation = Quaternion.identity;
 
             DistanceTravelled = 0f;
             battery.ResetCharge();
 
-            if (body != null) body.linearVelocity = Vector2.zero;
+            // Put the body exactly where the transform is, so every run starts from an identical state.
+            if (body != null)
+            {
+                body.position = transform.position;
+                body.rotation = 0f;
+                body.linearVelocity = Vector2.zero;
+                body.angularVelocity = 0f;
+            }
+            progressAnchor = body != null ? body.position : (Vector2)transform.position;
             ResetBatteryMotionSample();
         }
 

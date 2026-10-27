@@ -6,7 +6,7 @@ namespace RobotVacuum.Sim
 {
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(PolygonCollider2D))]
-    public sealed class MovingCat : MonoBehaviour
+    public sealed class MovingCat : MonoBehaviour, ISimStepper
     {
         const float Speed = 0.45f;
         const float InterestDistance = 1.7f;
@@ -25,6 +25,7 @@ namespace RobotVacuum.Sim
             new Vector2(0.04f, -0.19f), new Vector2(-0.04f, -0.19f),
         };
         Rigidbody2D body;
+        Vector2 spawnPosition;
         Vector2 direction;
         Vector2 target;
         Rect bounds;
@@ -71,7 +72,9 @@ namespace RobotVacuum.Sim
         {
             if (body == null) Configure();
             bounds = movementBounds;
+            spawnPosition = position;
             body.position = position;
+            body.linearVelocity = Vector2.zero;
             transform.position = position;
             direction = initialDirection.sqrMagnitude > 0f ? initialDirection.normalized : Vector2.right;
             random = new System.Random(seed);
@@ -81,11 +84,23 @@ namespace RobotVacuum.Sim
             vacuum = FindAnyObjectByType<VacuumRobot>();
         }
 
+        /// <summary>Puts the cat back where it was placed, with a fresh seed, for a new run.</summary>
+        public void ResetToSpawn(int seed)
+        {
+            transform.position = spawnPosition;
+            Initialize(bounds, spawnPosition, RandomDirection(new System.Random(seed)), seed);
+        }
+
         void FixedUpdate()
+        {
+            // With a SimEngine in the scene, it steps the cat in a fixed order instead.
+            if (SimEngine.Active == null) Step(Time.fixedDeltaTime);
+        }
+
+        public void Step(float dt)
         {
             if (!Application.isPlaying || random == null) return;
 
-            float dt = Time.fixedDeltaTime;
             if (vacuum == null) vacuum = FindAnyObjectByType<VacuumRobot>();
 
             Vector2 position = body.position;
@@ -220,7 +235,7 @@ namespace RobotVacuum.Sim
 
             LevelData level = renderer.Level;
             Rect bounds = WorldBounds(renderer, level.Bounds());
-            var random = new System.Random(6321);
+            var random = new System.Random(SimRandom.NextSeed());
 
             foreach (Obstacle obstacle in level.Obstacles)
             {

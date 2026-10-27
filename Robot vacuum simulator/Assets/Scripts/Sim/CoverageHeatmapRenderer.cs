@@ -150,7 +150,7 @@ namespace RobotVacuum.Sim
                     // (matches CalculateCoveragePercent's own treatment).
                     // Set for cells under furniture that blocks the vacuum.
                     Color32 pixelColor;
-                    if (cell.isNonCleanable)
+                    if (!cell.CountsTowardCoverage)
                     {
                         pixelColor = default;
                     }

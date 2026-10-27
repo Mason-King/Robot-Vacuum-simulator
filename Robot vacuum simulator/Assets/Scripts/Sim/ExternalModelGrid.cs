@@ -66,6 +66,14 @@ namespace RobotVacuumSim.EnvironmentModel
         // the vacuum passes under leaves its cells cleanable.
         public bool isNonCleanable;
 
+        // Outside every room: the grid covers the floor plan's bounding box, so an
+        // L-shaped house leaves cells that were never floor. They drop out of
+        // coverage like furniture does, but don't count as blocked area.
+        // Set by ExternalModelGrid.PopulateFromLevelObject().
+        public bool isOffFloor;
+
+        public bool CountsTowardCoverage => !isNonCleanable && !isOffFloor;
+
         // The only way to change dirtiness. Mathf.Clamp01 forces the
         // result into [0, 1] no matter what value is passed in -- this is
         // the single enforcement point Eric asked for, so no calling code
@@ -187,6 +195,12 @@ namespace RobotVacuumSim.EnvironmentModel
         // How many cells are currently non-cleanable, kept in step by
         // SetNonCleanable() so area read-outs don't rescan the grid.
         private int nonCleanableCount;
+
+        // Cells outside every room, and the running sum of (1 - dirtiness)
+        // over the cells that count, so coverage reads in O(1) every tick
+        // instead of rescanning the grid.
+        private int offFloorCount;
+        private double cleanSum;
 
         // Stored so future population/recompute work (see the stubs below)
         // has the same LevelData/LevelRenderer pair available without
@@ -362,7 +376,9 @@ namespace RobotVacuumSim.EnvironmentModel
             // reads, and per SDD 7.3 that must stay authoritative at full
             // tick resolution regardless of what the replay log does. ---
             CellState cell = cells[row, col];
+            float before = cell.Dirtiness;
             cell.SetDirtiness(newValue);
+            if (cell.CountsTowardCoverage) cleanSum += before - cell.Dirtiness;
 
             // --- Part 2: ask the cell itself whether enough time has
             // passed to log this change. All the bookkeeping (when did
@@ -386,27 +402,25 @@ namespace RobotVacuumSim.EnvironmentModel
         }
 
         // ------------------------------------------------------------------
-        // STUB: actually writing a {cellID, time, value} event out to
-        // wherever the run's Action Log / telemetry storage lives (SDD 7.1).
-        //
-        // PENDING: Run Results Storage mechanism isn't built yet. For now
-        // this just defines the shape of what needs to happen -- swap the
-        // body for a real call once that storage exists.
+        // Hands a throttled {cellID, time, value} event to whoever records
+        // the run (SDD 7.1). RunRecorder writes them to cell_events.csv, and
+        // the latest entry at or before T reconstructs any cell's state.
         // ------------------------------------------------------------------
+        // Raised for every logged cell-state change: (row, col, dirtiness, simTime).
+        // The run recorder writes these out as the per-cell telemetry series.
+        public event System.Action<int, int, float, float> CellStateLogged;
+
         private void EmitCellStateChangeEvent(int row, int col, float dirtinessValue, float simTime)
         {
-            // TODO: replace with a real call once telemetry storage exists.
-            // Expected shape: append { cellID: (row, col), time: simTime,
-            // value: dirtinessValue } to this run's cell-state event log,
-            // same {ID, time, value} pattern as the furniture entity log
-            // (SDD 7.2), reconstructed later via "find latest entry at or
-            // before T."
+            CellStateLogged?.Invoke(row, col, dirtinessValue, simTime);
         }
 
         public void SetNonCleanable(int row, int col, bool isNonCleanable)
         {
             if (cells[row, col].isNonCleanable == isNonCleanable) return;
 
+            if (!cells[row, col].isOffFloor)
+                cleanSum += (isNonCleanable ? -1.0 : 1.0) * (1f - cells[row, col].Dirtiness);
             cells[row, col].isNonCleanable = isNonCleanable;
             nonCleanableCount += isNonCleanable ? 1 : -1;
         }
@@ -417,6 +431,19 @@ namespace RobotVacuumSim.EnvironmentModel
         // Floor the robot can't clean because furniture blocks it, in square
         // metres: the non-cleanable cell count times one cell's area.
         public float NonCleanableAreaSquareMeters => nonCleanableCount * cellSizeMeters * cellSizeMeters;
+
+        // Cells outside every room, excluded from coverage.
+        public int OffFloorCellCount => offFloorCount;
+
+        // Cells that count toward coverage: floor not under blocking furniture.
+        public int CleanableCellCount => rows * cols - nonCleanableCount - offFloorCount;
+
+        public float CleanableAreaSquareMeters => CleanableCellCount * cellSizeMeters * cellSizeMeters;
+
+        // Same answer as CalculateCoveragePercent(), kept up to date as
+        // cells change, so it is cheap enough to read every tick.
+        public float CoveragePercent =>
+            CleanableCellCount > 0 ? (float)(cleanSum / CleanableCellCount * 100.0) : 0f;
 
         public int Rows => rows;
         public int Cols => cols;
@@ -459,9 +486,9 @@ namespace RobotVacuumSim.EnvironmentModel
             {
                 for (int col = 0; col < cols; col++)
                 {
-                    if (cells[row, col].isNonCleanable)
+                    if (!cells[row, col].CountsTowardCoverage)
                     {
-                        continue; // excluded entirely, per 1.7.6
+                        continue; // excluded entirely, per 1.7.6; off-floor cells were never floor
                     }
                     cleanableCellCount++;
                     summedCleanliness += (1f - cells[row, col].Dirtiness);
@@ -498,6 +525,26 @@ namespace RobotVacuumSim.EnvironmentModel
         {
             if (level == null || rows == 0 || cols == 0) return;
 
+            MarkOffFloorCells();
+            MarkBlockedCells();
+        }
+
+        // ------------------------------------------------------------------
+        // Re-derives which cells sit under blocking furniture after the
+        // furniture has changed mid-run, keeping every cell's dirtiness.
+        // ------------------------------------------------------------------
+        public void RefreshNonCleanable()
+        {
+            if (level == null) return;
+
+            for (int row = 0; row < rows; row++)
+                for (int col = 0; col < cols; col++)
+                    SetNonCleanable(row, col, false);
+            MarkBlockedCells();
+        }
+
+        void MarkBlockedCells()
+        {
             var footprint = new List<Vector2>(4);
 
             foreach (var obstacle in level.Obstacles)
@@ -530,6 +577,58 @@ namespace RobotVacuumSim.EnvironmentModel
                     }
                 }
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Marks every cell whose centre lies outside all rooms, so the
+        // bounding box's empty corners don't count as floor left dirty.
+        // ------------------------------------------------------------------
+        void MarkOffFloorCells()
+        {
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    Vector2 center = GridIndexToWorldCenter(row, col);
+                    Vector2 levelPoint = levelRenderer != null ? levelRenderer.WorldToLevel(center) : center;
+                    bool off = level.RoomIndexAt(levelPoint) < 0;
+                    if (cells[row, col].isOffFloor == off) continue;
+
+                    if (!cells[row, col].isNonCleanable)
+                        cleanSum += (off ? -1.0 : 1.0) * (1f - cells[row, col].Dirtiness);
+                    cells[row, col].isOffFloor = off;
+                    offFloorCount += off ? 1 : -1;
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // A coarse copy of the grid for replays and averaged heatmaps: at
+        // most maxSize blocks on the longer side, each holding the average
+        // cleanliness (0 dirty .. 1 clean) of its counted cells, or -1 when
+        // the block has no floor that counts.
+        // ------------------------------------------------------------------
+        public float[] Downsample(int maxSize, out int width, out int height)
+        {
+            int block = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(rows, cols) / (float)Mathf.Max(1, maxSize)));
+            width = Mathf.CeilToInt(cols / (float)block);
+            height = Mathf.CeilToInt(rows / (float)block);
+
+            var sums = new float[width * height];
+            var counts = new int[width * height];
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    if (!cells[row, col].CountsTowardCoverage) continue;
+                    int index = row / block * width + col / block;
+                    sums[index] += 1f - cells[row, col].Dirtiness;
+                    counts[index]++;
+                }
+            }
+
+            for (int i = 0; i < sums.Length; i++) sums[i] = counts[i] > 0 ? sums[i] / counts[i] : -1f;
+            return sums;
         }
 
         // ------------------------------------------------------------------

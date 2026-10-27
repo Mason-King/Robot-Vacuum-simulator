@@ -427,6 +427,95 @@
     flex-direction: column;
 }
 
+.le-toolrail__divider {
+    height: 1px;
+    margin: 4px 6px;
+    background-color: var(--border);
+}
+
+/* Step-by-step help for the active tool, beside the tool rail. */
+.le-toolguide {
+    left: 70px;
+    top: 12px;
+    width: 280px;
+    padding: 14px;
+}
+
+.le-toolguide__header {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.le-toolguide__titles {
+    flex-grow: 1;
+    margin-left: 10px;
+}
+
+.le-toolguide__title {
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+.le-toolguide__key {
+    margin-top: 1px;
+    font-size: 11px;
+}
+
+.le-app .le-toolguide__key,
+.le-app .le-toolguide__tip {
+    color: var(--text-3);
+}
+
+.le-toolguide__summary {
+    margin-bottom: 10px;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-toolguide__summary,
+.le-app .le-toolguide__text {
+    color: var(--text-2);
+}
+
+.le-toolguide__step {
+    flex-direction: row;
+    align-items: flex-start;
+    margin-bottom: 8px;
+}
+
+.le-toolguide__number {
+    width: 18px;
+    height: 18px;
+    margin-right: 8px;
+    flex-shrink: 0;
+    border-radius: 9px;
+    font-size: 11px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    background-color: var(--accent-soft);
+}
+
+.le-app .le-toolguide__number {
+    color: var(--accent-hover);
+}
+
+.le-toolguide__text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-toolguide__tip {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top-width: 1px;
+    border-color: var(--border);
+    font-size: 11px;
+    white-space: normal;
+}
+
 .le-tool {
     width: 40px;
     height: 40px;
@@ -1104,11 +1193,12 @@
 
 .le-tooltip {
     position: absolute;
+    max-width: 280px;
     padding: 5px 9px;
     border-radius: 6px;
     background-color: #2B303A;
     font-size: 12px;
-    white-space: nowrap;
+    white-space: normal;
     opacity: 0;
     transition-property: opacity;
     transition-duration: 120ms;
@@ -1481,24 +1571,31 @@
 /* ------------------------------------------------------------ start screen */
 
 .le-start {
+    flex-grow: 1;
     align-items: center;
     justify-content: center;
+    padding: 32px;
+    background-color: var(--canvas);
+}
+
+.le-start__hero {
+    align-items: center;
 }
 
 .le-start__mark {
-    width: 64px;
-    height: 64px;
+    width: 56px;
+    height: 56px;
     color: var(--accent);
 }
 
 .le-start__title {
-    margin-top: 20px;
+    margin-top: 18px;
     font-size: 28px;
     -unity-font-style: bold;
 }
 
 .le-start__text {
-    margin-top: 8px;
+    margin-top: 6px;
     max-width: 420px;
     white-space: normal;
     -unity-text-align: middle-center;
@@ -1510,13 +1607,934 @@
 
 .le-start__actions {
     flex-direction: row;
-    margin-top: 28px;
+    margin-top: 24px;
 }
 
 .le-start__button {
     height: 40px;
-    margin: 0 6px;
     padding: 0 18px;
+}
+
+.le-start__steps {
+    flex-direction: row;
+    margin-top: 48px;
+}
+
+.le-start__step {
+    width: 240px;
+    margin: 0 7px;
+    padding: 16px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: var(--border);
+    background-color: var(--surface);
+    transition-property: border-color, translate;
+    transition-duration: 140ms;
+}
+
+.le-start__step:hover {
+    border-color: var(--accent);
+    translate: 0 -2px;
+}
+
+.le-start__step-top {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.le-start__step-icon {
+    width: 36px;
+    height: 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background-color: var(--accent-soft);
+}
+
+.le-start__step-icon .le-icon {
+    color: var(--accent-hover);
+}
+
+.le-start__step-number {
+    font-size: 11px;
+    -unity-font-style: bold;
+}
+
+.le-app .le-start__step-number {
+    color: var(--text-3);
+}
+
+.le-start__step-title {
+    margin-top: 14px;
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+.le-start__step-text {
+    margin-top: 4px;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-start__step-text {
+    color: var(--text-2);
+}
+
+/* Each step card ends in a live status line and an arrow, since the card opens that part of the app. */
+.le-start__step-text {
+    flex-grow: 1;
+}
+
+.le-start__step-footer {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top-width: 1px;
+    border-color: var(--border);
+}
+
+.le-start__step-status {
+    flex-grow: 1;
+    flex-shrink: 1;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-app .le-start__step-status {
+    color: var(--text-2);
+}
+
+.le-start__step-arrow {
+    width: 16px;
+    height: 16px;
+    rotate: 180deg;
+}
+
+.le-start__step:hover .le-start__step-arrow {
+    color: var(--accent-hover);
+}
+
+/* ------------------------------------------------------------ start screen pages */
+
+.le-page__titles {
+    margin-left: 6px;
+}
+
+.le-page__content {
+    flex-grow: 1;
+    background-color: var(--canvas);
+}
+
+.le-page__column {
+    width: 100%;
+    max-width: 640px;
+    align-self: center;
+    padding: 24px 16px 32px 16px;
+}
+
+.le-page__column--wide {
+    max-width: 880px;
+}
+
+.le-page__footnote {
+    margin-top: 4px;
+    -unity-text-align: middle-center;
+}
+
+.le-panel {
+    margin-bottom: 16px;
+    padding: 18px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: var(--border);
+    background-color: var(--surface);
+}
+
+.le-panel__header {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.le-panel__header > .le-btn {
+    margin-left: 4px;
+}
+
+.le-panel__titles {
+    flex-grow: 1;
+    flex-shrink: 1;
+    margin-left: 12px;
+}
+
+.le-panel__titles:first-child {
+    margin-left: 0;
+}
+
+.le-panel__title {
+    font-size: 15px;
+    -unity-font-style: bold;
+}
+
+.le-panel__text {
+    margin-top: 2px;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-panel__text {
+    color: var(--text-3);
+}
+
+.le-panel__gap {
+    margin-top: 14px;
+}
+
+.le-card__play {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    width: 36px;
+    height: 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 18px;
+    background-color: var(--accent);
+    opacity: 0;
+    transition-property: opacity;
+    transition-duration: 140ms;
+}
+
+.le-card:hover .le-card__play {
+    opacity: 1;
+}
+
+.le-app .le-card__play .le-icon {
+    color: #FFFFFF;
+}
+
+/* ------------------------------------------------------------ analysis */
+
+.le-analysis {
+    flex-grow: 1;
+    flex-direction: row;
+    background-color: var(--canvas);
+}
+
+.le-analysis__empty {
+    flex-grow: 1;
+}
+
+.le-analysis__list {
+    width: 340px;
+    flex-shrink: 0;
+    padding: 8px;
+    background-color: var(--surface);
+    border-right-width: 1px;
+    border-color: var(--border);
+}
+
+.le-analysis__detail {
+    flex-grow: 1;
+}
+
+.le-analysis__overview {
+    margin: 0 0 16px 0;
+}
+
+.le-analysis__stats {
+    margin: 0 0 6px 0;
+}
+
+.le-app .le-analysis .le-stat {
+    background-color: var(--surface-2);
+}
+
+.le-app .le-analysis .le-analysis__overview .le-stat {
+    background-color: var(--surface);
+    border-width: 1px;
+    border-color: var(--border);
+}
+
+.le-analysis__chart-title {
+    margin-top: 16px;
+}
+
+.le-run-row {
+    flex-direction: row;
+    align-items: center;
+    padding: 10px 12px;
+    margin-bottom: 2px;
+    border-radius: 8px;
+}
+
+.le-run-row:hover {
+    background-color: var(--surface-2);
+}
+
+.le-run-row--selected,
+.le-run-row--selected:hover {
+    background-color: var(--accent-soft);
+}
+
+.le-run-row__text {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.le-run-row__title {
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-run-row__meta {
+    margin-top: 2px;
+    font-size: 12px;
+}
+
+.le-app .le-run-row__meta {
+    color: var(--text-3);
+}
+
+.le-run-row__value {
+    margin-left: 10px;
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+.le-compare-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 8px 0;
+    border-top-width: 1px;
+    border-color: var(--border);
+}
+
+.le-compare-row__label {
+    width: 100px;
+    -unity-font-style: bold;
+}
+
+.le-compare-row__track {
+    flex-grow: 1;
+    height: 8px;
+    border-radius: 4px;
+    background-color: var(--surface-3);
+    overflow: hidden;
+}
+
+.le-compare-row__fill {
+    height: 100%;
+    border-radius: 4px;
+    background-color: var(--accent);
+}
+
+.le-compare-row__value {
+    width: 64px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-right;
+}
+
+.le-compare-row__meta {
+    width: 100%;
+    margin: 4px 0 0 100px;
+    font-size: 12px;
+}
+
+.le-app .le-compare-row__meta {
+    color: var(--text-3);
+}
+
+.le-chart {
+    height: 200px;
+    margin-top: 4px;
+}
+
+.le-chart__plot {
+    position: absolute;
+    top: 8px;
+    right: 0;
+    border-left-width: 1px;
+    border-bottom-width: 1px;
+    border-color: var(--border-strong);
+}
+
+.le-chart__y-label,
+.le-chart__x-label {
+    position: absolute;
+    font-size: 11px;
+}
+
+.le-app .le-chart__y-label,
+.le-app .le-chart__x-label {
+    color: var(--text-3);
+}
+
+.le-chart__y-label {
+    left: 0;
+    width: 34px;
+    -unity-text-align: middle-right;
+}
+
+.le-chart__x-label {
+    bottom: 0;
+}
+
+.le-chart__crosshair {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: var(--text-3);
+}
+
+.le-chart__readout {
+    position: absolute;
+    top: 4px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    background-color: var(--surface-3);
+}
+
+/* ------------------------------------------------------------ simulator HUD */
+
+/* The stats sit on a second bar under the controls so neither runs off a narrower window. */
+.le-run-bar--stats {
+    top: 76px;
+    height: 48px;
+}
+
+.le-run-speed {
+    width: 170px;
+    margin: 0 6px;
+}
+
+.le-run-furniture {
+    flex-direction: row;
+    align-items: center;
+    width: 340px;
+    padding: 4px 8px;
+}
+
+.le-run-furniture__name {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-run-furniture .le-segmented {
+    margin: 0 6px;
+}
+
+/* ------------------------------------------------------------ batch */
+
+.le-batch {
+    align-items: center;
+    justify-content: center;
+}
+
+.le-batch__card {
+    width: 520px;
+    max-width: 92%;
+}
+
+.le-batch__status {
+    margin-bottom: 8px;
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+.le-batch__track {
+    height: 10px;
+    border-radius: 5px;
+}
+
+.le-batch-setup {
+    margin-top: 12px;
+}
+
+.le-chip-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.le-chip {
+    height: 28px;
+    margin: 0 6px 6px 0;
+    padding: 0 12px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: var(--border-strong);
+}
+
+.le-chip--on {
+    border-color: var(--accent);
+    background-color: var(--accent-soft);
+}
+
+.le-app .le-chip--on .le-btn__label {
+    color: var(--accent-hover);
+}
+
+/* ------------------------------------------------------------ configuration extras */
+
+.le-config-floor {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.le-config-floor__swatch {
+    width: 16px;
+    height: 16px;
+    margin-right: 10px;
+    border-radius: 4px;
+}
+
+.le-config-floor__name {
+    width: 110px;
+}
+
+.le-config-floor__slider {
+    flex-grow: 1;
+    margin-right: 4px;
+}
+
+.le-config-seed {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.le-config-seed .le-field-label {
+    width: 110px;
+    margin: 0;
+}
+
+.le-config-seed__input {
+    width: 160px;
+}
+
+/* ------------------------------------------------------------ analysis extras */
+
+.le-run-row__icon {
+    margin-right: 10px;
+    color: var(--accent);
+}
+
+.le-analysis__failure {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    white-space: normal;
+    background-color: var(--danger-soft);
+}
+
+.le-app .le-analysis__failure {
+    color: var(--danger);
+}
+
+.le-analysis__map {
+    height: 320px;
+    margin-top: 8px;
+}
+
+.le-floor-map {
+    border-radius: 8px;
+    background-color: var(--canvas);
+    overflow: hidden;
+}
+
+.le-floor-map__heat {
+    position: absolute;
+}
+
+.le-floor-map__overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+}
+
+.le-replay__controls {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.le-replay__slider {
+    flex-grow: 1;
+    margin: 0 8px;
+}
+
+.le-replay__readout {
+    width: 230px;
+    font-size: 12px;
+    -unity-text-align: middle-right;
+}
+
+.le-app .le-replay__readout {
+    color: var(--text-2);
+}
+
+.le-compare-row__track--ci {
+    overflow: visible;
+}
+
+/* The confidence interval: a bracket over the bar from mean − CI to mean + CI. */
+.le-compare-row__ci {
+    position: absolute;
+    top: -3px;
+    height: 14px;
+    border-left-width: 2px;
+    border-right-width: 2px;
+    border-top-width: 2px;
+    border-color: var(--text);
+}
+
+.le-table {
+    margin-bottom: 6px;
+}
+
+.le-table__row {
+    flex-direction: row;
+    padding: 6px 0;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-table__cell {
+    flex-grow: 1;
+    flex-basis: 0;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.le-table__cell--strong {
+    -unity-font-style: bold;
+}
+
+.le-app .le-table__row--head .le-table__cell {
+    color: var(--text-3);
+    font-size: 11px;
+}
+
+.le-log-row {
+    flex-direction: row;
+    padding: 5px 0;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-log-row__time {
+    width: 60px;
+    font-size: 12px;
+}
+
+.le-log-row__name {
+    width: 180px;
+    font-size: 12px;
+    -unity-font-style: bold;
+}
+
+.le-log-row__change {
+    flex-grow: 1;
+    font-size: 12px;
+}
+
+.le-app .le-log-row__time,
+.le-app .le-log-row__change {
+    color: var(--text-2);
+}
+
+/* ------------------------------------------------------------ analysis: run summary */
+
+/* Headline tiles: a big number, an optional bar, and a quiet note underneath. */
+.le-kpis {
+    flex-direction: row;
+    margin: 4px 0 12px 0;
+}
+
+.le-kpi {
+    flex-grow: 1;
+    flex-basis: 0;
+    min-width: 0;
+    margin-right: 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: var(--border);
+    background-color: var(--surface-2);
+}
+
+.le-kpi:last-child {
+    margin-right: 0;
+}
+
+.le-kpi__label {
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    -unity-font-style: bold;
+}
+
+.le-app .le-kpi__label {
+    color: var(--text-3);
+}
+
+.le-kpi__value {
+    margin-top: 4px;
+    font-size: 22px;
+    -unity-font-style: bold;
+    white-space: nowrap;
+}
+
+.le-app .le-kpi__value--low {
+    color: var(--danger);
+}
+
+.le-kpi__track {
+    height: 4px;
+    margin-top: 8px;
+    border-radius: 2px;
+    background-color: var(--surface-3);
+    overflow: hidden;
+}
+
+.le-kpi__fill {
+    height: 100%;
+    border-radius: 2px;
+}
+
+.le-kpi__note {
+    margin-top: 6px;
+    font-size: 11px;
+    white-space: normal;
+}
+
+.le-app .le-kpi__note {
+    color: var(--text-3);
+}
+
+/* Shared colour bands for bars and values. */
+.le-tone--good {
+    background-color: var(--success);
+}
+
+.le-tone--accent,
+.le-tone--mid {
+    background-color: var(--accent);
+}
+
+.le-tone--low {
+    background-color: var(--danger);
+}
+
+.le-tone--battery {
+    background-color: var(--warning);
+}
+
+.le-app .le-tone-text--good {
+    color: var(--success);
+}
+
+.le-app .le-tone-text--low {
+    color: var(--danger);
+}
+
+/* Time to 50 / 75 / 90%: three steps on one strip. */
+.le-milestones {
+    flex-direction: row;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background-color: var(--surface-2);
+}
+
+.le-milestone {
+    flex-grow: 1;
+    flex-basis: 0;
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-milestone__dot {
+    width: 10px;
+    height: 10px;
+    margin-right: 10px;
+    border-radius: 5px;
+    background-color: var(--success);
+}
+
+.le-milestone--missed .le-milestone__dot {
+    background-color: var(--surface-3);
+    border-width: 1px;
+    border-color: var(--border-strong);
+}
+
+.le-milestone__label {
+    font-size: 12px;
+    -unity-font-style: bold;
+}
+
+.le-milestone__value {
+    margin-top: 1px;
+    font-size: 11px;
+}
+
+.le-app .le-milestone__value {
+    color: var(--text-2);
+}
+
+.le-app .le-milestone--missed .le-milestone__label,
+.le-app .le-milestone--missed .le-milestone__value {
+    color: var(--text-3);
+}
+
+/* Secondary numbers: two columns of label · value rows. */
+.le-metrics {
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.le-metric {
+    width: 50%;
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 7px 12px 7px 0;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-metric__label {
+    font-size: 12px;
+}
+
+.le-app .le-metric__label {
+    color: var(--text-2);
+}
+
+.le-metric__value {
+    font-size: 12px;
+    -unity-font-style: bold;
+}
+
+/* Room table columns and in-cell bars. */
+.le-table__cell--name {
+    flex-grow: 1.3;
+    padding-right: 8px;
+}
+
+.le-table__cell--bar {
+    flex-grow: 2;
+    padding-right: 14px;
+}
+
+.le-table__cell--num {
+    flex-grow: 0.8;
+    -unity-text-align: middle-right;
+    padding-right: 4px;
+}
+
+.le-table__row {
+    align-items: center;
+}
+
+.le-bar-cell {
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-bar-cell__track {
+    flex-grow: 1;
+    height: 6px;
+    margin-right: 8px;
+    border-radius: 3px;
+    background-color: var(--surface-3);
+    overflow: hidden;
+}
+
+.le-bar-cell__fill {
+    height: 100%;
+    border-radius: 3px;
+}
+
+.le-bar-cell__value {
+    min-width: 64px;
+    font-size: 12px;
+    -unity-text-align: middle-right;
+}
+
+/* Chart legend and milestone markers. */
+.le-chart--legend {
+    height: 220px;
+}
+
+.le-chart__legend {
+    position: absolute;
+    top: 0;
+    right: 0;
+    flex-direction: row;
+}
+
+.le-chart__legend-item {
+    flex-direction: row;
+    align-items: center;
+    margin-left: 14px;
+}
+
+.le-chart__key {
+    width: 12px;
+    height: 3px;
+    margin-right: 6px;
+    border-radius: 2px;
+}
+
+.le-chart__key--coverage {
+    background-color: var(--accent);
+}
+
+.le-chart__key--battery {
+    background-color: var(--warning);
+}
+
+.le-chart__legend-label {
+    font-size: 11px;
+}
+
+.le-app .le-chart__legend-label {
+    color: var(--text-2);
+}
+
+.le-chart__marker {
+    position: absolute;
+    top: 2px;
+    font-size: 10px;
+    -unity-font-style: bold;
+}
+
+.le-app .le-chart__marker {
+    color: var(--text-3);
+}
+
+/* Run list: a clearer selected state. */
+.le-run-row--selected,
+.le-run-row--selected:hover {
+    border-left-width: 3px;
+    border-color: var(--accent);
+    padding-left: 9px;
 }
 
 /* ------------------------------------------------------------ furniture */

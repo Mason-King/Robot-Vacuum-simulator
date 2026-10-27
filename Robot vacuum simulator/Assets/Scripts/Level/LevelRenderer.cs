@@ -98,6 +98,8 @@ namespace RobotVacuum.Level
             var existing = transform.Find(GeneratedRootName);
             if (existing == null) return;
 
+            // Destroy waits for the end of the frame; hide it now so a rebuild mid-run never collides twice.
+            existing.gameObject.SetActive(false);
             SafeDestroy(existing.gameObject);
             generatedRoot = null;
         }

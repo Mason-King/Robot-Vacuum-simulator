@@ -912,7 +912,7 @@ namespace RobotVacuum.LevelEditor
 
                 bool showArea = screenWidth > 110f && screenHeight > 60f;
                 label.text = showArea
-                    ? $"{room.name}  <color=#FFFFFF8C>{room.Area:0.0} m²</color>"
+                    ? $"{room.name}  <color=#FFFFFF8C>{Ui.FormatArea(room.Area)}</color>"
                     : room.name;
                 label.EnableInClassList("le-room-label--selected", i == session.SelectedRoom);
                 label.EnableInClassList("le-room-label--obstacle", false);
@@ -957,20 +957,20 @@ namespace RobotVacuum.LevelEditor
             if (drag == Drag.RectCreate || drag == Drag.ObstacleCreate)
             {
                 RectEnd(out Vector2 min, out Vector2 max);
-                text = $"{max.x - min.x:0.00} × {max.y - min.y:0.00} m";
+                text = Ui.FormatSize(max.x - min.x, max.y - min.y);
             }
             else if (drag == Drag.WallCreate)
             {
-                text = Ui.FormatMetres(Vector2.Distance(wallStart, WallEnd()));
+                text = Ui.FormatLength(Vector2.Distance(wallStart, WallEnd()));
             }
             else if (session.Tool == EditorTool.Pen && penPoints.Count > 0 && cursorInside)
             {
-                text = Ui.FormatMetres(Vector2.Distance(penPoints[penPoints.Count - 1], SnapPoint(cursorLevel)));
+                text = Ui.FormatLength(Vector2.Distance(penPoints[penPoints.Count - 1], SnapPoint(cursorLevel)));
             }
             else if (drag == Drag.ObstacleHandle && dragMoved && session.GetObstacle(dragObstacle) != null)
             {
                 var size = session.GetObstacle(dragObstacle).size;
-                text = $"{size.x:0.00} × {size.y:0.00} m";
+                text = Ui.FormatSize(size.x, size.y);
             }
             else if (drag == Drag.Vertex && dragMoved && dragVertex >= 0)
             {
@@ -1017,7 +1017,7 @@ namespace RobotVacuum.LevelEditor
         void PaintGrid(Painter2D painter)
         {
             // Pick the smallest "nice" step that still leaves breathing room between lines.
-            float[] steps = { 0.05f, 0.1f, 0.25f, 0.5f, 1f, 2f, 5f, 10f, 25f, 50f };
+            float[] steps = Ui.GridSteps;
             float step = steps[steps.Length - 1];
             foreach (float candidate in steps)
             {
