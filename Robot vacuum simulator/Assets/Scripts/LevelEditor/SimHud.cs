@@ -181,7 +181,7 @@ namespace RobotVacuum.LevelEditor
                 vacuumSettings.reverseSpeed, vacuumSettings.FormatSpeed, value => vacuumSettings.reverseSpeed = value);
             AddVacuumSetting(panel, "Turn speed", 30f, 720f,
                 vacuumSettings.turnSpeed, value => $"{value:0} °/s", value => vacuumSettings.turnSpeed = value);
-            AddVacuumSetting(panel, "Battery life", 10f, 1800f,
+            AddVacuumSetting(panel, "Battery life", 10f, Battery.MaxCapacity,
                 vacuumSettings.batteryCapacity, VacuumSettings.FormatCapacity,
                 value => vacuumSettings.batteryCapacity = value);
             Ui.Text(panel, "Changing battery life recharges the vacuum.", "le-empty-hint");
