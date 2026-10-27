@@ -157,11 +157,20 @@ namespace RobotVacuum.Level
             return triangles.ToArray();
         }
 
-        /// <summary>True when no two non-adjacent edges cross. Self-intersecting rooms triangulate badly.</summary>
+        /// <summary>True when an outline has area and does not cross, touch, or double back over itself.</summary>
         public static bool IsSimple(IList<Vector2> points)
         {
             int n = points?.Count ?? 0;
-            if (n < 4) return n == 3;
+            if (n < 3 || Mathf.Abs(SignedArea(points)) <= 1e-6f) return false;
+
+            for (int i = 0; i < n; i++)
+            {
+                Vector2 previous = points[(i + n - 1) % n] - points[i];
+                Vector2 next = points[(i + 1) % n] - points[i];
+                if (previous.sqrMagnitude <= 1e-12f || next.sqrMagnitude <= 1e-12f) return false;
+                if (Mathf.Abs(Cross(previous, next)) <= 1e-6f && Vector2.Dot(previous, next) > 0f)
+                    return false;
+            }
 
             for (int i = 0; i < n; i++)
             {
@@ -172,11 +181,35 @@ namespace RobotVacuum.Level
                     if (j == i || (j + 1) % n == i || (i + 1) % n == j) continue;
 
                     Vector2 b1 = points[j], b2 = points[(j + 1) % n];
-                    if (SegmentsIntersect(a1, a2, b1, b2)) return false;
+                    if (SegmentsIntersectInclusive(a1, a2, b1, b2)) return false;
                 }
             }
             return true;
         }
+
+        static bool SegmentsIntersectInclusive(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+        {
+            const float tolerance = 1e-6f;
+            float abC = Cross(b - a, c - a);
+            float abD = Cross(b - a, d - a);
+            float cdA = Cross(d - c, a - c);
+            float cdB = Cross(d - c, b - c);
+
+            if (((abC > tolerance && abD < -tolerance) || (abC < -tolerance && abD > tolerance)) &&
+                ((cdA > tolerance && cdB < -tolerance) || (cdA < -tolerance && cdB > tolerance)))
+                return true;
+
+            return Mathf.Abs(abC) <= tolerance && IsOnSegment(a, b, c, tolerance) ||
+                   Mathf.Abs(abD) <= tolerance && IsOnSegment(a, b, d, tolerance) ||
+                   Mathf.Abs(cdA) <= tolerance && IsOnSegment(c, d, a, tolerance) ||
+                   Mathf.Abs(cdB) <= tolerance && IsOnSegment(c, d, b, tolerance);
+        }
+
+        static bool IsOnSegment(Vector2 a, Vector2 b, Vector2 point, float tolerance) =>
+            point.x >= Mathf.Min(a.x, b.x) - tolerance &&
+            point.x <= Mathf.Max(a.x, b.x) + tolerance &&
+            point.y >= Mathf.Min(a.y, b.y) - tolerance &&
+            point.y <= Mathf.Max(a.y, b.y) + tolerance;
 
         /// <summary>True when two polygons share any interior area; boundary contact alone is allowed.</summary>
         public static bool InteriorsOverlap(IList<Vector2> a, IList<Vector2> b)

@@ -5,8 +5,10 @@ namespace RobotVacuum
 {
     public class Battery : MonoBehaviour
     {
+        public const float MaxCapacity = 10000f;
+
         [Tooltip("Available work units before the battery is empty.")]
-        [Min(0f)]
+        [Range(0f, MaxCapacity)]
         [SerializeField, FormerlySerializedAs("batteryLifeSeconds")] float capacity = 300f;
 
         [Tooltip("Battery work units used per metre travelled on a neutral surface.")]
@@ -31,7 +33,7 @@ namespace RobotVacuum
         public float ChargePercentage => capacity > 0f ? CurrentCharge / capacity * 100f : 0f;
         public bool CanOperate => CurrentCharge > 0f;
 
-        void Awake() => ResetCharge();
+        void Awake() => SetCapacity(capacity);
 
         public void ConsumeWork(float distanceMeters, float turnDegrees, float surfaceMultiplier)
         {
@@ -49,7 +51,7 @@ namespace RobotVacuum
 
         public void SetCapacity(float workUnits)
         {
-            capacity = Mathf.Max(0f, workUnits);
+            capacity = Mathf.Clamp(workUnits, 0f, MaxCapacity);
             ResetCharge();
         }
 

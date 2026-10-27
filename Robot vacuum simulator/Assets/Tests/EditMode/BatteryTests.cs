@@ -108,6 +108,15 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Capacity_ClampsToMaximum()
+        {
+            battery.SetCapacity(Battery.MaxCapacity + 1f);
+
+            Assert.AreEqual(Battery.MaxCapacity, battery.Capacity, 1e-5f);
+            Assert.AreEqual(Battery.MaxCapacity, battery.CurrentCharge, 1e-5f);
+        }
+
+        [Test]
         public void SetCapacity_RechargesDepletedBattery()
         {
             battery.ConsumeWork(10f, 0f, 1f);

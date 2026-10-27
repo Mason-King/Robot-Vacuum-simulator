@@ -152,7 +152,13 @@ namespace RobotVacuum.LevelEditor
 
             foreach (var issue in issues)
             {
-                var row = Ui.Div(card, issue.severity == IssueSeverity.Error ? "le-check le-check--error" : "le-check le-check--warning");
+                string issueClass = issue.severity switch
+                {
+                    IssueSeverity.Critical => "le-check le-check--critical",
+                    IssueSeverity.Error => "le-check le-check--error",
+                    _ => "le-check le-check--warning",
+                };
+                var row = Ui.Div(card, issueClass);
                 row.Add(new IconElement(IconKind.Warning));
                 Ui.Text(row, issue.message, "le-check__text");
 
@@ -278,6 +284,16 @@ namespace RobotVacuum.LevelEditor
                 corners.text = room.outline.Count.ToString();
             });
 
+            Ui.Section(scroll, "Rotation", out var rotationBody);
+            var rotationSlider = new ValueSlider(0f, 360f, room.rotation, v => $"{v:0}°", true);
+            BindContinuous(rotationSlider, "Rotate Room", v => session.SetRoomRotationLive(index, v));
+            rotationBody.Add(rotationSlider);
+
+            var rotationButtons = Ui.Div(rotationBody, "le-button-row");
+            Ui.Button(rotationButtons, "-15°", null, () => RotateRoom(index, room, -15f), "le-btn--ghost le-btn--grow");
+            Ui.Button(rotationButtons, "+15°", null, () => RotateRoom(index, room, 15f), "le-btn--ghost le-btn--grow");
+            Ui.Text(rotationBody, "Drag the rotate handle above the room. Rotation stops if it would overlap another room.", "le-empty-hint");
+
             Ui.Section(scroll, "Floor covering", out var floorBody);
             BuildFloorPicker(floorBody, room.floorIndex, floor => session.SetRoomFloor(index, floor));
 
@@ -318,6 +334,13 @@ namespace RobotVacuum.LevelEditor
             var actions = Ui.Div(scroll, "le-button-row le-inspector__actions");
             Ui.Button(actions, "Duplicate", IconKind.Duplicate, () => session.DuplicateRoom(index), "le-btn--ghost le-btn--grow");
             Ui.Button(actions, "Delete", IconKind.Trash, () => session.DeleteRoom(index), "le-btn--danger-ghost le-btn--grow");
+        }
+
+        void RotateRoom(int index, Room room, float degrees)
+        {
+            session.Checkpoint("Rotate Room");
+            session.SetRoomRotationLive(index, room.rotation + degrees);
+            session.Commit();
         }
 
         static float Perimeter(Room room)
@@ -433,14 +456,26 @@ namespace RobotVacuum.LevelEditor
             sizeBody.Add(depthSlider);
 
             Ui.Text(sizeBody, "Rotation", "le-field-label");
-            var rotationSlider = new ValueSlider(0f, 360f, obstacle.rotation, v => $"{v:0}°");
+            var rotationSlider = new ValueSlider(0f, 360f, obstacle.rotation, v => $"{v:0}°", true);
             BindContinuous(rotationSlider, "Rotate Object", v => session.SetObstacleRotationLive(index, v));
             sizeBody.Add(rotationSlider);
-            Ui.Text(sizeBody, "Drag it on the canvas with the Select tool to move it.", "le-empty-hint");
+
+            var rotationButtons = Ui.Div(sizeBody, "le-button-row");
+            Ui.Button(rotationButtons, "-15°", null, () => RotateObstacle(index, obstacle, -15f), "le-btn--ghost le-btn--grow");
+            Ui.Button(rotationButtons, "+15°", null, () => RotateObstacle(index, obstacle, 15f), "le-btn--ghost le-btn--grow");
+
+            Ui.Text(sizeBody, "Drag it to move, or drag the rotate handle above it.", "le-empty-hint");
 
             var actions = Ui.Div(scroll, "le-button-row le-inspector__actions");
             Ui.Button(actions, "Duplicate", IconKind.Duplicate, () => session.DuplicateObstacle(index), "le-btn--ghost le-btn--grow");
             Ui.Button(actions, "Delete", IconKind.Trash, () => session.DeleteObstacle(index), "le-btn--danger-ghost le-btn--grow");
+        }
+
+        void RotateObstacle(int index, Obstacle obstacle, float degrees)
+        {
+            session.Checkpoint("Rotate Object");
+            session.SetObstacleRotationLive(index, obstacle.rotation + degrees);
+            session.Commit();
         }
 
         void BuildKindPicker(VisualElement parent, ObstacleKind selected, Action<ObstacleKind> onPick)

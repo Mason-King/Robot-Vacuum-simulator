@@ -29,6 +29,11 @@ namespace RobotVacuum.Sim
         /// </summary>
         public float maxSimulatedSeconds = SimDefaults.MaxSimulatedSeconds;
 
+        // How fast Graphics-mode plays back (up to 100x Time.timeScale while watching).
+        // Irrelevant in headless -- that always runs at a fixed fast multiplier
+        // regardless, since nobody's watching it.
+        public float playbackSpeed = 1f;
+
         /// <summary>When the run started, UTC, ISO 8601.</summary>
         public string startedUtc;
 

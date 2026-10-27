@@ -8,6 +8,39 @@ using Object = UnityEngine.Object;
 
 namespace RobotVacuum.Tests
 {
+    public class SimulationSpeedTests
+    {
+        [TestCase(2f)]
+        [TestCase(100f)]
+        public void Apply_PreservesFixedTimestepAndExpandsFrameCatchupLimit(float speed)
+        {
+            float originalTimeScale = Time.timeScale;
+            float originalMaximumDeltaTime = Time.maximumDeltaTime;
+            float originalFixedDeltaTime = Time.fixedDeltaTime;
+            const float baseMaximumDeltaTime = 0.33333334f;
+
+            try
+            {
+                SimulationSpeed.Apply(speed, baseMaximumDeltaTime);
+
+                Assert.AreEqual(speed, Time.timeScale);
+                Assert.AreEqual(baseMaximumDeltaTime * speed, Time.maximumDeltaTime, 1e-5f);
+                Assert.AreEqual(originalFixedDeltaTime, Time.fixedDeltaTime);
+            }
+            finally
+            {
+                Time.timeScale = originalTimeScale;
+                Time.maximumDeltaTime = originalMaximumDeltaTime;
+            }
+        }
+
+        [Test]
+        public void Clamp_LimitsPlaybackSpeedToOneHundredTimes()
+        {
+            Assert.AreEqual(SimulationSpeed.MaxPlaybackSpeed, SimulationSpeed.ClampPlaybackSpeed(101f));
+        }
+    }
+
     public class MovementBrainTests
     {
         sealed class ThrowingBrain : MovementBrain

@@ -830,6 +830,7 @@ namespace RobotVacuum.LevelEditor
         void Simulate()
         {
             if (session == null) return;
+            if (!CanStartSimulation()) return;
 
             var snapshot = LevelSnapshot.Parse(session.Serialize());
             if (!HasRooms(snapshot)) return;
@@ -863,6 +864,7 @@ namespace RobotVacuum.LevelEditor
         void StartRun()
         {
             if (session == null || run != null) return;
+            if (!CanStartSimulation()) return;
 
             if (session.Level.Rooms.Count == 0)
             {
@@ -904,6 +906,23 @@ namespace RobotVacuum.LevelEditor
             BeginRun();
         }
 
+        bool CanStartSimulation()
+        {
+            var criticalIssues = session.Validate().FindAll(issue => issue.severity == IssueSeverity.Critical);
+            if (criticalIssues.Count == 0) return true;
+
+            var explanations = new List<string>();
+            foreach (var issue in criticalIssues) explanations.Add(issue.message);
+
+            overlay.ShowDialog(
+                "Critical warning: collision detected",
+                "You can't start a simulation until every piece of furniture is clear of the walls.\n\n" +
+                string.Join("\n", explanations),
+                null,
+                new DialogButton("OK", ButtonStyle.Danger, null));
+            return false;
+        }
+
         void BeginRun()
         {
             overlay.CloseMenu();
@@ -937,8 +956,9 @@ namespace RobotVacuum.LevelEditor
             Ui.Button(bar, "Stop", IconKind.Stop, StopRun, "le-btn--ghost");
             Ui.IconButton(bar, IconKind.Undo, "Restart", () => run?.Restart(), "le-btn--ghost");
 
-            var simSpeed = new Segmented(new[] { "1×", "2×", "4×", "8×" }, 0);
-            simSpeed.SelectionChanged += index => run?.SetSpeed(Mathf.Pow(2f, index));
+            Ui.Text(bar, "Speed", "le-field-label");
+            var simSpeed = new ValueSlider(1f, SimulationSpeed.MaxPlaybackSpeed, 1f, value => $"{value:0.##}×", true);
+            simSpeed.ValueChanged += value => run?.SetSpeed(value);
             Ui.Tooltip(simSpeed, "Simulation speed");
             bar.Add(simSpeed);
 
@@ -1026,7 +1046,7 @@ namespace RobotVacuum.LevelEditor
             AddVacuumSetting(panel, "Drive speed", 0.05f, 2f, settings.driveSpeed, settings.FormatSpeed, v => settings.driveSpeed = v);
             AddVacuumSetting(panel, "Reverse speed", 0.05f, 1.5f, settings.reverseSpeed, settings.FormatSpeed, v => settings.reverseSpeed = v);
             AddVacuumSetting(panel, "Turn speed", 30f, 720f, settings.turnSpeed, v => $"{v:0} °/s", v => settings.turnSpeed = v);
-            AddVacuumSetting(panel, "Battery capacity", 10f, 1800f, settings.batteryCapacity, VacuumSettings.FormatCapacity,
+            AddVacuumSetting(panel, "Battery capacity", 10f, Battery.MaxCapacity, settings.batteryCapacity, VacuumSettings.FormatCapacity,
                 v => settings.batteryCapacity = v);
             Ui.Text(panel, "Changing battery capacity recharges the vacuum.", "le-empty-hint");
 
@@ -1060,6 +1080,7 @@ namespace RobotVacuum.LevelEditor
         readonly bool createdCamera;
         readonly CameraState savedCamera;
         readonly float savedTimeScale;
+        readonly float savedMaximumDeltaTime;
         readonly float startTime;
         float playbackSpeed = 1f;
         bool isPaused;
@@ -1080,6 +1101,7 @@ namespace RobotVacuum.LevelEditor
         {
             this.level = level;
             savedTimeScale = Time.timeScale;
+            savedMaximumDeltaTime = Time.maximumDeltaTime;
             startTime = Time.time;
 
             root = new GameObject("Level Run");
@@ -1148,14 +1170,15 @@ namespace RobotVacuum.LevelEditor
 
         public void SetSpeed(float multiplier)
         {
-            playbackSpeed = Mathf.Max(0.01f, multiplier);
-            if (!isPaused) Time.timeScale = playbackSpeed;
+            playbackSpeed = SimulationSpeed.ClampPlaybackSpeed(multiplier);
+            if (!isPaused) SimulationSpeed.Apply(playbackSpeed, savedMaximumDeltaTime);
         }
 
         public void TogglePause()
         {
             isPaused = !isPaused;
-            Time.timeScale = isPaused ? 0f : playbackSpeed;
+            if (isPaused) Time.timeScale = 0f;
+            else SimulationSpeed.Apply(playbackSpeed, savedMaximumDeltaTime);
             PauseStateChanged?.Invoke(isPaused);
         }
 
@@ -1163,6 +1186,7 @@ namespace RobotVacuum.LevelEditor
         {
             PauseStateChanged = null;
             Time.timeScale = savedTimeScale;
+            Time.maximumDeltaTime = savedMaximumDeltaTime;
 
             if (!createdCamera && camera != null)
             {

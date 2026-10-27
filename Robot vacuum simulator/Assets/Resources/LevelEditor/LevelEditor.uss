@@ -724,6 +724,14 @@
     color: var(--danger);
 }
 
+.le-check--critical {
+    background-color: var(--danger-soft);
+}
+
+.le-check--critical .le-icon {
+    color: var(--danger);
+}
+
 .le-check__text {
     flex-shrink: 1;
     font-size: 12px;
@@ -1476,6 +1484,17 @@
 
 .le-run-bar .le-segmented {
     margin: 0 8px 0 4px;
+}
+
+.le-run-bar .le-field-label {
+    margin: 0 4px;
+    white-space: nowrap;
+}
+
+.le-run-bar .le-slider {
+    width: 210px;
+    margin: 0 8px 0 4px;
+    flex-shrink: 0;
 }
 
 /* ------------------------------------------------------------ start screen */
