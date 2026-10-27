@@ -5,13 +5,18 @@ namespace RobotVacuum.Sim
     // ============================================================================
     // CoverageHeatmapRenderer.cs
     //
-    // Draws VacuumCleaningController's grid as a colored overlay: untouched
-    // (fully dirty) cells are fully transparent, so the real floor shows through
-    // from the start, and cells change colour as the robot cleans them -- red
-    // when barely touched, through orange and yellow, to green when fully clean
-    // (an editable Gradient). One quad, one generated texture -- not one
-    // GameObject per cell, which would be far too many objects at ~1-inch
-    // resolution.
+    // Draws VacuumCleaningController's grid as a colored overlay in one of three
+    // modes (HeatmapMode): Floor Cleanliness, Floor Coverage, Floor OverCoverage.
+    // Cells with nothing in them yet are fully transparent, so the real floor
+    // shows through from the start. All colours and opacities come from
+    // HeatmapColors / HeatmapDefaults -- nothing is configured here. One quad,
+    // one generated texture -- not one GameObject per cell, which would be far
+    // too many objects at ~1-inch resolution.
+    //
+    // The mode is a public property (Mode) AND an Inspector field, and may be
+    // changed at any time, including mid-run: the overlay repaints on the next
+    // frame. A GUI binds to Mode; Mode and the target (the controller's
+    // TargetMaxClean) are all this component reads.
     // ============================================================================
     [RequireComponent(typeof(MeshFilter))]
     [RequireComponent(typeof(MeshRenderer))]
@@ -26,13 +31,22 @@ namespace RobotVacuum.Sim
         [Tooltip("Z offset from the floor. Small negative values sit the heatmap above the floor and below the walls, matching LevelRenderer's floorDepth/wallDepth convention (floor at 0, walls slightly negative).")]
         [SerializeField] float depthOffset = -0.02f;
 
-        [Tooltip("Colour by how clean a cell is: the left end is barely touched, the right end fully clean. A cell nobody has cleaned yet is always fully transparent, whatever the gradient says, so the real floor is visible from the start.")]
-        [SerializeField] Gradient colors = DefaultColors();
+        [Tooltip("Which view of the External Model to show. Can be changed while running; the overlay repaints right away.")]
+        [SerializeField] HeatmapMode mode = HeatmapMode.FloorCleanliness;
 
-        // The gradient sampled once into a lookup table, so repainting a
-        // large grid doesn't call Gradient.Evaluate for every cell.
-        const int PaletteSize = 256;
-        Color32[] palette;
+        /// <summary>The view being shown. Setting it repaints on the next frame.</summary>
+        public HeatmapMode Mode
+        {
+            get => mode;
+            set
+            {
+                if (mode == value) return;
+                mode = value;
+                repaintRequested = true;
+            }
+        }
+
+        bool repaintRequested;
 
         Texture2D texture;
         Mesh quadMesh;
@@ -46,7 +60,6 @@ namespace RobotVacuum.Sim
                 controller = FindAnyObjectByType<VacuumCleaningController>(FindObjectsInactive.Include);
 
             GetComponent<MeshRenderer>().sharedMaterial = BuildMaterial();
-            BuildPalette();
         }
 
         void Update()
@@ -62,8 +75,9 @@ namespace RobotVacuum.Sim
                 BuildTextureAndMesh();
 
             timeSinceLastUpdate += Time.deltaTime;
-            if (timeSinceLastUpdate < updateIntervalSeconds) return;
+            if (!repaintRequested && timeSinceLastUpdate < updateIntervalSeconds) return;
             timeSinceLastUpdate = 0f;
+            repaintRequested = false;
 
             RepaintTexture();
         }
@@ -127,17 +141,15 @@ namespace RobotVacuum.Sim
         }
 
         // ------------------------------------------------------------------
-        // Rebuilds every pixel from the grid's current dirtiness values.
-        // Reads Grid.GetCell for every cell -- this is the "display copy,"
-        // never the authoritative source; CalculateCoveragePercent() always
-        // computes fresh from the real cell array, independent of whatever
-        // this texture currently shows.
+        // Rebuilds every pixel from the grid's current values, coloured for
+        // the current mode and target. Reads Grid.GetCell for every cell --
+        // this is the "display copy," never the authoritative source.
         // ------------------------------------------------------------------
         void RepaintTexture()
         {
             var grid = controller.Grid;
             var pixels = new Color32[builtCols * builtRows];
-            if (palette == null) BuildPalette();
+            float target = grid.TargetMaxClean;
 
             for (int row = 0; row < builtRows; row++)
             {
@@ -145,31 +157,14 @@ namespace RobotVacuum.Sim
                 {
                     var cell = grid.GetCell(row, col);
 
-                    // Non-cleanable cells stay fully transparent -- nothing
-                    // to show, since they're excluded from coverage entirely
-                    // (matches CalculateCoveragePercent's own treatment).
-                    // Set for cells under furniture that blocks the vacuum.
-                    Color32 pixelColor;
-                    if (!cell.CountsTowardCoverage)
-                    {
-                        pixelColor = default;
-                    }
-                    else
-                    {
-                        // dirtiness runs 1 (dirty, the starting state) -> 0
-                        // (clean). The palette is indexed by how CLEAN a cell
-                        // is, so untouched cells stay transparent and colour
-                        // builds up from red to green as the robot works.
-                        float cleanedFraction = 1f - cell.Dirtiness;
-                        pixelColor = palette[Mathf.Clamp(Mathf.RoundToInt(cleanedFraction * (PaletteSize - 1)), 0, PaletteSize - 1)];
-                    }
-
-                    // Texture2D rows run bottom-to-top by convention; our
-                    // grid's row 0 is also the bottom (lowest Y, per
-                    // GridIndexToWorldCenter) since both follow the same
-                    // confirmed Y-up convention -- so this is a direct
-                    // index, no flip needed.
-                    pixels[row * builtCols + col] = pixelColor;
+                    // Cells that don't count toward coverage (under furniture
+                    // that blocks the vacuum, or outside every room) stay
+                    // fully transparent.
+                    // Texture2D rows run bottom-to-top and so does our grid
+                    // (row 0 = lowest Y), so this is a direct index.
+                    pixels[row * builtCols + col] = !cell.CountsTowardCoverage
+                        ? default
+                        : HeatmapColors.Evaluate(mode, cell.DwellSeconds, cell.Cleanliness, target);
                 }
             }
 
@@ -177,37 +172,8 @@ namespace RobotVacuum.Sim
             texture.Apply();
         }
 
-        void OnValidate() => palette = null; // rebuilt from the edited gradient on the next repaint
-
-        void BuildPalette()
-        {
-            palette = new Color32[PaletteSize];
-            for (int i = 0; i < PaletteSize; i++)
-                palette[i] = colors.Evaluate(i / (float)(PaletteSize - 1));
-
-            // Untouched floor stays see-through whatever the gradient's left end looks like.
-            palette[0] = default;
-        }
-
-        static Gradient DefaultColors()
-        {
-            var gradient = new Gradient();
-            gradient.SetKeys(
-                new[]
-                {
-                    new GradientColorKey(new Color(0.90f, 0.26f, 0.29f), 0f),    // barely touched: red
-                    new GradientColorKey(new Color(0.96f, 0.58f, 0.22f), 0.35f), // orange
-                    new GradientColorKey(new Color(0.96f, 0.84f, 0.29f), 0.6f),  // yellow
-                    new GradientColorKey(new Color(0.24f, 0.80f, 0.54f), 1f),    // fully clean: green
-                },
-                new[]
-                {
-                    new GradientAlphaKey(0f, 0f),
-                    new GradientAlphaKey(0.45f, 0.06f),
-                    new GradientAlphaKey(0.6f, 1f),
-                });
-            return gradient;
-        }
+        // An Inspector edit to the mode while running takes effect straight away.
+        void OnValidate() => repaintRequested = true;
 
         // Runs may be started and stopped many times in one session, so the
         // generated texture, mesh and material go with the component.

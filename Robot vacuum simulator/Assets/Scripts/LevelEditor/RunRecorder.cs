@@ -72,85 +72,58 @@ namespace RobotVacuum.LevelEditor
     }
 
     /// <summary>
-    /// The simulation pieces of one scene, found once, and the one way every run starts, so a single run, a
-    /// restart and every batch trial begin from an identical state for a given seed.
+    /// What a recorder, the HUD and the batch runner read from a run: a live view over the active
+    /// <see cref="SimulationSession"/>. Every property reads through to the session's current run, so after a
+    /// restart it points at the new robot and grid without being rebuilt.
     /// </summary>
     public sealed class SimWorld
     {
-        public SimEngine Engine { get; }
-        public LevelData Level { get; }
-        public LevelRenderer Renderer { get; }
-        public VacuumRobot Robot { get; }
-        public Battery Battery { get; }
-        public VacuumCleaningController Cleaning { get; }
-        public List<MovingCat> Cats { get; }
+        public SimWorld(SimulationSession session) => Session = session;
 
-        public SimWorld(SimEngine engine, LevelData level, LevelRenderer renderer)
-        {
-            Engine = engine;
-            Level = level;
-            Renderer = renderer;
-            Robot = UnityEngine.Object.FindAnyObjectByType<VacuumRobot>();
-            Battery = Robot != null ? Robot.GetComponent<Battery>() : null;
-            Cleaning = UnityEngine.Object.FindAnyObjectByType<VacuumCleaningController>();
-            Cats = new List<MovingCat>(UnityEngine.Object.FindObjectsByType<MovingCat>(FindObjectsSortMode.InstanceID));
+        public SimulationSession Session { get; }
 
-            var order = new List<ISimStepper>();
-            if (Robot != null) order.Add(Robot);
-            order.AddRange(Cats);
-            if (Cleaning != null) order.Add(Cleaning);
-            engine.SetSteppers(order);
-        }
+        SimulationRunner Runner => Session.Runner;
 
-        /// <summary>
-        /// Starts a run from scratch: seeds all randomness, puts the vacuum and cats back, applies the
-        /// configured vacuum and grid resolution, and restarts the clock.
-        /// </summary>
-        public void BeginRun(int seed, MovementPattern pattern, PictureKind picture)
-        {
-            SimRandom.Reseed(seed);
+        public LevelData Level => Session.Level;
+        public LevelRenderer Renderer => Runner?.Level;
+        public VacuumRobot Robot => Runner?.Robot;
+        public Battery Battery => Runner?.Battery;
+        public VacuumCleaningController Cleaning => Runner?.Cleaning;
 
-            // Toggling simulation drops any contacts left from the last run, so physics starts clean too.
-            SetBodiesSimulated(false);
+        /// <summary>Simulated seconds since the current run began.</summary>
+        public float SimTime => Session.SimulatedSeconds;
 
-            if (Robot != null)
-            {
-                SimConfig.Vacuum.ApplyTo(Robot, Battery);
-                Robot.Pattern = pattern;
-                Robot.Picture = picture;
-                Robot.ResetToSpawn();
-            }
+        public bool Running => Session.State == SimulationSession.Phase.Running;
 
-            foreach (var cat in Cats)
-                if (cat != null) cat.ResetToSpawn(SimRandom.NextSeed());
+        public int Seed => Session.Settings != null ? Session.Settings.seed : 0;
 
-            if (Cleaning != null)
-            {
-                if (!Mathf.Approximately(Cleaning.CellSizeMeters, SimConfig.CellSize)) Cleaning.SetCellSize(SimConfig.CellSize);
-                else Cleaning.ResetCoverage();
-            }
-
-            SetBodiesSimulated(true);
-            Physics2D.SyncTransforms();
-            Engine.ResetClock();
-        }
-
-        void SetBodiesSimulated(bool simulated)
-        {
-            if (Robot != null && Robot.TryGetComponent(out Rigidbody2D robotBody)) robotBody.simulated = simulated;
-            foreach (var cat in Cats)
-                if (cat != null && cat.TryGetComponent(out Rigidbody2D catBody)) catBody.simulated = simulated;
-        }
+        public MovementPattern Pattern => Session.Settings != null ? Session.Settings.pattern : MovementPattern.RandomBounce;
 
         public float Coverage => Cleaning != null && Cleaning.Grid != null ? Cleaning.CoveragePercent : 0f;
 
-        public bool OffFloor => Robot != null && LevelGeometry.IsOffFloor(Level, Robot.LevelPosition);
+        public bool OffFloor => Robot != null && Level != null && LevelGeometry.IsOffFloor(Level, Robot.LevelPosition);
+
+        /// <summary>Applies the shared vacuum settings to the current run's robot, beyond the four the session sets.</summary>
+        public void ApplyVacuumSettings() => SimConfig.Vacuum.ApplyTo(Robot, Battery);
+
+        /// <summary>A short, readable reason for how a session's run ended, for the run history.</summary>
+        public static string Describe(RunEndReason reason) => reason switch
+        {
+            RunEndReason.Completed => "Finished",
+            RunEndReason.BatteryDepleted => "Battery empty",
+            RunEndReason.TimeCap => "Time limit",
+            RunEndReason.StoppedByUser => "Stopped",
+            RunEndReason.Error => "Algorithm failed",
+            RunEndReason.Degenerate => "No progress",
+            _ => "Stopped",
+        };
     }
 
     /// <summary>
-    /// Watches one run through the engine's step hook and turns it into results: the summary metrics, the
-    /// coverage timeline, time-series telemetry at the configured resolution, per-cell cleaning events,
-    /// replay keyframes, and a log of every setting changed mid-run. <see cref="Finish"/> saves it all.
+    /// Watches one session run, after every physics step, and turns it into results: the summary metrics,
+    /// the coverage timeline, time-series telemetry at the configured resolution, per-cell cleaning events,
+    /// replay keyframes, and a log of every setting changed mid-run. <see cref="Finish"/> saves it all into
+    /// the run's folder, next to the session's own config.json and result.json.
     /// </summary>
     public sealed class RunRecorder
     {
@@ -165,6 +138,7 @@ namespace RobotVacuum.LevelEditor
         readonly List<CellEvent> cellEvents = new List<CellEvent>();
         readonly RunReplay replay = new RunReplay();
         ExternalModelGrid hookedGrid;
+        RecorderProbe probe;
         float nextTelemetry;
         float nextReplaySample;
         float nextCoverageSample;
@@ -172,6 +146,8 @@ namespace RobotVacuum.LevelEditor
         float nextKeyframe;
         float batteryAtStart;
         bool detached;
+        bool frozen;
+        float frozenTime;
 
         // Per-room tallies, indexed like level.Rooms.
         float[] roomBattery;
@@ -188,12 +164,24 @@ namespace RobotVacuum.LevelEditor
             public float time;
             public int row;
             public int col;
-            public float dirtiness;
+            public float dwell;
+            public float cleanliness;
         }
 
-        public RunRecorder(SimWorld world, int seed, string batchId = null, int trial = 0, bool headless = false)
+        /// <summary>Samples the run after the robot and the cleaning grid have moved, every physics step.</summary>
+        [DefaultExecutionOrder(1000)]
+        sealed class RecorderProbe : MonoBehaviour
+        {
+            public RunRecorder recorder;
+
+            void FixedUpdate() => recorder?.OnStep();
+        }
+
+        /// <summary>Starts recording the session's current run. Call it as the run begins, before it moves.</summary>
+        public RunRecorder(SimWorld world, string batchId = null, int trial = 0, bool headless = false)
         {
             this.world = world;
+            int seed = world.Seed;
             telemetryInterval = SimConfig.TelemetryInterval;
 
             report = new RunReport
@@ -201,16 +189,15 @@ namespace RobotVacuum.LevelEditor
                 id = Guid.NewGuid().ToString("N"),
                 levelName = world.Level != null ? world.Level.name : "Floor plan",
                 levelPath = SimLauncher.SimulatedPath,
-                pattern = world.Robot != null ? world.Robot.Pattern : SimConfig.Pattern,
-                picture = SimConfig.Picture,
+                pattern = world.Pattern,
                 seed = seed,
                 batchId = batchId,
                 trial = trial,
                 headless = headless,
-                cellSize = SimConfig.CellSize,
+                cellSize = world.Cleaning != null ? world.Cleaning.CellSizeMeters : SimConfig.CellSize,
                 telemetryInterval = telemetryInterval,
             };
-            report.dataFolder = RunHistory.DataFolderFor(report.id);
+            report.dataFolder = world.Session.RunFolder ?? RunHistory.DataFolderFor(report.id);
 
             replay.sampleInterval = telemetryInterval;
             replay.robotRadius = world.Robot != null ? world.Robot.Radius : 0.17f;
@@ -228,21 +215,38 @@ namespace RobotVacuum.LevelEditor
             lastCharge = world.Battery != null ? world.Battery.CurrentCharge : 0f;
             lastDistance = world.Robot != null ? world.Robot.DistanceTravelled : 0f;
 
-            world.Engine.Stepped += OnStepped;
+            var root = world.Robot != null ? world.Robot.transform.root.gameObject : null;
+            if (root != null)
+            {
+                probe = root.AddComponent<RecorderProbe>();
+                probe.recorder = this;
+            }
             HookGrid();
             Sample(0f);
         }
 
         public RunReport Report => report;
 
-        public float Elapsed => world.Engine.SimTime;
+        public float Elapsed => frozen ? frozenTime : world.SimTime;
+
+        /// <summary>Stops sampling here, so steps taken before the run is torn down don't count.</summary>
+        public void Freeze()
+        {
+            if (frozen) return;
+            frozenTime = world.SimTime;
+            frozen = true;
+        }
 
         /// <summary>Stops listening, without saving. Safe to call twice.</summary>
         public void Detach()
         {
             if (detached) return;
             detached = true;
-            world.Engine.Stepped -= OnStepped;
+            if (probe != null)
+            {
+                probe.recorder = null;
+                UnityEngine.Object.Destroy(probe);
+            }
             if (hookedGrid != null) hookedGrid.CellStateLogged -= OnCellLogged;
         }
 
@@ -279,13 +283,17 @@ namespace RobotVacuum.LevelEditor
             if (hookedGrid != null) hookedGrid.CellStateLogged += OnCellLogged;
         }
 
-        void OnCellLogged(int row, int col, float dirtiness, float time)
+        void OnCellLogged(int row, int col, float dwell, float cleanliness, float time)
         {
             if (!string.IsNullOrEmpty(report.batchId)) return; // batches don't write per-cell files
-            cellEvents.Add(new CellEvent { time = Elapsed, row = row, col = col, dirtiness = dirtiness });
+            cellEvents.Add(new CellEvent { time = Elapsed, row = row, col = col, dwell = dwell, cleanliness = cleanliness });
         }
 
-        void OnStepped(SimEngine engine) => Sample(engine.SimTime);
+        void OnStep()
+        {
+            if (detached || frozen || !world.Running) return;
+            Sample(world.SimTime);
+        }
 
         void Sample(float time)
         {
@@ -444,7 +452,6 @@ namespace RobotVacuum.LevelEditor
             report.durationSeconds = time;
             report.coveragePercent = world.Coverage;
             report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(SimConfig.Vacuum));
-            report.picture = SimConfig.Picture;
             report.distanceMeters = robot != null ? robot.DistanceTravelled : 0f;
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;
@@ -539,10 +546,10 @@ namespace RobotVacuum.LevelEditor
                 // telemetry, replay and summary; a single run gets the full per-cell record too.
                 if (string.IsNullOrEmpty(report.batchId))
                 {
-                    var events = new StringBuilder("time_s,row,col,dirtiness\n");
+                    var events = new StringBuilder("time_s,row,col,dwell_s,cleanliness\n");
                     foreach (var e in cellEvents)
                         events.Append(F(e.time)).Append(',').Append(e.row).Append(',').Append(e.col).Append(',')
-                            .Append(F(e.dirtiness)).Append('\n');
+                            .Append(F(e.dwell)).Append(',').Append(F(e.cleanliness)).Append('\n');
                     File.WriteAllText(Path.Combine(folder, "cell_events.csv"), events.ToString());
 
                     WriteFinalCells(Path.Combine(folder, "cells_final.csv"));
@@ -560,8 +567,8 @@ namespace RobotVacuum.LevelEditor
             if (grid == null) return;
 
             using var writer = new StreamWriter(path, false, Encoding.UTF8);
-            writer.WriteLine($"# cell_size_m={F(grid.CellSizeMeters)}");
-            writer.WriteLine("row,col,x_m,y_m,dirtiness,counts_toward_coverage");
+            writer.WriteLine($"# cell_size_m={F(grid.CellSizeMeters)} target_max_clean={F(grid.TargetMaxClean)}");
+            writer.WriteLine("row,col,x_m,y_m,dwell_s,cleanliness,clean_fraction,counts_toward_coverage");
             for (int row = 0; row < grid.Rows; row++)
             {
                 for (int col = 0; col < grid.Cols; col++)
@@ -573,7 +580,9 @@ namespace RobotVacuum.LevelEditor
                     Vector2 point = world.Renderer != null ? world.Renderer.WorldToLevel(world2) : world2;
                     writer.Write(row); writer.Write(','); writer.Write(col); writer.Write(',');
                     writer.Write(F(point.x)); writer.Write(','); writer.Write(F(point.y)); writer.Write(',');
-                    writer.Write(F(cell.Dirtiness)); writer.Write(',');
+                    writer.Write(F(cell.DwellSeconds)); writer.Write(',');
+                    writer.Write(F(cell.Cleanliness)); writer.Write(',');
+                    writer.Write(F(grid.CleanFractionOf(row, col))); writer.Write(',');
                     writer.WriteLine(cell.CountsTowardCoverage ? "1" : "0");
                 }
             }

@@ -201,7 +201,6 @@ namespace RobotVacuum.LevelEditor
             for (int i = 0; i < MovementAlgorithms.Count; i++)
             {
                 var pattern = (MovementPattern)i;
-                if (pattern == MovementPattern.Picture) continue; // draws a picture rather than cleaning
 
                 spec.patterns.Add(pattern);
                 VisualElement chip = null;

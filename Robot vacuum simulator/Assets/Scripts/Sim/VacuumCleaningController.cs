@@ -15,16 +15,21 @@ namespace RobotVacuum.Sim
     // calls the "Sim Machine" -- the thing that actually WRITES to the
     // External Model each tick -- which doesn't exist as its own component yet.
     //
-    // PLACEHOLDER, clearly flagged below: the actual cleaning-effectiveness
-    // formula (SDD 3.14 -- dwell time x velocity x surface type) doesn't exist
-    // yet. This uses a decrease-per-second while the footprint overlaps a
-    // cell, with only the surface part in place: each floor type's
-    // cleaningEffort divides the rate, so carpet cleans slower than tile.
-    // Swap CleanCellsUnderFootprint()'s math once 3.14 is real.
+    // What it writes, per cell under the footprint, every FixedUpdate:
+    //   dwellSeconds += dt                                   (pure time over the cell)
+    //   cleanliness  += (vacuumPower / floorResistance) * dt (cleaning done)
+    // where the floor's resistance is its cleaningEffort, so carpet cleans
+    // slower than tile. Neither value is capped: dwell keeps accruing on cells
+    // that are already clean, which is what the Coverage and OverCoverage
+    // heatmaps measure. Cells under blocking furniture are skipped entirely.
+    //
+    // PLACEHOLDER, clearly flagged: the full cleaning-effectiveness formula
+    // (SDD 3.14 -- dwell time x velocity x surface type) doesn't exist yet;
+    // velocity does not enter this yet.
     // ============================================================================
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
-    public class VacuumCleaningController : MonoBehaviour, ISimStepper
+    public class VacuumCleaningController : MonoBehaviour
     {
         [Header("Level Object references")]
         [Tooltip("The floor plan this grid is built from.")]
@@ -34,12 +39,15 @@ namespace RobotVacuum.Sim
         [SerializeField] LevelRenderer levelRenderer;
 
         [Header("Grid resolution")]
-        [Tooltip("Grid cell edge length, in metres. SDD 4.6 targets roughly 1 inch (~0.0254m). Minimum/maximum bounds are still open -- pending the Level Editor team conversation -- so nothing here enforces a range yet.")]
-        [SerializeField] float cellSizeMeters = 0.0254f;
+        [Tooltip("Grid cell edge length, in metres. Default (2 inches) lives in SimDefaults.cs; an object that already saved another value keeps it until reset here. Minimum/maximum bounds are still open -- pending the Level Editor team conversation -- so nothing here enforces a range yet.")]
+        [SerializeField] float cellSizeMeters = SimDefaults.CellSizeMeters;
 
-        [Header("PLACEHOLDER cleaning rate -- not the full 3.14 formula")]
-        [Tooltip("How fast dirtiness falls per second, on a floor with a cleaning effort of 1, while the robot's footprint overlaps a cell. Divided by each floor type's cleaningEffort. Still speed/dwell-independent -- swap this out once the real cleaning-effectiveness formula (SDD 3.14) exists.")]
-        [SerializeField] float dirtinessDecreasePerSecond = 0.5f;
+        [Header("Cleaning")]
+        [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. Divided by each floor type's cleaningEffort.")]
+        [SerializeField] float vacuumPower = HeatmapDefaults.BaseVacuumPower;
+
+        [Tooltip("target_max_clean: the cleanliness a cell is aiming for. Coverage and the heatmaps measure against it. Set it before the run: it is read once when the grid is built and fixed for the run. The default lives in HeatmapDefaults.cs.")]
+        [SerializeField] float targetMaxClean = HeatmapDefaults.TargetMaxClean;
 
         // Per-cell rate multiplier (1 / cleaningEffort), looked up the first
         // time the footprint touches a cell; 0 means not looked up yet. Floor
@@ -49,7 +57,6 @@ namespace RobotVacuum.Sim
 
         Rigidbody2D robotBody;
         CircleCollider2D robotCollider;
-        VacuumRobot robot;
 
         // The grid itself. Public so the heatmap renderer (or anything else
         // that wants to read coverage state) can get at it without this
@@ -61,7 +68,7 @@ namespace RobotVacuum.Sim
         // pausing; accumulating our own FixedUpdate-driven clock here is a
         // closer (if still simplified) stand-in for the "simulated time"
         // concept the SDD's Action Log/telemetry design actually wants --
-        // and it's the value passed into ExternalModelGrid.SetDirtiness's
+        // and it's the value passed into ExternalModelGrid.Accumulate's
         // currentSimTime parameter, which drives the event-log throttle.
         float simTimeElapsed;
 
@@ -98,11 +105,47 @@ namespace RobotVacuum.Sim
             ResetCoverage();
         }
 
+        // target_max_clean for this run. Read-only here: it is set before the
+        // run (Inspector field, or Initialize from the run config) and fixed
+        // once the grid is built.
+        public float TargetMaxClean => Grid != null ? Grid.TargetMaxClean : targetMaxClean;
+
+        // Applies the run config's target and rebuilds the (still empty) grid
+        // so it is measured against that value from the start. Call ONCE,
+        // right after the component is added and before the run begins; a
+        // value of zero or less keeps the Inspector's value.
+        public void Initialize(float targetMaxClean) => Initialize(targetMaxClean, 0f, 0f);
+
+        // Same, plus the grid's cell size and the vacuum power, for runs built
+        // from code (SimulationRunner). Each value of zero or less keeps the
+        // current one. Setting them here, before the run starts, is what keeps
+        // a scene-saved Inspector value from silently overriding the run's
+        // settings.
+        public void Initialize(float targetMaxClean, float cellSizeMeters, float vacuumPower)
+        {
+            if (targetMaxClean > 0f) this.targetMaxClean = targetMaxClean;
+            if (cellSizeMeters > 0f) this.cellSizeMeters = cellSizeMeters;
+            if (vacuumPower > 0f) this.vacuumPower = vacuumPower;
+            if (level != null) BuildGrid();
+        }
+
+        // Cleanliness per second on a floor with an effort of 1.
+        public float VacuumPower
+        {
+            get => vacuumPower;
+            set => vacuumPower = Mathf.Max(0f, value);
+        }
+
+        void OnValidate()
+        {
+            vacuumPower = Mathf.Max(0f, vacuumPower);
+            targetMaxClean = Mathf.Max(0f, targetMaxClean);
+        }
+
         void Awake()
         {
             robotBody = GetComponent<Rigidbody2D>();
             robotCollider = GetComponent<CircleCollider2D>();
-            robot = GetComponent<VacuumRobot>();
 
             if (levelRenderer == null)
                 levelRenderer = FindAnyObjectByType<LevelRenderer>(FindObjectsInactive.Include);
@@ -133,7 +176,11 @@ namespace RobotVacuum.Sim
 
         void BuildGrid()
         {
-            Grid = new ExternalModelGrid(level, levelRenderer, cellSizeMeters);
+            // The shared lattice is anchored at the robot's spawn, in world space.
+            Vector2 spawnLevel = level.RobotSpawn;
+            Vector2 spawnWorld = levelRenderer != null ? (Vector2)levelRenderer.LevelToWorld(spawnLevel) : spawnLevel;
+
+            Grid = new ExternalModelGrid(level, levelRenderer, cellSizeMeters, targetMaxClean, spawnWorld);
 
             // Marks cells under blocking furniture as non-cleanable (see ExternalModelGrid.cs).
             Grid.PopulateFromLevelObject();
@@ -144,11 +191,7 @@ namespace RobotVacuum.Sim
             VisitedCellCount = 0;
         }
 
-        void FixedUpdate()
-        {
-            // With a SimEngine in the scene, it steps cleaning in a fixed order instead.
-            if (SimEngine.Active == null) Step(Time.fixedDeltaTime);
-        }
+        void FixedUpdate() => Step(Time.fixedDeltaTime);
 
         public void Step(float dt)
         {
@@ -157,14 +200,12 @@ namespace RobotVacuum.Sim
             simTimeElapsed += dt;
             stepIndex++;
             CleanCellsUnderFootprint(dt);
-
-            if (robot != null && robot.Print.HasValue) PrintUnderRobot(robot.Print.Value);
         }
 
         // ------------------------------------------------------------------
         // Finds every cell whose center falls within the robot's circular
         // footprint (robotCollider.radius, the SAME collider VacuumRobot.cs
-        // already sizes and uses for collision) and decreases its dirtiness.
+        // already sizes and uses for collision) and adds this tick's dwell time and cleanliness to it.
         //
         // Bounding-box-then-distance-check, not a scan of the whole grid:
         // first narrow to the small rectangle of cells that could possibly
@@ -176,11 +217,6 @@ namespace RobotVacuum.Sim
         // ------------------------------------------------------------------
         void CleanCellsUnderFootprint(float dt)
         {
-            // The robot can cap how clean it leaves the floor (the Picture
-            // pattern shades with this); cells never go below that dirtiness.
-            float dirtinessFloor = robot != null ? 1f - robot.CleaningLimit : 0f;
-            if (dirtinessFloor >= 1f) return; // suction off
-
             Vector2 position = robotBody.position;
             float radius = robotCollider.radius;
 
@@ -213,11 +249,10 @@ namespace RobotVacuum.Sim
                     else if (last < stepIndex - 1) RevisitCount++;
                     lastVisitStep[index] = stepIndex;
 
-                    if (cell.Dirtiness <= dirtinessFloor) continue;
-
-                    float cleaned = cell.Dirtiness - dirtinessDecreasePerSecond * RateMultiplierAt(row, col, cellCenter) * dt;
-                    float updated = Mathf.Max(dirtinessFloor, cleaned);
-                    Grid.SetDirtiness(row, col, updated, simTimeElapsed);
+                    // Dwell accrues on every cleanable cell under the footprint,
+                    // already-clean ones included; cleanliness scales with the floor.
+                    float cleanlinessGained = vacuumPower * RateMultiplierAt(row, col, cellCenter) * dt;
+                    Grid.Accumulate(row, col, dt, cleanlinessGained, simTimeElapsed);
                 }
             }
         }
@@ -248,13 +283,12 @@ namespace RobotVacuum.Sim
             {
                 for (int col = 0; col < Grid.Cols; col++)
                 {
-                    var cell = Grid.GetCell(row, col);
-                    if (!cell.CountsTowardCoverage) continue;
+                    if (!Grid.GetCell(row, col).CountsTowardCoverage) continue;
 
                     Vector2 world = Grid.GridIndexToWorldCenter(row, col);
                     int room = level.RoomIndexAt(levelRenderer != null ? levelRenderer.WorldToLevel(world) : world);
                     if (room < 0) continue;
-                    sums[room] += 1f - cell.Dirtiness;
+                    sums[room] += Grid.CleanFractionOf(row, col);
                     counts[room]++;
                 }
             }
@@ -274,49 +308,5 @@ namespace RobotVacuum.Sim
             cellRateMultiplier[index] = multiplier;
             return multiplier;
         }
-
-        // ------------------------------------------------------------------
-        // NOT CLEANING -- a toy for the picture-printing movement patterns.
-        // Writes every cell in the patch straight to the picture's shade
-        // (shade 1 = fully clean), so the heatmap shows the picture at full
-        // grid resolution. Deliberately bypasses the dirt model above.
-        // ------------------------------------------------------------------
-        void PrintUnderRobot(PrintPatch patch)
-        {
-            if (patch.picture == null) return;
-
-            Vector2 cornerA = ToWorld(patch.area.min);
-            Vector2 cornerB = ToWorld(patch.area.max);
-            Vector2 min = Vector2.Min(cornerA, cornerB);
-            Vector2 max = Vector2.Max(cornerA, cornerB);
-
-            Vector2 origin = Grid.OriginWorld;
-            float cellSize = Grid.CellSizeMeters;
-            int minCol = Mathf.Clamp(Mathf.FloorToInt((min.x - origin.x) / cellSize), 0, Grid.Cols - 1);
-            int maxCol = Mathf.Clamp(Mathf.FloorToInt((max.x - origin.x) / cellSize), 0, Grid.Cols - 1);
-            int minRow = Mathf.Clamp(Mathf.FloorToInt((min.y - origin.y) / cellSize), 0, Grid.Rows - 1);
-            int maxRow = Mathf.Clamp(Mathf.FloorToInt((max.y - origin.y) / cellSize), 0, Grid.Rows - 1);
-
-            for (int row = minRow; row <= maxRow; row++)
-            {
-                for (int col = minCol; col <= maxCol; col++)
-                {
-                    CellState cell = Grid.GetCell(row, col);
-                    if (!cell.CountsTowardCoverage) continue;
-
-                    Vector2 world = Grid.GridIndexToWorldCenter(row, col);
-                    Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
-                    if (!patch.area.Contains(point)) continue;
-                    if (patch.radius > 0f && Vector2.Distance(point, patch.area.center) > patch.radius) continue;
-
-                    float target = 1f - patch.picture.Sample(patch.canvas, point);
-                    if (Mathf.Abs(cell.Dirtiness - target) > 1e-3f)
-                        Grid.SetDirtiness(row, col, target, simTimeElapsed);
-                }
-            }
-        }
-
-        Vector2 ToWorld(Vector2 levelPoint) =>
-            levelRenderer != null ? (Vector2)levelRenderer.LevelToWorld(levelPoint) : levelPoint;
     }
 }

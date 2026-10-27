@@ -6,8 +6,8 @@ using UnityEngine;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
-    /// The simulation configuration every screen shares: the movement algorithm, the picture it draws and
-    /// the vacuum's settings. The Configuration screen, the editor's preview run and the simulator HUD all
+    /// The simulation configuration every screen shares: the movement algorithm, the seed policy, the grid
+    /// and the vacuum's settings. The Configuration screen, the editor's preview run and the simulator HUD all
     /// read and write this one copy, and it is kept in PlayerPrefs so it survives quitting.
     /// </summary>
     public static class SimConfig
@@ -30,7 +30,6 @@ namespace RobotVacuum.LevelEditor
         public sealed class Data
         {
             public MovementPattern pattern = MovementPattern.RandomBounce;
-            public PictureKind picture = PictureKind.Heart;
             public VacuumSettings vacuum = VacuumSettings.Defaults();
 
             /// <summary>The seed runs use when <see cref="randomSeed"/> is off.</summary>
@@ -40,7 +39,7 @@ namespace RobotVacuum.LevelEditor
             public bool randomSeed = true;
 
             /// <summary>Coverage grid cell edge, in metres.</summary>
-            public float cellSize = 0.0254f;
+            public float cellSize = SimDefaults.CellSizeMeters;
 
             /// <summary>Simulated seconds between telemetry samples.</summary>
             public float telemetryInterval = 0.5f;
@@ -64,9 +63,8 @@ namespace RobotVacuum.LevelEditor
                 }
 
                 if (!MovementAlgorithms.IsDefined(data.pattern)) data.pattern = MovementPattern.RandomBounce;
-                if (!System.Enum.IsDefined(typeof(PictureKind), data.picture)) data.picture = PictureKind.Heart;
                 if (data.vacuum == null || data.vacuum.driveSpeed <= 0f) data.vacuum = VacuumSettings.Defaults();
-                data.cellSize = data.cellSize > 0f ? Mathf.Clamp(data.cellSize, MinCellSize, MaxCellSize) : 0.0254f;
+                data.cellSize = data.cellSize > 0f ? Mathf.Clamp(data.cellSize, MinCellSize, MaxCellSize) : SimDefaults.CellSizeMeters;
                 data.telemetryInterval = data.telemetryInterval > 0f
                     ? Mathf.Clamp(data.telemetryInterval, MinTelemetryInterval, MaxTelemetryInterval) : 0.5f;
                 data.maxRunMinutes = data.maxRunMinutes > 0f ? Mathf.Clamp(data.maxRunMinutes, 1f, 240f) : 30f;
@@ -84,12 +82,6 @@ namespace RobotVacuum.LevelEditor
         {
             get => Current.pattern;
             set { Current.pattern = value; Save(); }
-        }
-
-        public static PictureKind Picture
-        {
-            get => Current.picture;
-            set { Current.picture = value; Save(); }
         }
 
         /// <summary>The live settings. Change fields on it directly, then call <see cref="Save"/>.</summary>
@@ -132,8 +124,21 @@ namespace RobotVacuum.LevelEditor
             set { Current.maxRunMinutes = Mathf.Clamp(value, 1f, 240f); Save(); }
         }
 
-        /// <summary>The seed for the next run: the fixed one, or a fresh one each time.</summary>
-        public static int NextRunSeed() => RandomSeed ? SimRandom.NewRunSeed() : Seed;
+        /// <summary>
+        /// The settings a <see cref="SimulationSession"/> run is started with: this configuration's algorithm,
+        /// seed policy, grid and vacuum. <paramref name="pattern"/> overrides the algorithm, e.g. for a batch.
+        /// </summary>
+        public static RunSettings ToRunSettings(MovementPattern? pattern = null, int? fixedSeed = null) => new RunSettings
+        {
+            pattern = pattern ?? Pattern,
+            randomSeed = !fixedSeed.HasValue && RandomSeed,
+            seed = fixedSeed ?? Seed,
+            cellSizeMeters = CellSize,
+            driveSpeed = Vacuum.driveSpeed,
+            reverseSpeed = Vacuum.reverseSpeed,
+            turnSpeed = Vacuum.turnSpeed,
+            batteryCapacity = Vacuum.batteryCapacity,
+        };
 
         /// <summary>The adjusted cleaning effort for a covering, or null when it uses the palette's value.</summary>
         public static float? CleaningEffortFor(string floor)
@@ -193,9 +198,6 @@ namespace RobotVacuum.LevelEditor
         static Data Load()
         {
             var data = Data.Parse(PlayerPrefs.GetString(PrefsKey, null));
-
-            // A loaded image only lives for the session, so a saved Image choice has nothing to draw.
-            if (data.picture == PictureKind.Image && Pictures.CustomImage == null) data.picture = PictureKind.Heart;
 
             FloorTuning.ClearAll();
             foreach (var entry in data.floorEfforts) FloorTuning.SetCleaningEffort(entry.floor, entry.effort);

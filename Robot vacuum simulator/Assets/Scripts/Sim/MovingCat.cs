@@ -6,7 +6,7 @@ namespace RobotVacuum.Sim
 {
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(PolygonCollider2D))]
-    public sealed class MovingCat : MonoBehaviour, ISimStepper
+    public sealed class MovingCat : MonoBehaviour
     {
         const float Speed = 0.45f;
         const float InterestDistance = 1.7f;
@@ -91,11 +91,7 @@ namespace RobotVacuum.Sim
             Initialize(bounds, spawnPosition, RandomDirection(new System.Random(seed)), seed);
         }
 
-        void FixedUpdate()
-        {
-            // With a SimEngine in the scene, it steps the cat in a fixed order instead.
-            if (SimEngine.Active == null) Step(Time.fixedDeltaTime);
-        }
+        void FixedUpdate() => Step(Time.fixedDeltaTime);
 
         public void Step(float dt)
         {

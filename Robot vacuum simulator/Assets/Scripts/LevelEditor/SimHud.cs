@@ -9,10 +9,11 @@ namespace RobotVacuum.LevelEditor
 {
     /// <summary>
     /// The bar laid over the simulation scene: what is running, for how long, how much floor is clean, and
-    /// the way back. Each run is recorded by a <see cref="RunRecorder"/> and saved for the Analysis screen
-    /// when it finishes, when the battery runs flat, or when the player leaves. Every setting, including the
-    /// furniture, stays editable mid-run, and each change is logged against the simulated time it happened.
-    /// Added by <see cref="SimLauncher"/>.
+    /// the way back. It shows the active <see cref="SimulationSession"/>'s run; whoever owns the session
+    /// (<see cref="SimTestDriver"/>) adds it and calls <see cref="Rebind"/> after each new run. Each run is
+    /// also recorded by a <see cref="RunRecorder"/> for the Analysis screen, saved when the session ends it,
+    /// or when the player restarts, finishes or leaves. Every setting, including the furniture, stays
+    /// editable mid-run, and each change is logged against the simulated time it happened.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class SimHud : MonoBehaviour
@@ -23,26 +24,49 @@ namespace RobotVacuum.LevelEditor
         /// <summary>How long the vacuum must be off the floor plan before the run is stopped.</summary>
         const float EscapeGraceSeconds = 0.5f;
 
+        /// <summary>
+        /// Optional. When set, the Restart button calls this instead of only moving the robot back, so the
+        /// owner of the run (SimTestDriver, through SimulationSession) can start a properly recorded new run.
+        /// </summary>
+        public Action RestartRequested;
+
+        /// <summary>
+        /// Optional. When set, the Editor button and Escape call this instead of going straight back to the
+        /// editor, so the owner of the run can close it (and save it) first.
+        /// </summary>
+        public Action LeaveRequested;
+
         PanelSettings panelSettings;
+        LevelData level;
+        SimulationSession session;
         SimWorld world;
         OverlayLayer overlay;
         RunRecorder recorder;
-        int seed;
+        bool saved;
+        string lastSavedId;
         bool leaving;
-        bool savedOnEmpty;
         bool escaped;
+        bool paused;
+        float speed = 1f;
         float offFloorSince = -1f;
+        float savedTimeScale = 1f;
+        float savedMaximumDeltaTime;
+        float measuredSince;
+        float measuredSimTime;
+        float achievedSpeed;
         VisualElement pauseButton;
         Label seedLabel;
 
         VacuumSettings Settings => SimConfig.Vacuum;
-        SimEngine Engine => world.Engine;
-        LevelData Level => world.Level;
+        LevelData Level => level;
+        float SimTime => world != null ? world.SimTime : 0f;
 
-        /// <summary>Builds the bar and starts the first run. The world's level is destroyed with the scene.</summary>
-        public void Show(SimWorld simWorld)
+        /// <summary>Builds the bar over the active session's run. <paramref name="handedLevel"/> is destroyed along with the HUD.</summary>
+        public void Show(LevelData handedLevel)
         {
-            world = simWorld;
+            level = handedLevel;
+            savedTimeScale = Time.timeScale;
+            savedMaximumDeltaTime = Time.maximumDeltaTime;
 
             var root = UiPanel.Create(transform, "Simulator HUD", 1f, out panelSettings);
             root.pickingMode = PickingMode.Ignore;
@@ -60,7 +84,36 @@ namespace RobotVacuum.LevelEditor
             if (root.panel != null) HookEscape(root.panel);
             else root.RegisterCallback<AttachToPanelEvent>(evt => HookEscape(evt.destinationPanel));
 
-            BeginRun(SimConfig.NextRunSeed());
+            Rebind();
+        }
+
+        /// <summary>
+        /// Picks up the active session's current run: a new robot and grid after a restart. Starts recording
+        /// it, so call it as the run begins.
+        /// </summary>
+        public void Rebind()
+        {
+            var active = SimulationSession.Active;
+            if (active != session)
+            {
+                if (session != null) session.Finished -= OnRunEnded;
+                session = active;
+                if (session != null) session.Finished += OnRunEnded;
+            }
+
+            recorder?.Detach();
+            recorder = null;
+            world = session != null ? new SimWorld(session) : null;
+            if (world == null || world.Robot == null) return;
+
+            world.ApplyVacuumSettings();
+            recorder = new RunRecorder(world);
+            saved = false;
+            escaped = false;
+            offFloorSince = -1f;
+            measuredSince = 0f;
+            if (seedLabel != null) seedLabel.text = world.Seed.ToString();
+            ApplySpeed();
         }
 
         void BuildControls(VisualElement bar)
@@ -74,14 +127,18 @@ namespace RobotVacuum.LevelEditor
 
             pauseButton = Ui.IconButton(bar, IconKind.Pause, "Pause or resume the simulation", TogglePause, "le-btn--ghost");
 
-            // Speed is how many simulated seconds pass per real second. The step size never changes, so the
+            // Speed is how many simulated seconds pass per real second. The physics step never changes, so the
             // results are the same at every speed; only the wait differs.
-            var speed = new ValueSlider(SimEngine.MinSpeed, SimEngine.MaxSpeed, Engine.Speed,
+            var speedSlider = new ValueSlider(MinSpeed, MaxSpeed, speed,
                 v => v < 1f ? $"{v:0.##}×" : $"{Mathf.Round(v):0}×");
-            speed.AddToClassList("le-run-speed");
-            speed.ValueChanged += value => Engine.Speed = value < 1f ? value : Mathf.Round(value);
-            Ui.Tooltip(speed, "Simulation speed, from ¼× to 100× real time");
-            bar.Add(speed);
+            speedSlider.AddToClassList("le-run-speed");
+            speedSlider.ValueChanged += value =>
+            {
+                speed = value < 1f ? value : Mathf.Round(value);
+                ApplySpeed();
+            };
+            Ui.Tooltip(speedSlider, "Simulation speed, from ¼× to 100× real time");
+            bar.Add(speedSlider);
 
             VisualElement settingsButton = null;
             settingsButton = Ui.Button(bar, "Settings", IconKind.Sliders, () => ShowVacuumSettings(settingsButton), "le-btn--ghost");
@@ -91,36 +148,18 @@ namespace RobotVacuum.LevelEditor
             furnitureButton = Ui.Button(bar, "Furniture", IconKind.Obstacle, () => ShowFurniture(furnitureButton), "le-btn--ghost");
             Ui.Tooltip(furnitureButton, "Change or remove furniture mid-run. Changes are logged.");
 
-            var picture = new Segmented(Pictures.Names, (int)SimLauncher.Picture);
-            picture.SelectionChanged += index =>
-            {
-                if ((PictureKind)index == PictureKind.Image && !ImageFilePicker.TryLoad(out string problem))
-                {
-                    picture.SetSelectedWithoutNotify((int)SimLauncher.Picture);
-                    if (problem != null) overlay.Toast(problem);
-                    return;
-                }
-
-                // A new picture is a new drawing: start it from the top on a clean floor.
-                SimLauncher.Picture = (PictureKind)index;
-                Restart();
-            };
-            Ui.SetVisible(picture, SimLauncher.MovementPattern == MovementPattern.Picture);
-
             var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
             movement.SelectionChanged += index =>
             {
                 var next = (MovementPattern)index;
                 recorder?.LogParameter("Algorithm", MovementAlgorithms.LabelOf(SimLauncher.MovementPattern), MovementAlgorithms.LabelOf(next));
-                if (recorder != null && Engine.SimTime > 0f) recorder.MarkMixedPatterns();
+                if (recorder != null && SimTime > 0f) recorder.MarkMixedPatterns();
 
                 SimLauncher.MovementPattern = next;
-                if (world.Robot != null) world.Robot.Pattern = next;
-                Ui.SetVisible(picture, next == MovementPattern.Picture);
+                if (world?.Robot != null) world.Robot.Pattern = next;
             };
             Ui.Tooltip(movement, "Movement algorithm. Switching mid-run is logged, and the run counts as mixed.");
             bar.Add(movement);
-            bar.Add(picture);
 
             var finish = Ui.Button(bar, "Finish", IconKind.Check, Finish, "le-btn--primary");
             Ui.Tooltip(finish, "End the run and see its analysis");
@@ -144,10 +183,11 @@ namespace RobotVacuum.LevelEditor
 
             bar.schedule.Execute(() =>
             {
-                var robot = world.Robot;
-                var battery = world.Battery;
-                runtime.text = VacuumSettings.FormatDuration(Engine.SimTime);
-                rate.text = Engine.Paused ? "Paused" : $"{Engine.AchievedSpeed:0.#}×";
+                MeasureSpeed();
+                var robot = world?.Robot;
+                var battery = world?.Battery;
+                runtime.text = VacuumSettings.FormatDuration(SimTime);
+                rate.text = paused ? "Paused" : world != null && !world.Running ? "Ended" : $"{achievedSpeed:0.#}×";
                 speedStat.text = Settings.FormatSpeed(robot != null ? robot.SpeedMetersPerSecond : 0f);
                 if (battery != null)
                 {
@@ -157,7 +197,7 @@ namespace RobotVacuum.LevelEditor
                 else batteryStat.text = "—";
                 distance.text = Ui.FormatLength(robot != null ? robot.DistanceTravelled : 0f);
                 surface.text = robot != null && robot.CurrentFloor != null ? robot.CurrentFloor.Label : "—";
-                bool hasGrid = world.Cleaning != null && world.Cleaning.Grid != null;
+                bool hasGrid = world?.Cleaning != null && world.Cleaning.Grid != null;
                 blocked.text = hasGrid ? Ui.FormatArea(world.Cleaning.Grid.NonCleanableAreaSquareMeters) : "—";
                 cleaned.text = hasGrid ? $"{world.Coverage:0.0}%" : "—";
             }).Every(250);
@@ -165,46 +205,41 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- run lifecycle
 
-        void BeginRun(int runSeed)
+        /// <summary>The session ended the run itself (battery, time cap, failed algorithm): save it while the grid is still there.</summary>
+        void OnRunEnded(SimulationSession ended)
         {
-            recorder?.Detach();
-            seed = runSeed;
-            world.BeginRun(seed, SimLauncher.MovementPattern, SimLauncher.Picture);
-            recorder = new RunRecorder(world, seed);
-            savedOnEmpty = false;
-            escaped = false;
-            offFloorSince = -1f;
-            if (seedLabel != null) seedLabel.text = seed.ToString();
+            if (ended != session || saved) return;
+
+            string reason = SimWorld.Describe(ended.Result != null ? ended.Result.endReason : RunEndReason.None);
+            if (Save(reason) && overlay != null)
+                overlay.Toast($"{reason} · run saved.", "View analysis", () => OpenAnalysis());
         }
 
         void Restart()
         {
             if (escaped) SetPaused(false);
-            BeginRun(SimConfig.NextRunSeed());
+            SaveIfWorthKeeping();
+
+            if (RestartRequested != null)
+            {
+                RestartRequested();
+                return;
+            }
+
+            if (session != null && session.Restart(out string error)) Rebind();
+            else Debug.LogWarning("Simulator: the run couldn't be restarted.");
         }
 
         void Update()
         {
             if (recorder == null || leaving) return;
-
-            // A flat battery stops the vacuum but not the session: the run is saved, and if the battery
-            // is changed afterwards the vacuum carries on and the saved results are updated on Finish.
-            var battery = world.Battery;
-            if (battery != null && !battery.CanOperate && !savedOnEmpty)
-            {
-                savedOnEmpty = true;
-                if (Save("Battery empty"))
-                    overlay.Toast("Battery empty · run saved. Settings stay editable.", "View analysis",
-                        () => SimLauncher.OpenAnalysis(recorder.Report.id));
-            }
-
             CheckEscape();
         }
 
         /// <summary>Stops the run if the vacuum has driven out through an open wall into empty space.</summary>
         void CheckEscape()
         {
-            if (escaped || Engine.Paused) return;
+            if (escaped || paused || world == null || !world.Running) return;
 
             if (!world.OffFloor)
             {
@@ -212,8 +247,8 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            if (offFloorSince < 0f) offFloorSince = Engine.SimTime;
-            if (Engine.SimTime - offFloorSince < EscapeGraceSeconds) return;
+            if (offFloorSince < 0f) offFloorSince = SimTime;
+            if (SimTime - offFloorSince < EscapeGraceSeconds) return;
 
             escaped = true;
             SetPaused(true);
@@ -222,46 +257,115 @@ namespace RobotVacuum.LevelEditor
                 null,
                 new DialogButton("Restart", ButtonStyle.Ghost, Restart),
                 new DialogButton(SimLauncher.Origin == SimOrigin.Editor ? "Back to editor" : "Edit floor plan", ButtonStyle.Primary,
-                    () => leaving = SimLauncher.OpenLevelEditor(SimLauncher.SimulatedPath)));
+                    () =>
+                    {
+                        CloseSession("Escaped through an open wall");
+                        leaving = SimLauncher.OpenLevelEditor(SimLauncher.SimulatedPath);
+                    }));
         }
 
         bool Save(string reason)
         {
+            if (recorder == null) return false;
+
             try
             {
-                recorder.Finish(reason);
+                lastSavedId = recorder.Finish(reason).id;
+                saved = true;
                 return true;
             }
             catch (Exception exception)
             {
                 Debug.LogWarning($"Simulator: could not save the run: {exception.Message}");
-                overlay.Toast("Couldn't save this run's results.");
+                overlay?.Toast("Couldn't save this run's results.");
                 return false;
             }
+        }
+
+        /// <summary>Saves a run the player is walking away from, unless it is too short to mean anything or already saved.</summary>
+        void SaveIfWorthKeeping()
+        {
+            if (!saved && SimTime >= MinRecordedSeconds) Save(world != null && world.Running ? "Stopped" : "Finished");
+        }
+
+        /// <summary>Saves the run, then has the session end it and write its own result.</summary>
+        void CloseSession(string reason)
+        {
+            if (!saved) Save(reason);
+            recorder?.Detach();
+            recorder = null;
+            session?.Close();
         }
 
         void Finish()
         {
             if (leaving) return;
 
-            string reason = world.Battery != null && !world.Battery.CanOperate ? "Battery empty" : "Finished";
-            if (Save(reason)) leaving = SimLauncher.OpenAnalysis(recorder.Report.id);
+            CloseSession(world != null && world.Running ? "Finished" : "Battery empty");
+            OpenAnalysis();
+        }
+
+        void OpenAnalysis()
+        {
+            if (!leaving) leaving = SimLauncher.OpenAnalysis(lastSavedId ?? recorder?.Report.id);
         }
 
         void Leave()
         {
             if (leaving) return;
 
-            if (Engine.SimTime >= MinRecordedSeconds) Save(savedOnEmpty ? "Battery empty" : "Stopped");
+            SaveIfWorthKeeping();
+            if (LeaveRequested != null)
+            {
+                leaving = true;
+                LeaveRequested();
+                return;
+            }
+
+            CloseSession("Stopped");
             leaving = SimLauncher.ReturnFromSimulation();
         }
 
-        void TogglePause() => SetPaused(!Engine.Paused);
+        void TogglePause() => SetPaused(!paused);
 
-        void SetPaused(bool paused)
+        void SetPaused(bool value)
         {
-            Engine.Paused = paused;
+            paused = value;
             pauseButton.Q<IconElement>().Kind = paused ? IconKind.Play : IconKind.Pause;
+            ApplySpeed();
+        }
+
+        // ---------------------------------------------------------------- speed
+
+        const float MinSpeed = 0.25f;
+        const float MaxSpeed = 100f;
+
+        /// <summary>
+        /// Plays the run at the chosen speed through the time scale. At high speeds Unity is also allowed more
+        /// physics steps per frame, otherwise its per-frame cap would hold the run near 20×.
+        /// </summary>
+        void ApplySpeed()
+        {
+            Time.timeScale = paused ? 0f : speed;
+            Time.maximumDeltaTime = Mathf.Max(savedMaximumDeltaTime, Mathf.Min(2f, speed / 30f));
+        }
+
+        void MeasureSpeed()
+        {
+            float now = Time.unscaledTime;
+            if (measuredSince <= 0f || SimTime < measuredSimTime)
+            {
+                measuredSince = now;
+                measuredSimTime = SimTime;
+                return;
+            }
+
+            float window = now - measuredSince;
+            if (window < 1f) return;
+
+            achievedSpeed = Mathf.Max(0f, SimTime - measuredSimTime) / window;
+            measuredSince = now;
+            measuredSimTime = SimTime;
         }
 
         // ---------------------------------------------------------------- settings
@@ -313,8 +417,7 @@ namespace RobotVacuum.LevelEditor
                 current = next;
                 store(next);
                 SimConfig.Save();
-                if (world.Robot != null) Settings.ApplyTo(world.Robot, world.Battery);
-                if (world.Battery != null && world.Battery.CanOperate) savedOnEmpty = false;
+                if (world?.Robot != null) Settings.ApplyTo(world.Robot, world.Battery);
             };
             parent.Add(slider);
         }
@@ -375,8 +478,8 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Rebuilds furniture colliders and re-marks the floor it blocks, keeping cleaning progress.</summary>
         void ApplyFurnitureChange()
         {
-            if (world.Renderer != null) world.Renderer.Rebuild();
-            if (world.Cleaning != null) world.Cleaning.RefreshObstacles();
+            if (world?.Renderer != null) world.Renderer.Rebuild();
+            if (world?.Cleaning != null) world.Cleaning.RefreshObstacles();
             Physics2D.SyncTransforms();
         }
 
@@ -392,10 +495,13 @@ namespace RobotVacuum.LevelEditor
 
         void OnDestroy()
         {
+            if (session != null) session.Finished -= OnRunEnded;
             recorder?.Detach();
             overlay = null;
+            Time.timeScale = savedTimeScale;
+            if (savedMaximumDeltaTime > 0f) Time.maximumDeltaTime = savedMaximumDeltaTime;
             if (panelSettings != null) Destroy(panelSettings);
-            if (world != null && world.Level != null) Destroy(world.Level);
+            if (level != null) Destroy(level);
         }
     }
 }

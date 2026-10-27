@@ -32,7 +32,6 @@ namespace RobotVacuum.LevelEditor
 
         public MovementPattern pattern;
         public bool mixedPatterns;
-        public PictureKind picture;
         public VacuumSettings vacuum;
 
         /// <summary>The random seed the run started from; the same seed and settings replay it exactly.</summary>

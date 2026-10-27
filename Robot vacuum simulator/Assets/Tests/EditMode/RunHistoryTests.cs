@@ -162,7 +162,6 @@ namespace RobotVacuum.Tests
             var data = SimConfig.Data.Parse(null);
 
             Assert.AreEqual(MovementPattern.RandomBounce, data.pattern);
-            Assert.AreEqual(PictureKind.Heart, data.picture);
             Assert.AreEqual(0.65f, data.vacuum.driveSpeed, 1e-5f);
             Assert.AreEqual(300f, data.vacuum.batteryCapacity, 1e-5f);
         }
@@ -170,26 +169,24 @@ namespace RobotVacuum.Tests
         [Test]
         public void Parse_RoundTripsSavedSettings()
         {
-            var saved = new SimConfig.Data { pattern = MovementPattern.Lawnmower, picture = PictureKind.Smiley };
+            var saved = new SimConfig.Data { pattern = MovementPattern.Lawnmower };
             saved.vacuum.driveSpeed = 1.1f;
             saved.vacuum.useFeet = true;
 
             var data = SimConfig.Data.Parse(saved.ToJson());
 
             Assert.AreEqual(MovementPattern.Lawnmower, data.pattern);
-            Assert.AreEqual(PictureKind.Smiley, data.picture);
             Assert.AreEqual(1.1f, data.vacuum.driveSpeed, 1e-5f);
             Assert.IsTrue(data.vacuum.useFeet);
         }
 
         [TestCase("{ broken")]
-        [TestCase("{\"pattern\":99,\"picture\":-4}")]
+        [TestCase("{\"pattern\":99}")]
         public void Parse_BadInput_FallsBackToDefaults(string json)
         {
             var data = SimConfig.Data.Parse(json);
 
             Assert.AreEqual(MovementPattern.RandomBounce, data.pattern);
-            Assert.AreEqual(PictureKind.Heart, data.picture);
             Assert.IsNotNull(data.vacuum);
         }
     }

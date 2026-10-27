@@ -34,13 +34,6 @@ namespace RobotVacuum.LevelEditor
             set => SimConfig.Pattern = value;
         }
 
-        /// <summary>What the Picture pattern draws, shared the same way.</summary>
-        public static PictureKind Picture
-        {
-            get => SimConfig.Picture;
-            set => SimConfig.Picture = value;
-        }
-
         /// <summary>Where the running simulation was started from.</summary>
         public static SimOrigin Origin { get; private set; }
 
@@ -71,6 +64,9 @@ namespace RobotVacuum.LevelEditor
         public static bool ReturnFromSimulation() => Origin == SimOrigin.StartScreen
             ? OpenStartScreen(StartPage.Simulate)
             : OpenLevelEditor(SimulatedPath);
+
+        /// <summary>Leaves the simulator; the same as <see cref="ReturnFromSimulation"/>.</summary>
+        public static bool ReturnToEditor() => ReturnFromSimulation();
 
         /// <summary>The start page asked for, handed out once.</summary>
         public static StartPage TakeStartPage()
@@ -122,6 +118,14 @@ namespace RobotVacuum.LevelEditor
             return false;
         }
 
+        /// <summary>The batch to run instead of a single interactive run, handed out once.</summary>
+        public static BatchSpec TakePendingBatch()
+        {
+            var batch = pendingBatch;
+            pendingBatch = null;
+            return batch;
+        }
+
         /// <summary>The floor plan the editor should reopen, handed out once.</summary>
         public static string TakeReturnPath()
         {
@@ -153,44 +157,22 @@ namespace RobotVacuum.LevelEditor
             camera.transform.rotation = Quaternion.identity;
         }
 
+        /// <summary>
+        /// The palette runs fall back to when a level has none: the built-in default, created once and kept
+        /// alive across scene loads.
+        /// </summary>
+        public static FloorPalette DefaultPalette() => FallbackPalette();
+
         static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
             if (scene.path != SimScenePath) return;
             SceneManager.sceneLoaded -= OnSceneLoaded;
 
-            // Runs after every Awake in the scene but before any Start, so the robot has not moved yet.
-            var orphan = LevelHandoff.CancelPending();
-            if (orphan != null)
-            {
-                Debug.LogError($"Simulator: {SimScenePath} has no LevelRenderer, so the floor plan couldn't be shown.");
-                Object.Destroy(orphan);
-                return;
-            }
-
-            var level = LevelHandoff.Delivered;
-            var renderer = LevelRenderer.FindFor(level);
-            if (renderer == null) return;
-
-            MovingCat.SpawnPlacedCats(renderer, renderer.transform);
-
-            // From here on the engine steps everything in a fixed order; nothing steps itself.
-            var engine = new GameObject("Simulation Engine").AddComponent<SimEngine>();
-            var world = new SimWorld(engine, level, renderer);
-
-            if (Camera.main != null) FrameCamera(Camera.main, WorldBounds(renderer, level));
-
-            var batch = pendingBatch;
-            pendingBatch = null;
-            if (batch != null) new GameObject("Batch Runner").AddComponent<BatchRunner>().Run(world, batch);
-            else new GameObject("Simulator HUD").AddComponent<SimHud>().Show(world);
-        }
-
-        static Rect WorldBounds(LevelRenderer renderer, LevelData level)
-        {
-            var bounds = level.Bounds();
-            Vector2 a = renderer.LevelToWorld(bounds.min);
-            Vector2 b = renderer.LevelToWorld(bounds.max);
-            return Rect.MinMaxRect(Mathf.Min(a.x, b.x), Mathf.Min(a.y, b.y), Mathf.Max(a.x, b.x), Mathf.Max(a.y, b.y));
+            // Every run goes through a SimulationSession, which SimTestDriver owns: it takes the handed-over
+            // level in its Awake, then starts the run (or the pending batch), frames the camera and adds the
+            // HUD. PlayScene has one; a scene without one gets one here.
+            if (Object.FindAnyObjectByType<SimTestDriver>() == null)
+                new GameObject("Simulation Driver").AddComponent<SimTestDriver>();
         }
 
         static FloorPalette FallbackPalette()

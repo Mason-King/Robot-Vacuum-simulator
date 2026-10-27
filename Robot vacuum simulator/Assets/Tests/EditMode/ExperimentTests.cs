@@ -48,7 +48,7 @@ namespace RobotVacuum.Tests
             Assert.GreaterOrEqual(MovementAlgorithms.Count, 4, "at least four algorithms (1.6.1)");
             Assert.AreEqual("Random", MovementAlgorithms.LabelOf(MovementPattern.RandomBounce));
             Assert.AreEqual("Lawnmower", MovementAlgorithms.LabelOf(MovementPattern.Lawnmower));
-            Assert.IsInstanceOf<IMovementAlgorithm>(MovementAlgorithms.Create(MovementPattern.WallFollow, PictureKind.Heart));
+            Assert.IsInstanceOf<IMovementAlgorithm>(MovementAlgorithms.Create(MovementPattern.WallFollow));
         }
 
         [Test]
@@ -58,7 +58,7 @@ namespace RobotVacuum.Tests
 
             Assert.IsFalse(MovementAlgorithms.IsDefined(unknown));
             StringAssert.Contains("999", MovementAlgorithms.LabelOf(unknown));
-            Assert.IsInstanceOf<RandomBounceBrain>(MovementAlgorithms.Create(unknown, PictureKind.Heart));
+            Assert.IsInstanceOf<RandomBounceBrain>(MovementAlgorithms.Create(unknown));
         }
     }
 
@@ -189,7 +189,8 @@ namespace RobotVacuum.Tests
 
             var random = new System.Random(3);
             for (int i = 0; i < 2000; i++)
-                grid.SetDirtiness(random.Next(grid.Rows), random.Next(grid.Cols), (float)random.NextDouble(), i);
+                grid.Accumulate(random.Next(grid.Rows), random.Next(grid.Cols), 0.02f,
+                    (float)random.NextDouble() * grid.TargetMaxClean * 0.5f, i);
             grid.SetNonCleanable(0, 0, true);
             grid.SetNonCleanable(0, 0, false);
 
@@ -215,7 +216,7 @@ namespace RobotVacuum.Tests
 
             for (int row = 0; row < grid.Rows; row++)
                 for (int col = 0; col < grid.Cols; col++)
-                    if (grid.GetCell(row, col).CountsTowardCoverage) grid.SetDirtiness(row, col, 0f, 0f);
+                    if (grid.GetCell(row, col).CountsTowardCoverage) grid.Accumulate(row, col, 1f, grid.TargetMaxClean, 0f);
 
             Assert.AreEqual(100f, grid.CoveragePercent, 1e-3f, "every floor cell clean means 100%");
             Assert.AreEqual(100f, grid.CalculateCoveragePercent(), 1e-3f);
@@ -227,7 +228,7 @@ namespace RobotVacuum.Tests
             level = TestLevels.NewLevel(l => l.Rooms.Add(new Room { name = "A", outline = TestLevels.Square(Vector2.zero, 1f) }));
             var grid = new ExternalModelGrid(level, null, 0.25f);
             grid.PopulateFromLevelObject();
-            grid.SetDirtiness(0, 0, 0f, 0f);
+            grid.Accumulate(0, 0, 1f, grid.TargetMaxClean, 0f);
 
             var values = grid.Downsample(2, out int width, out int height);
 
