@@ -30,15 +30,23 @@ namespace RobotVacuum.LevelEditor
         bool isPaused;
         bool leaving;
 
+        /// <summary>
+        /// Optional. When set, the Restart button calls this instead of only moving the robot back, so the
+        /// owner of the run (SimTestDriver, through SimulationSession) can start a properly recorded new run.
+        /// </summary>
+        public Action RestartRequested;
+
+        /// <summary>
+        /// Optional. When set, the Editor button and Escape call this instead of going straight back to the
+        /// editor, so the owner of the run can close it (and save it) first.
+        /// </summary>
+        public Action LeaveRequested;
+
         /// <summary>Builds the bar. <paramref name="handedLevel"/> is destroyed along with the scene.</summary>
         public void Show(LevelData handedLevel)
         {
             level = handedLevel;
-            cleaning = FindAnyObjectByType<VacuumCleaningController>();
-            robot = FindAnyObjectByType<VacuumRobot>();
-            battery = robot != null ? robot.GetComponent<Battery>() : null;
-            if (robot != null) vacuumSettings = VacuumSettings.From(robot, battery);
-            startTime = Time.time;
+            Rebind();
             savedTimeScale = Time.timeScale;
 
             var root = UiPanel.Create(transform, "Simulator HUD", 1f, out panelSettings);
@@ -119,8 +127,27 @@ namespace RobotVacuum.LevelEditor
             else root.RegisterCallback<AttachToPanelEvent>(evt => HookEscape(evt.destinationPanel));
         }
 
+        /// <summary>
+        /// Finds the robot, battery and coverage grid again and restarts the runtime clock. Call after the run
+        /// has been rebuilt (a new run builds a new robot, so the old references would point at nothing).
+        /// </summary>
+        public void Rebind()
+        {
+            cleaning = FindAnyObjectByType<VacuumCleaningController>();
+            robot = FindAnyObjectByType<VacuumRobot>();
+            battery = robot != null ? robot.GetComponent<Battery>() : null;
+            if (robot != null) vacuumSettings = VacuumSettings.From(robot, battery);
+            startTime = Time.time;
+        }
+
         void Restart()
         {
+            if (RestartRequested != null)
+            {
+                RestartRequested();
+                return;
+            }
+
             if (robot != null) robot.ResetToSpawn();
         }
 
@@ -185,7 +212,16 @@ namespace RobotVacuum.LevelEditor
 
         void Leave()
         {
-            if (!leaving) leaving = SimLauncher.ReturnToEditor();
+            if (leaving) return;
+
+            if (LeaveRequested != null)
+            {
+                leaving = true;
+                LeaveRequested();
+                return;
+            }
+
+            leaving = SimLauncher.ReturnToEditor();
         }
 
         void OnDestroy()

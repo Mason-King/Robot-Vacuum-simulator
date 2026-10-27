@@ -4,16 +4,47 @@ using UnityEngine;
 
 namespace RobotVacuum.Sim
 {
-    // The file that crosses the process boundary going OUT. Numbers and the paths
-    // of the other files the run saved next to it (the External Model state and
-    // the three heatmap PNGs -- see RunArtifacts). The images are drawn inside the
-    // Secondary Boot process, but the saved model is plain data, so anything can
-    // redraw them later from external_model.json.
+    /// <summary>
+    /// Why a run ended. Saved in result.json as its number, so the values are fixed: add new reasons at
+    /// the end, never renumber.
+    /// </summary>
+    public enum RunEndReason
+    {
+        /// <summary>Not ended (a result with this reason was never finished).</summary>
+        None = 0,
+
+        /// <summary>The cleaning algorithm reported the job done. Reserved: no algorithm reports this yet.</summary>
+        Completed = 1,
+
+        /// <summary>The battery ran out: the normal way a run ends (SDD 1.3.3).</summary>
+        BatteryDepleted = 2,
+
+        /// <summary>The program's safety cap on simulated time was reached (SimDefaults.MaxSimulatedSeconds).</summary>
+        TimeCap = 3,
+
+        /// <summary>The user closed the run before it ended. The data up to that moment is still saved.</summary>
+        StoppedByUser = 4,
+
+        /// <summary>Something failed. Detection is planned, not built (SDD Section 12).</summary>
+        Error = 5,
+
+        /// <summary>The run stopped making progress without an error (stuck robot and similar). Planned, not built.</summary>
+        Degenerate = 6,
+    }
+
+    /// <summary>
+    /// A run's outcome, saved as result.json in its run folder: the numbers, why the run ended, and the
+    /// paths of the other files saved next to it (the External Model state and the three heatmap PNGs --
+    /// see RunArtifacts). result.json is written last, so its existence means the run finished.
+    /// </summary>
     [Serializable]
     public class RunResult
     {
+        /// <summary>False only when the run failed (<see cref="RunEndReason.Error"/>). A run stopped by the user still succeeded.</summary>
         public bool succeeded;
         public string errorMessage; // populated only when succeeded is false
+
+        public RunEndReason endReason;
 
         public string levelName;
         public int seed;
@@ -41,7 +72,7 @@ namespace RobotVacuum.Sim
         public string overCoverageImagePath;
 
         public static RunResult Failure(string message) =>
-            new RunResult { succeeded = false, errorMessage = message };
+            new RunResult { succeeded = false, errorMessage = message, endReason = RunEndReason.Error };
 
         public void WriteTo(string path)
         {

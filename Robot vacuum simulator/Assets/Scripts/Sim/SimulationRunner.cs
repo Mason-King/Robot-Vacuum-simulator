@@ -34,6 +34,24 @@ namespace RobotVacuum.Sim
             /// <summary>Which view the on-screen heatmap starts in. Can be changed during the run.</summary>
             public HeatmapMode heatmapMode;
 
+            /// <summary>Grid cell edge length in metres. Zero or less means <see cref="SimDefaults.CellSizeMeters"/>.</summary>
+            public float cellSizeMeters;
+
+            /// <summary>Cleanliness per second of dwell on an effort-1 floor. Zero or less means <see cref="HeatmapDefaults.BaseVacuumPower"/>.</summary>
+            public float vacuumPower;
+
+            /// <summary>The build options for a run described by already-resolved settings.</summary>
+            public static Options From(RunSettings settings, bool headless) => new Options
+            {
+                visuals = !headless,
+                pattern = settings.pattern,
+                seed = settings.seed,
+                targetMaxClean = settings.targetMaxClean,
+                heatmapMode = settings.heatmapMode,
+                cellSizeMeters = settings.cellSizeMeters,
+                vacuumPower = settings.vacuumPower,
+            };
+
             public static Options Visible(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
                 float targetMaxClean = 0f, HeatmapMode heatmapMode = HeatmapMode.FloorCleanliness) =>
                 new Options { visuals = true, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean, heatmapMode = heatmapMode };
@@ -101,7 +119,7 @@ namespace RobotVacuum.Sim
             robot.RandomSource = new RandomProvider((uint)options.seed);
 
             var cleaning = robotObject.AddComponent<VacuumCleaningController>();
-            cleaning.Initialize(options.targetMaxClean);
+            cleaning.Initialize(options.targetMaxClean, options.cellSizeMeters, options.vacuumPower);
 
             CoverageHeatmapRenderer heatmapRenderer = null;
             if (options.visuals)
@@ -123,11 +141,17 @@ namespace RobotVacuum.Sim
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 
-        public void Stop()
+        /// <summary>
+        /// Destroys everything this run built. Pass <paramref name="immediate"/> when a new run is built in the
+        /// same frame: a plain Destroy only happens at the end of the frame, and the new run's components find
+        /// their level and controller with FindAnyObjectByType as they wake, so they could bind to the old,
+        /// still-alive objects.
+        /// </summary>
+        public void Stop(bool immediate = false)
         {
             if (Root == null) return;
 
-            if (Application.isPlaying) Object.Destroy(Root);
+            if (Application.isPlaying && !immediate) Object.Destroy(Root);
             else Object.DestroyImmediate(Root);
         }
     }

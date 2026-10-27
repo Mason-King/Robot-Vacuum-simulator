@@ -84,9 +84,18 @@ namespace RobotVacuum.Sim
         // so it is measured against that value from the start. Call ONCE,
         // right after the component is added and before the run begins; a
         // value of zero or less keeps the Inspector's value.
-        public void Initialize(float targetMaxClean)
+        public void Initialize(float targetMaxClean) => Initialize(targetMaxClean, 0f, 0f);
+
+        // Same, plus the grid's cell size and the vacuum power, for runs built
+        // from code (SimulationRunner). Each value of zero or less keeps the
+        // current one. Setting them here, before the run starts, is what keeps
+        // a scene-saved Inspector value from silently overriding the run's
+        // settings.
+        public void Initialize(float targetMaxClean, float cellSizeMeters, float vacuumPower)
         {
             if (targetMaxClean > 0f) this.targetMaxClean = targetMaxClean;
+            if (cellSizeMeters > 0f) this.cellSizeMeters = cellSizeMeters;
+            if (vacuumPower > 0f) this.vacuumPower = vacuumPower;
             if (level != null) BuildGrid();
         }
 

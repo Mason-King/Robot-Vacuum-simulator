@@ -222,11 +222,64 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void RunConfig_WithoutATarget_ReadsAsTheDefault()
+        public void RunSettings_Resolved_FillsEveryUnsetValueWithItsDefault()
         {
-            var config = JsonUtility.FromJson<RunConfig>("{\"seed\":3}");
+            var resolved = new RunSettings { randomSeed = false, seed = 3 }.Resolved();
 
-            Assert.AreEqual(HeatmapDefaults.TargetMaxClean, config.targetMaxClean, 1e-5f);
+            Assert.AreEqual(3, resolved.seed);
+            Assert.AreEqual(HeatmapDefaults.TargetMaxClean, resolved.targetMaxClean, 1e-5f);
+            Assert.AreEqual(SimDefaults.CellSizeMeters, resolved.cellSizeMeters, 1e-6f);
+            Assert.AreEqual(HeatmapDefaults.BaseVacuumPower, resolved.vacuumPower, 1e-5f);
+        }
+
+        [Test]
+        public void RunSettings_Resolved_KeepsSetValues_AndLeavesTheOriginalUntouched()
+        {
+            var original = new RunSettings { randomSeed = false, seed = 7, targetMaxClean = 5f, cellSizeMeters = 0.1f, vacuumPower = 2f };
+            var resolved = original.Resolved();
+
+            Assert.AreEqual(5f, resolved.targetMaxClean, 1e-5f);
+            Assert.AreEqual(0.1f, resolved.cellSizeMeters, 1e-6f);
+            Assert.AreEqual(2f, resolved.vacuumPower, 1e-5f);
+            Assert.AreNotSame(original, resolved);
+        }
+
+        [Test]
+        public void RunSettings_Resolved_TurnsARandomSeedIntoAConcreteOne()
+        {
+            var original = new RunSettings { randomSeed = true };
+            var resolved = original.Resolved();
+
+            Assert.IsFalse(resolved.randomSeed, "the saved settings must replay the same seed");
+            Assert.GreaterOrEqual(resolved.seed, 0);
+            Assert.IsTrue(original.randomSeed, "the caller's settings still ask for a new seed next time");
+        }
+
+        [Test]
+        public void RunConfig_RoundTripsThroughJson()
+        {
+            var config = new RunConfig
+            {
+                settings = new RunSettings { randomSeed = false, seed = 11, targetMaxClean = 4f }.Resolved(),
+                headless = true,
+                startedUtc = "2026-10-22T00:00:00Z",
+            };
+
+            var read = JsonUtility.FromJson<RunConfig>(JsonUtility.ToJson(config));
+
+            Assert.AreEqual(11, read.settings.seed);
+            Assert.AreEqual(4f, read.settings.targetMaxClean, 1e-5f);
+            Assert.IsTrue(read.headless);
+            Assert.AreEqual(SimDefaults.MaxSimulatedSeconds, read.maxSimulatedSeconds, 1e-3f);
+        }
+
+        [Test]
+        public void RunResult_Failure_RecordsAnErrorEndReason()
+        {
+            var result = RunResult.Failure("boom");
+
+            Assert.IsFalse(result.succeeded);
+            Assert.AreEqual(RunEndReason.Error, result.endReason);
         }
     }
 }
