@@ -263,7 +263,7 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void MoveObstacleLive_StopsBeforeFurnitureCrossesAWall()
+        public void MoveObstacleLive_AllowsFurnitureToPassThroughAWall()
         {
             session.Level.WallStrokes.Add(new WallStroke
             {
@@ -274,27 +274,25 @@ namespace RobotVacuum.Tests
 
             session.MoveObstacleLive(0, new Vector2(1f, 0f));
 
-            Assert.Less(session.GetObstacle(0).center.x, 0f);
-            Assert.Greater(session.GetObstacle(0).center.x, -0.5f);
+            Assert.AreEqual(new Vector2(1f, 0f), session.GetObstacle(0).center);
         }
 
         [Test]
-        public void SetObstacleRotationLive_RejectsRotationThatSweepsThroughAWall()
+        public void AddObstacle_AllowsFurnitureToOverlapAWall()
         {
             session.Level.WallStrokes.Add(new WallStroke
             {
                 a = new Vector2(0f, -1f),
                 b = new Vector2(0f, 1f),
             });
-            session.AddObstacle(new Vector2(-0.5f, 0f), new Vector2(1.2f, 0.2f), 90f);
+            session.AddObstacle(Vector2.zero, new Vector2(0.5f, 0.5f));
 
-            session.SetObstacleRotationLive(0, 270f);
-
-            Assert.AreEqual(90f, session.GetObstacle(0).rotation, 1e-4f);
+            Assert.IsNotNull(session.GetObstacle(0));
+            Assert.IsTrue(session.Validate().Exists(issue => issue.severity == IssueSeverity.Critical));
         }
 
         [Test]
-        public void SetObstacleSizeLive_RejectsResizeThatOverlapsAWall()
+        public void SetObstacleRotationAndSizeLive_AllowFurnitureToOverlapAWall()
         {
             session.Level.WallStrokes.Add(new WallStroke
             {
@@ -303,9 +301,11 @@ namespace RobotVacuum.Tests
             });
             session.AddObstacle(new Vector2(-0.5f, 0f), new Vector2(0.5f, 0.5f));
 
+            session.SetObstacleRotationLive(0, 90f);
             session.SetObstacleSizeLive(0, new Vector2(1.2f, 0.5f));
 
-            TestLevels.AssertNear(new Vector2(0.5f, 0.5f), session.GetObstacle(0).size);
+            Assert.AreEqual(90f, session.GetObstacle(0).rotation, 1e-4f);
+            TestLevels.AssertNear(new Vector2(1.2f, 0.5f), session.GetObstacle(0).size);
         }
 
         [Test]
@@ -423,6 +423,23 @@ namespace RobotVacuum.Tests
             session.AddObstacle(Vector2.zero, Vector2.one);
 
             Assert.IsEmpty(session.Validate());
+        }
+
+        [Test]
+        public void Validate_FurnitureOverlappingWallIsCriticalAndExplainsSimulationBlock()
+        {
+            session.Level.WallStrokes.Add(new WallStroke
+            {
+                a = new Vector2(0f, -1f),
+                b = new Vector2(0f, 1f),
+            });
+            session.AddObstacle(Vector2.zero, new Vector2(0.5f, 0.5f));
+
+            var issue = session.Validate().Single(i => i.severity == IssueSeverity.Critical);
+
+            StringAssert.Contains("Critical", issue.message);
+            StringAssert.Contains("overlaps a wall", issue.message);
+            StringAssert.Contains("before starting a simulation", issue.message);
         }
 
         [Test]

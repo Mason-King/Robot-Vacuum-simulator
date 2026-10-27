@@ -830,6 +830,7 @@ namespace RobotVacuum.LevelEditor
         void Simulate()
         {
             if (session == null) return;
+            if (!CanStartSimulation()) return;
 
             var snapshot = LevelSnapshot.Parse(session.Serialize());
             if (!HasRooms(snapshot)) return;
@@ -863,6 +864,7 @@ namespace RobotVacuum.LevelEditor
         void StartRun()
         {
             if (session == null || run != null) return;
+            if (!CanStartSimulation()) return;
 
             if (session.Level.Rooms.Count == 0)
             {
@@ -902,6 +904,23 @@ namespace RobotVacuum.LevelEditor
             }
 
             BeginRun();
+        }
+
+        bool CanStartSimulation()
+        {
+            var criticalIssues = session.Validate().FindAll(issue => issue.severity == IssueSeverity.Critical);
+            if (criticalIssues.Count == 0) return true;
+
+            var explanations = new List<string>();
+            foreach (var issue in criticalIssues) explanations.Add(issue.message);
+
+            overlay.ShowDialog(
+                "Critical warning: collision detected",
+                "You can't start a simulation until every piece of furniture is clear of the walls.\n\n" +
+                string.Join("\n", explanations),
+                null,
+                new DialogButton("OK", ButtonStyle.Danger, null));
+            return false;
         }
 
         void BeginRun()

@@ -74,6 +74,18 @@ namespace RobotVacuum.Level
             return false;
         }
 
+        /// <summary>True when any furniture footprint overlaps a solid wall.</summary>
+        public static bool HasFurnitureWallCollision(LevelData level)
+        {
+            if (level == null) return false;
+
+            foreach (var obstacle in level.Obstacles)
+                if (obstacle != null && FootprintOverlapsWall(level, obstacle.Corners()))
+                    return true;
+
+            return false;
+        }
+
         static bool SegmentsIntersect(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
         {
             const float tolerance = 1e-6f;
