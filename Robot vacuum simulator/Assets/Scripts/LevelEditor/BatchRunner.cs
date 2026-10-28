@@ -77,9 +77,6 @@ namespace RobotVacuum.LevelEditor
             savedTimeScale = Time.timeScale;
             savedMaximumDeltaTime = Time.maximumDeltaTime;
 
-            // Let Unity take many physics steps per frame, or its per-frame cap holds the batch near 20×.
-            Time.maximumDeltaTime = 2f;
-
             if (spec.headless) HideCameras();
             BuildUi();
 
@@ -134,7 +131,7 @@ namespace RobotVacuum.LevelEditor
             session.Finished += OnSessionFinished;
             if (spec.headless) return;
 
-            Time.timeScale = RenderedTimeScale;
+            SimulationSpeed.Apply(RenderedTimeScale, savedMaximumDeltaTime);
             var renderer = session.Runner.Level;
             if (Camera.main != null && renderer != null)
             {

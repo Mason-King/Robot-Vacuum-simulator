@@ -7,7 +7,7 @@ namespace RobotVacuum.LevelEditor
 {
     public enum EditorTool { Select, Rect, Pen, Wall, Doorway, Spawn, Obstacle }
 
-    public enum IssueSeverity { Warning, Error }
+    public enum IssueSeverity { Warning, Error, Critical }
 
     public struct LevelIssue
     {
@@ -404,6 +404,7 @@ namespace RobotVacuum.LevelEditor
                 {
                     name = source.name + " copy",
                     floorIndex = source.floorIndex,
+                    rotation = source.rotation,
                     outline = copyOutline,
                     wallEdges = new List<bool>(source.wallEdges ?? new List<bool>()),
                 };
@@ -466,6 +467,53 @@ namespace RobotVacuum.LevelEditor
                 else if (shared != room.floorIndex) return -1;
             }
             return shared;
+        }
+
+        public void SetRoomRotationLive(int index, float degrees)
+        {
+            var room = Level.GetRoom(index);
+            if (room == null || !room.IsValid) return;
+
+            float rotation = Mathf.Repeat(degrees, 360f);
+            float delta = Mathf.DeltaAngle(room.rotation, rotation);
+            if (Mathf.Abs(delta) < 1e-4f) return;
+
+            Vector2 center = Poly2D.Centroid(room.outline);
+            float radius = 0f;
+            foreach (var point in room.outline)
+                radius = Mathf.Max(radius, Vector2.Distance(center, point));
+
+            float stepDistance = Mathf.Max(0.001f, Level.WallThickness * 0.5f);
+            float travel = radius * Mathf.Abs(delta) * Mathf.Deg2Rad;
+            int steps = Mathf.Max(1, Mathf.CeilToInt(travel / stepDistance));
+            var rotated = new List<Vector2>(room.outline.Count);
+
+            for (int step = 1; step <= steps; step++)
+            {
+                float stepDelta = delta * step / steps;
+                rotated.Clear();
+                foreach (var point in room.outline)
+                    rotated.Add(center + RotatePoint(point - center, stepDelta));
+                if (!CanPlaceRoom(rotated, index)) return;
+            }
+
+            for (int i = 0; i < room.outline.Count; i++)
+                room.outline[i] = center + RotatePoint(room.outline[i] - center, delta);
+
+            foreach (var doorway in Level.Doorways)
+                if (doorway != null && doorway.Links(index))
+                    doorway.center = center + RotatePoint(doorway.center - center, delta);
+
+            room.rotation = rotation;
+            NotifyLiveChange();
+        }
+
+        static Vector2 RotatePoint(Vector2 point, float degrees)
+        {
+            float radians = degrees * Mathf.Deg2Rad;
+            float sin = Mathf.Sin(radians);
+            float cos = Mathf.Cos(radians);
+            return new Vector2(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
         }
 
         public void SetWall(int roomIndex, int edge, bool present)
@@ -616,18 +664,18 @@ namespace RobotVacuum.LevelEditor
         public void AddObstacle(Vector2 center, Vector2 size, float rotation = 0f)
         {
             var kind = obstacleKind;
-
+            var obstacle = new Obstacle
+            {
+                name = NextObstacleName(kind),
+                kind = kind,
+                center = center,
+                size = Vector2.Max(size, Vector2.one * Obstacle.MinSize),
+                rotation = Mathf.Repeat(rotation, 360f),
+                blocksVacuum = Obstacle.DefaultBlocks(kind),
+            };
             Edit($"Add {Obstacle.DefaultName(kind)}", () =>
             {
-                Level.Obstacles.Add(new Obstacle
-                {
-                    name = NextObstacleName(kind),
-                    kind = kind,
-                    center = center,
-                    size = Vector2.Max(size, Vector2.one * Obstacle.MinSize),
-                    rotation = Mathf.Repeat(rotation, 360f),
-                    blocksVacuum = Obstacle.DefaultBlocks(kind),
-                });
+                Level.Obstacles.Add(obstacle);
 
                 selectedObstacle = Level.Obstacles.Count - 1;
                 selectedRoom = -1;
@@ -674,11 +722,11 @@ namespace RobotVacuum.LevelEditor
             var source = GetObstacle(index);
             if (source == null) return;
 
+            var copy = source.Clone();
+            copy.name = source.name + " copy";
+            copy.center += new Vector2(source.Bounds.width + 0.2f, 0f);
             Edit($"Duplicate {source.name}", () =>
             {
-                var copy = source.Clone();
-                copy.name = source.name + " copy";
-                copy.center += new Vector2(source.Bounds.width + 0.2f, 0f);
                 Level.Obstacles.Add(copy);
 
                 selectedObstacle = Level.Obstacles.Count - 1;
@@ -733,6 +781,7 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
+            if (obstacle.center == center) return;
             obstacle.center = center;
             NotifyLiveChange();
         }
@@ -742,7 +791,8 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
-            obstacle.size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
+            size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
+            obstacle.size = size;
             NotifyLiveChange();
         }
 
@@ -751,7 +801,8 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
-            obstacle.rotation = Mathf.Repeat(degrees, 360f);
+            float rotation = Mathf.Repeat(degrees, 360f);
+            obstacle.rotation = rotation;
             NotifyLiveChange();
         }
 
@@ -761,8 +812,9 @@ namespace RobotVacuum.LevelEditor
             var obstacle = GetObstacle(index);
             if (obstacle == null) return;
 
+            size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
             obstacle.center = center;
-            obstacle.size = Vector2.Max(size, Vector2.one * Obstacle.MinSize);
+            obstacle.size = size;
             NotifyLiveChange();
         }
 
@@ -1044,6 +1096,14 @@ namespace RobotVacuum.LevelEditor
             foreach (var obstacle in Level.Obstacles)
             {
                 if (obstacle == null) continue;
+
+                if (LevelGeometry.FootprintOverlapsWall(Level, obstacle.Corners()))
+                    issues.Add(new LevelIssue
+                    {
+                        severity = IssueSeverity.Critical,
+                        roomIndex = -1,
+                        message = $"Critical: {obstacle.name} overlaps a wall. Clear the collision before starting a simulation.",
+                    });
 
                 if (Level.RoomIndexAt(obstacle.center) < 0)
                     issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = $"{obstacle.name} isn't inside any room." });

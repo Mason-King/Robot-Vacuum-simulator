@@ -88,6 +88,7 @@ namespace RobotVacuum.Sim
 
         readonly RunSettings requested;
         readonly float savedTimeScale;
+        readonly float savedMaximumDeltaTime;
         SessionClock clock;
         Action<SimulationSession> runBegan;
 
@@ -100,6 +101,7 @@ namespace RobotVacuum.Sim
             // Random Seed gets a fresh one.
             this.requested = requested;
             savedTimeScale = Time.timeScale;
+            savedMaximumDeltaTime = Time.maximumDeltaTime;
         }
 
         public LevelData Level { get; }
@@ -161,6 +163,7 @@ namespace RobotVacuum.Sim
             TearDownRunner();
 
             Time.timeScale = savedTimeScale;
+            Time.maximumDeltaTime = savedMaximumDeltaTime;
             State = Phase.Closed;
             if (Active == this) Active = null;
 
@@ -191,13 +194,14 @@ namespace RobotVacuum.Sim
                     level = LevelSnapshot.FromLevel(Level, Level.name),
                     settings = Settings,
                     headless = Headless,
+                    playbackSpeed = Headless ? SimulationSpeed.MaxPlaybackSpeed : 1f,
                     startedUtc = DateTime.UtcNow.ToString("o"),
                 }.WriteTo(Path.Combine(RunFolder, RunArtifacts.ConfigFileName));
 
                 clock = Runner.Root.AddComponent<SessionClock>();
                 clock.Bind(this);
 
-                if (Headless) Time.timeScale = HeadlessTimeScale;
+                if (Headless) SimulationSpeed.Apply(HeadlessTimeScale, savedMaximumDeltaTime);
 
                 State = Phase.Running;
                 runBegan?.Invoke(this);
@@ -334,6 +338,7 @@ namespace RobotVacuum.Sim
             clock = null;
             Runner = null;
             Time.timeScale = savedTimeScale;
+            Time.maximumDeltaTime = savedMaximumDeltaTime;
             State = Phase.Closed;
             if (Active == this) Active = null;
 

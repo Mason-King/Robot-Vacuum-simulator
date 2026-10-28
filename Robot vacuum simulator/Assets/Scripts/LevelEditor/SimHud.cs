@@ -338,16 +338,16 @@ namespace RobotVacuum.LevelEditor
         // ---------------------------------------------------------------- speed
 
         const float MinSpeed = 0.25f;
-        const float MaxSpeed = 100f;
+        const float MaxSpeed = SimulationSpeed.MaxPlaybackSpeed;
 
         /// <summary>
-        /// Plays the run at the chosen speed through the time scale. At high speeds Unity is also allowed more
-        /// physics steps per frame, otherwise its per-frame cap would hold the run near 20×.
+        /// Plays the run at the chosen speed through the time scale. <see cref="SimulationSpeed"/> also lets
+        /// Unity take more physics steps per frame, otherwise its per-frame cap would hold the run near 20×.
         /// </summary>
         void ApplySpeed()
         {
-            Time.timeScale = paused ? 0f : speed;
-            Time.maximumDeltaTime = Mathf.Max(savedMaximumDeltaTime, Mathf.Min(2f, speed / 30f));
+            if (paused) Time.timeScale = 0f;
+            else SimulationSpeed.Apply(speed, savedMaximumDeltaTime);
         }
 
         void MeasureSpeed()
@@ -397,7 +397,7 @@ namespace RobotVacuum.LevelEditor
                 value => Settings.reverseSpeed = value);
             AddVacuumSetting(panel, "Turn speed", 30f, 720f, Settings.turnSpeed, value => $"{value:0} °/s",
                 value => Settings.turnSpeed = value);
-            AddVacuumSetting(panel, "Battery capacity", 10f, 1800f, Settings.batteryCapacity, VacuumSettings.FormatCapacity,
+            AddVacuumSetting(panel, "Battery capacity", 10f, Battery.MaxCapacity, Settings.batteryCapacity, VacuumSettings.FormatCapacity,
                 value => Settings.batteryCapacity = value);
             Ui.Text(panel, "Changing battery capacity recharges the vacuum. Every change is logged with the simulated time.", "le-empty-hint");
 

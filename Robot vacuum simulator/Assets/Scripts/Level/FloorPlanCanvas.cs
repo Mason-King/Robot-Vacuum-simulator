@@ -17,7 +17,7 @@ namespace RobotVacuum.LevelEditor
     /// </summary>
     public sealed class FloorPlanCanvas : VisualElement
     {
-        enum Drag { None, Pan, Vertex, Room, Doorway, Spawn, RectCreate, WallCreate, Obstacle, ObstacleCreate, ObstacleHandle }
+        enum Drag { None, Pan, Vertex, Room, RoomRotate, Doorway, Spawn, RectCreate, WallCreate, Obstacle, ObstacleCreate, ObstacleHandle, ObstacleRotate }
 
         public const float PixelsPerMetreAt100 = 50f;
         const float MinZoom = 4f;
@@ -60,6 +60,7 @@ namespace RobotVacuum.LevelEditor
         int dragRoom = -1;
         int dragVertex = -1;
         int pendingInsertEdge = -1;
+        float dragRoomOriginalRotation;
         int dragDoorway = -1;
         int dragObstacle = -1;
         Vector2 dragAnchor;
@@ -67,6 +68,8 @@ namespace RobotVacuum.LevelEditor
         int dragHandle = -1;
         bool dragHandleIsSide;
         Vector2 dragOriginalSize;
+        float dragObstacleOriginalRotation;
+        float dragRotationStartAngle;
         readonly List<Vector2> dragOriginalOutline = new List<Vector2>();
         readonly List<KeyValuePair<Doorway, Vector2>> dragOriginalDoorways = new List<KeyValuePair<Doorway, Vector2>>();
         Vector2 rectStart;
@@ -76,10 +79,12 @@ namespace RobotVacuum.LevelEditor
         int hoverRoom = -1;
         int hoverVertex = -1;
         int hoverMidpoint = -1;
+        bool hoverRoomRotate;
         int hoverDoorway = -1;
         int hoverObstacle = -1;
         int hoverObstacleCorner = -1;
         int hoverObstacleSide = -1;
+        bool hoverObstacleRotate;
         bool hoverSpawn;
         int hoverEdgeRoom = -1;
         int hoverEdge = -1;
@@ -338,11 +343,13 @@ namespace RobotVacuum.LevelEditor
                 case Drag.WallCreate: CommitWallStroke(); break;
                 case Drag.ObstacleCreate: CommitObstacle(); break;
                 case Drag.Room:
+                case Drag.RoomRotate:
                 case Drag.Vertex:
                 case Drag.Doorway:
                 case Drag.Spawn:
                 case Drag.Obstacle:
                 case Drag.ObstacleHandle:
+                case Drag.ObstacleRotate:
                     if (recorded) session.Commit();
                     break;
             }
@@ -491,6 +498,26 @@ namespace RobotVacuum.LevelEditor
                 }
             }
 
+            var selectedObstacle = session.SelectedObstacleData;
+            if (selectedObstacle != null && IsOverObstacleRotationHandle(cursorLocal, selectedObstacle))
+            {
+                BeginDrag(Drag.ObstacleRotate, pointerId);
+                dragObstacle = session.SelectedObstacle;
+                dragObstacleOrigin = selectedObstacle.center;
+                dragObstacleOriginalRotation = selectedObstacle.rotation;
+                dragRotationStartAngle = AngleFromCenter(selectedObstacle.center, cursorLevel);
+                return;
+            }
+
+            if (selected != null && IsOverRoomRotationHandle(cursorLocal, selected))
+            {
+                BeginDrag(Drag.RoomRotate, pointerId);
+                dragRoom = selectedIndex;
+                dragRoomOriginalRotation = selected.rotation;
+                dragRotationStartAngle = AngleFromCenter(Poly2D.Centroid(selected.outline), cursorLevel);
+                return;
+            }
+
             if (TryFindObstacleHandle(point, grab, out int handle, out bool isSide))
             {
                 var picked = session.SelectedObstacleData;
@@ -573,8 +600,10 @@ namespace RobotVacuum.LevelEditor
             {
                 case Drag.Vertex: DragVertex(); break;
                 case Drag.Room: DragRoom(); break;
+                case Drag.RoomRotate: DragRoomRotate(); break;
                 case Drag.Obstacle: DragObstacle(); break;
                 case Drag.ObstacleHandle: DragObstacleHandle(); break;
+                case Drag.ObstacleRotate: DragObstacleRotate(); break;
 
                 case Drag.Doorway:
                     RecordOnce("Move Doorway");
@@ -616,6 +645,10 @@ namespace RobotVacuum.LevelEditor
             Vector2 target = SnapPoint(cursorLevel, dragRoom, dragVertex);
             var proposed = new List<Vector2>(room.outline);
             proposed[dragVertex] = target;
+            float currentArea = Poly2D.SignedArea(room.outline);
+            float proposedArea = Poly2D.SignedArea(proposed);
+            if (!Poly2D.IsSimple(proposed) ||
+                (Mathf.Abs(currentArea) > 1e-6f && currentArea * proposedArea <= 0f)) return;
             if (!session.CanPlaceRoom(proposed, dragRoom)) return;
 
             room.outline[dragVertex] = target;
@@ -650,6 +683,22 @@ namespace RobotVacuum.LevelEditor
             RecordOnce("Move Furniture");
             Vector2 target = dragObstacleOrigin + (cursorLevel - pressLevel);
             session.MoveObstacleLive(dragObstacle, shiftHeld ? target : session.SnapToGridStep(target));
+        }
+
+        void DragObstacleRotate()
+        {
+            if (session.GetObstacle(dragObstacle) == null) return;
+
+            RecordOnce("Rotate Object");
+            float currentAngle = AngleFromCenter(dragObstacleOrigin, cursorLevel);
+            float rotation = dragObstacleOriginalRotation + Mathf.DeltaAngle(dragRotationStartAngle, currentAngle);
+            session.SetObstacleRotationLive(dragObstacle, rotation);
+        }
+
+        static float AngleFromCenter(Vector2 center, Vector2 point)
+        {
+            Vector2 direction = point - center;
+            return Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
         }
 
         /// <summary>Resizes from a corner or side handle, keeping the opposite corner or side where it was.</summary>
@@ -700,6 +749,54 @@ namespace RobotVacuum.LevelEditor
 
             return false;
         }
+
+        Vector2 ObstacleRotationHandleLocal(Obstacle obstacle, out Vector2 edgeMidpoint)
+        {
+            var corners = obstacle.Corners();
+            int topEdge = 0;
+            float top = float.PositiveInfinity;
+            for (int edge = 0; edge < corners.Count; edge++)
+            {
+                float midpointY = ToLocal((corners[edge] + corners[(edge + 1) % corners.Count]) * 0.5f).y;
+                if (midpointY >= top) continue;
+                top = midpointY;
+                topEdge = edge;
+            }
+
+            edgeMidpoint = ToLocal((corners[topEdge] + corners[(topEdge + 1) % corners.Count]) * 0.5f);
+            Vector2 center = ToLocal(obstacle.center);
+            Vector2 outward = edgeMidpoint - center;
+            if (outward.sqrMagnitude < 1e-6f) outward = Vector2.up;
+            else outward.Normalize();
+            return edgeMidpoint + outward * 22f;
+        }
+
+        bool IsOverObstacleRotationHandle(Vector2 local, Obstacle obstacle) =>
+            Vector2.Distance(local, ObstacleRotationHandleLocal(obstacle, out _)) <= 10f;
+
+        Vector2 RoomRotationHandleLocal(Room room, out Vector2 edgeMidpoint)
+        {
+            int topEdge = 0;
+            float top = float.PositiveInfinity;
+            for (int edge = 0; edge < room.outline.Count; edge++)
+            {
+                float midpointY = ToLocal((room.outline[edge] + room.outline[(edge + 1) % room.outline.Count]) * 0.5f).y;
+                if (midpointY >= top) continue;
+                top = midpointY;
+                topEdge = edge;
+            }
+
+            edgeMidpoint = ToLocal((room.outline[topEdge] + room.outline[(topEdge + 1) % room.outline.Count]) * 0.5f);
+            Vector2 center = ToLocal(Poly2D.Centroid(room.outline));
+            Vector2 outward = edgeMidpoint - center;
+            if (outward.sqrMagnitude < 1e-6f) outward = Vector2.up;
+            else outward.Normalize();
+            return edgeMidpoint + outward * 22f;
+        }
+
+        bool IsOverRoomRotationHandle(Vector2 local, Room room) =>
+            session.Tool == EditorTool.Select && room != null && room.IsValid &&
+            Vector2.Distance(local, RoomRotationHandleLocal(room, out _)) <= 10f;
 
         // ---------------------------------------------------------------- drawing tools
 
@@ -828,6 +925,8 @@ namespace RobotVacuum.LevelEditor
         {
             hoverRoom = hoverVertex = hoverMidpoint = hoverDoorway = hoverObstacle = hoverEdgeRoom = hoverEdge = hoverStroke = -1;
             hoverObstacleCorner = hoverObstacleSide = -1;
+            hoverRoomRotate = false;
+            hoverObstacleRotate = false;
             hoverSpawn = false;
             hoverPenClose = false;
         }
@@ -850,6 +949,19 @@ namespace RobotVacuum.LevelEditor
                         hoverVertex = session.FindVertex(session.SelectedRoom, point, grab);
                         if (hoverVertex < 0) hoverMidpoint = FindMidpoint(selected, point, grab * 1.3f);
                         if (hoverVertex >= 0 || hoverMidpoint >= 0) return;
+                    }
+
+                    if (selected != null && IsOverRoomRotationHandle(cursorLocal, selected))
+                    {
+                        hoverRoomRotate = true;
+                        return;
+                    }
+
+                    var selectedObstacle = session.SelectedObstacleData;
+                    if (selectedObstacle != null && IsOverObstacleRotationHandle(cursorLocal, selectedObstacle))
+                    {
+                        hoverObstacleRotate = true;
+                        return;
                     }
 
                     if (TryFindObstacleHandle(point, grab, out int handle, out bool isSide))
@@ -1466,6 +1578,7 @@ namespace RobotVacuum.LevelEditor
 
             var corners = obstacle.Corners();
             bool resizing = drag == Drag.ObstacleHandle && dragMoved;
+            bool rotating = drag == Drag.ObstacleRotate && dragMoved;
 
             for (int s = 0; s < 4; s++)
             {
@@ -1481,6 +1594,29 @@ namespace RobotVacuum.LevelEditor
                 bool hot = c == hoverObstacleCorner || (resizing && !dragHandleIsSide && c == dragHandle);
                 PaintCornerHandle(painter, ToLocal(corners[c]), hot);
             }
+
+            Vector2 handle = ObstacleRotationHandleLocal(obstacle, out Vector2 edgeMidpoint);
+            bool hotRotate = hoverObstacleRotate || rotating;
+            painter.lineWidth = 1.5f;
+            painter.strokeColor = Accent;
+            painter.BeginPath();
+            painter.MoveTo(edgeMidpoint);
+            painter.LineTo(handle);
+            painter.Stroke();
+            FillCircle(painter, handle, hotRotate ? 8f : 7f, hotRotate ? Accent : HandleFill);
+            StrokeCircle(painter, handle, hotRotate ? 8f : 7f, 1.5f, Accent);
+
+            painter.lineWidth = 1.5f;
+            painter.strokeColor = hotRotate ? HandleFill : Accent;
+            painter.BeginPath();
+            painter.Arc(handle, 3.5f, Angle.Degrees(45f), Angle.Degrees(315f), ArcDirection.Clockwise);
+            painter.Stroke();
+            painter.BeginPath();
+            painter.MoveTo(handle + new Vector2(3.2f, -3.2f));
+            painter.LineTo(handle + new Vector2(0.4f, -3.4f));
+            painter.MoveTo(handle + new Vector2(3.2f, -3.2f));
+            painter.LineTo(handle + new Vector2(3.4f, -0.4f));
+            painter.Stroke();
         }
 
         void PaintSelection(Painter2D painter)
@@ -1489,6 +1625,9 @@ namespace RobotVacuum.LevelEditor
 
             var room = session.SelectedRoomData;
             if (room == null || !room.IsValid) return;
+
+            if (session.Tool == EditorTool.Select && drag != Drag.Room && drag != Drag.RoomRotate)
+                PaintRoomRotationHandle(painter, room);
 
             PolygonPath(painter, room.outline);
             painter.lineWidth = 2f;
@@ -1516,6 +1655,42 @@ namespace RobotVacuum.LevelEditor
             {
                 PaintCornerHandle(painter, ToLocal(room.outline[v]), v == hoverVertex || (draggingVertex && v == dragVertex));
             }
+        }
+
+        void DragRoomRotate()
+        {
+            var room = session.Level.GetRoom(dragRoom);
+            if (room == null || !room.IsValid) return;
+
+            RecordOnce("Rotate Room");
+            float currentAngle = AngleFromCenter(Poly2D.Centroid(room.outline), cursorLevel);
+            float rotation = dragRoomOriginalRotation + Mathf.DeltaAngle(dragRotationStartAngle, currentAngle);
+            session.SetRoomRotationLive(dragRoom, rotation);
+        }
+
+        void PaintRoomRotationHandle(Painter2D painter, Room room)
+        {
+            Vector2 handle = RoomRotationHandleLocal(room, out Vector2 edgeMidpoint);
+            bool hot = hoverRoomRotate || (drag == Drag.RoomRotate && dragMoved);
+            painter.lineWidth = 1.5f;
+            painter.strokeColor = Accent;
+            painter.BeginPath();
+            painter.MoveTo(edgeMidpoint);
+            painter.LineTo(handle);
+            painter.Stroke();
+            FillCircle(painter, handle, hot ? 8f : 7f, hot ? Accent : HandleFill);
+            StrokeCircle(painter, handle, hot ? 8f : 7f, 1.5f, Accent);
+            painter.lineWidth = 1.5f;
+            painter.strokeColor = hot ? HandleFill : Accent;
+            painter.BeginPath();
+            painter.Arc(handle, 3.5f, Angle.Degrees(45f), Angle.Degrees(315f), ArcDirection.Clockwise);
+            painter.Stroke();
+            painter.BeginPath();
+            painter.MoveTo(handle + new Vector2(3.2f, -3.2f));
+            painter.LineTo(handle + new Vector2(0.4f, -3.4f));
+            painter.MoveTo(handle + new Vector2(3.2f, -3.2f));
+            painter.LineTo(handle + new Vector2(3.4f, -0.4f));
+            painter.Stroke();
         }
 
         void PaintToolPreview(Painter2D painter)

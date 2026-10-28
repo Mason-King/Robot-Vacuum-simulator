@@ -24,6 +24,9 @@ namespace RobotVacuum.Level
                  "When set on import it wins over floorIndex.")]
         public string floor;
 
+        [Tooltip("Room rotation in degrees, used by the editor's rotation controls.")]
+        public float rotation;
+
         [Tooltip("One flag per outline edge. False means that wall has been deleted.")]
         public List<bool> wallEdges = new List<bool>();
 

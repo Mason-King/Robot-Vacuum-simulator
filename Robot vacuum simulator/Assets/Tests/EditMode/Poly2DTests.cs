@@ -104,8 +104,20 @@ namespace RobotVacuum.Tests
             Assert.IsTrue(Poly2D.IsSimple(LShape()));
             Assert.IsTrue(Poly2D.IsSimple(new List<Vector2> { Vector2.zero, Vector2.right, Vector2.up }));
 
-            var bowtie = new List<Vector2> { new Vector2(0, 0), new Vector2(2, 2), new Vector2(2, 0), new Vector2(0, 2) };
+            var bowtie = new List<Vector2> { new Vector2(0, 0), new Vector2(3, 3), new Vector2(3, 0), new Vector2(0, 2) };
             Assert.IsFalse(Poly2D.IsSimple(bowtie));
+            Assert.IsFalse(Poly2D.IsSimple(new List<Vector2>
+            {
+                new Vector2(0, 0), new Vector2(2, 0), new Vector2(1, 0), new Vector2(1, 2),
+            }), "adjacent edges must not double back over each other");
+            Assert.IsFalse(Poly2D.IsSimple(new List<Vector2>
+            {
+                new Vector2(0, 0), new Vector2(2, 0), new Vector2(2, 2), new Vector2(1, 0), new Vector2(0, 2),
+            }), "a corner touching a non-adjacent edge is not a simple room outline");
+            Assert.IsFalse(Poly2D.IsSimple(new List<Vector2>
+            {
+                Vector2.zero, Vector2.right, Vector2.right * 2f,
+            }), "zero-area outlines are not simple rooms");
 
             Assert.IsFalse(Poly2D.IsSimple(new List<Vector2> { Vector2.zero, Vector2.one }));
             Assert.IsFalse(Poly2D.IsSimple(null));

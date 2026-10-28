@@ -93,7 +93,15 @@ namespace RobotVacuum.LevelEditor
         {
             if (snapshot == null || !CanLoad(SimScenePath)) return false;
 
-            LevelHandoff.Send(BuildLevel(snapshot, palette != null ? palette : FallbackPalette()));
+            var level = BuildLevel(snapshot, palette != null ? palette : FallbackPalette());
+            if (LevelGeometry.HasFurnitureWallCollision(level))
+            {
+                Debug.LogWarning("Simulation cannot start because furniture overlaps a wall. Move the furniture clear of walls and try again.");
+                Object.Destroy(level);
+                return false;
+            }
+
+            LevelHandoff.Send(level);
             SimulatedPath = filePath;
             Origin = origin;
 
