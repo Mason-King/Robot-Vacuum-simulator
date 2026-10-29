@@ -499,6 +499,17 @@
     right: 12px;
 }
 
+.le-snap-help {
+    position: absolute;
+    left: 12px;
+    bottom: 60px;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background-color: rgba(22, 25, 32, 0.88);
+    color: var(--text-2);
+    font-size: 11px;
+}
+
 .le-bar .le-btn {
     height: 30px;
     padding: 0 8px;

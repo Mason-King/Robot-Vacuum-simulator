@@ -49,6 +49,8 @@ namespace RobotVacuum.LevelEditor
         Vector2 cursorLevel;
         bool cursorInside;
         bool shiftHeld;
+        bool leftShiftHeld;
+        bool rightShiftHeld;
         bool spaceHeld;
 
         Drag drag = Drag.None;
@@ -130,6 +132,7 @@ namespace RobotVacuum.LevelEditor
         public Vector2 CursorLevel => cursorLevel;
         public bool CursorInside => cursorInside;
         public int PenPointCount => penPoints.Count;
+        public bool ShiftHeld => shiftHeld;
 
         public bool SpaceHeld
         {
@@ -137,10 +140,17 @@ namespace RobotVacuum.LevelEditor
             set => spaceHeld = value;
         }
 
-        public void SetShiftHeld(bool value)
+        public void SetShiftKeyHeld(KeyCode key, bool value)
         {
-            if (shiftHeld == value) return;
-            shiftHeld = value;
+            bool wasHeld = leftShiftHeld || rightShiftHeld;
+            if (key == KeyCode.LeftShift) leftShiftHeld = value;
+            else if (key == KeyCode.RightShift) rightShiftHeld = value;
+
+            bool held = leftShiftHeld || rightShiftHeld;
+            if (!wasHeld && held) session.ToggleSnapEnabled();
+            if (shiftHeld == held) return;
+
+            shiftHeld = held;
             Invalidate();
         }
 
@@ -239,7 +249,7 @@ namespace RobotVacuum.LevelEditor
         void OnPointerDown(PointerDownEvent evt)
         {
             Focus();
-            UpdateCursor(evt.position, evt.shiftKey);
+            UpdateCursor(evt.position);
             if (drag != Drag.None) return;
 
             bool contextClick = evt.button == 1 || (IsMac && evt.button == 0 && evt.ctrlKey && !evt.commandKey);
@@ -306,7 +316,7 @@ namespace RobotVacuum.LevelEditor
         void OnPointerMove(PointerMoveEvent evt)
         {
             Vector2 previous = cursorLocal;
-            UpdateCursor(evt.position, evt.shiftKey);
+            UpdateCursor(evt.position);
 
             if (drag == Drag.Pan)
             {
@@ -332,7 +342,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (drag == Drag.None || evt.pointerId != capturedPointer) return;
 
-            UpdateCursor(evt.position, evt.shiftKey);
+            UpdateCursor(evt.position);
             var finished = drag;
             bool recorded = dragRecorded;
             EndDrag();
@@ -370,7 +380,7 @@ namespace RobotVacuum.LevelEditor
 
         void OnWheel(WheelEvent evt)
         {
-            UpdateCursor(evt.mousePosition, evt.shiftKey);
+            UpdateCursor(evt.mousePosition);
 
             // Deltas range from ~1 per notch to ~120 depending on platform; clamp so no step jumps.
             float steps = Mathf.Clamp(evt.delta.y, -12f, 12f);
@@ -378,16 +388,15 @@ namespace RobotVacuum.LevelEditor
             evt.StopPropagation();
         }
 
-        void UpdateCursor(Vector2 panelPosition, bool shift)
+        void UpdateCursor(Vector2 panelPosition)
         {
             cursorLocal = this.WorldToLocal(panelPosition);
             cursorLevel = ToLevel(cursorLocal);
             cursorInside = contentRect.Contains(cursorLocal);
-            shiftHeld = shift;
         }
 
         Vector2 SnapPoint(Vector2 point, int skipRoom = -1, int skipVertex = -1) =>
-            shiftHeld ? point : session.Snap(point, zoom, skipRoom, skipVertex);
+            session.Snap(point, zoom, skipRoom, skipVertex);
 
         void BeginDrag(Drag kind, int pointerId)
         {
@@ -682,7 +691,7 @@ namespace RobotVacuum.LevelEditor
             // Grid snapping only: snapping a piece's centre to a room corner would park it on the wall.
             RecordOnce("Move Furniture");
             Vector2 target = dragObstacleOrigin + (cursorLevel - pressLevel);
-            session.MoveObstacleLive(dragObstacle, shiftHeld ? target : session.SnapToGridStep(target));
+            session.MoveObstacleLive(dragObstacle, session.SnapToGridStep(target));
         }
 
         void DragObstacleRotate()
@@ -709,7 +718,7 @@ namespace RobotVacuum.LevelEditor
 
             RecordOnce("Resize Furniture");
 
-            Vector2 target = shiftHeld ? cursorLevel : session.Snap(cursorLevel, zoom);
+            Vector2 target = session.Snap(cursorLevel, zoom);
             Vector2 center, size;
             if (dragHandleIsSide)
                 Obstacle.ResizeFromSide(dragObstacleOrigin, dragOriginalSize, obstacle.rotation, dragHandle, target, out center, out size);
@@ -855,17 +864,19 @@ namespace RobotVacuum.LevelEditor
             }
 
             if (penPoints.Count > 0 && Vector2.Distance(snapped, penPoints[penPoints.Count - 1]) < 1e-4f) return;
+            if (!session.CanAppendRoomPoint(penPoints, snapped)) return;
             penPoints.Add(snapped);
         }
 
-        /// <summary>Finishes the pen path as a room. Returns false when there are too few points.</summary>
+        /// <summary>Finishes the pen path as a room. Returns false when the outline is invalid.</summary>
         public bool ClosePen()
         {
             if (penPoints.Count < 3) return false;
 
             var outline = new List<Vector2>(penPoints);
+            if (!session.AddRoom(outline)) return false;
+
             penPoints.Clear();
-            session.AddRoom(outline);
             session.Tool = EditorTool.Select;
             return true;
         }

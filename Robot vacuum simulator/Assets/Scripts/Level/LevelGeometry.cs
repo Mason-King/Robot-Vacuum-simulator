@@ -25,7 +25,6 @@ namespace RobotVacuum.Level
             if (level == null) return false;
 
             float halfThickness = level.WallThickness * 0.5f;
-            float snapDistance = level.DoorwaySnapDistance;
 
             for (int roomIndex = 0; roomIndex < level.Rooms.Count; roomIndex++)
             {
@@ -35,13 +34,13 @@ namespace RobotVacuum.Level
                 for (int edge = 0; edge < room.EdgeCount; edge++)
                 {
                     if (!room.HasWall(edge)) continue;
-                    if (InsideSolidWall(point, room.EdgeStart(edge), room.EdgeEnd(edge), halfThickness, snapDistance, level.Doorways))
+                    if (InsideSolidWall(point, room.EdgeStart(edge), room.EdgeEnd(edge), halfThickness, level, roomIndex, edge))
                         return true;
                 }
             }
 
             foreach (var stroke in level.WallStrokes)
-                if (stroke != null && InsideSolidWall(point, stroke.a, stroke.b, halfThickness, snapDistance, level.Doorways))
+                if (stroke != null && InsideSolidWall(point, stroke.a, stroke.b, halfThickness, level, -1, -1))
                     return true;
 
             return false;
@@ -111,7 +110,7 @@ namespace RobotVacuum.Level
             point.y <= Mathf.Max(a.y, b.y) + tolerance;
 
         static bool InsideSolidWall(
-            Vector2 point, Vector2 start, Vector2 end, float halfThickness, float snapDistance, List<Doorway> doorways)
+            Vector2 point, Vector2 start, Vector2 end, float halfThickness, LevelData level, int roomIndex, int edgeIndex)
         {
             float length = Vector2.Distance(start, end);
             if (length < 1e-4f) return false;
@@ -119,13 +118,13 @@ namespace RobotVacuum.Level
             float distance = Poly2D.DistanceToSegment(point, start, end, out float pointT);
             if (distance > halfThickness) return false;
 
-            foreach (var doorway in doorways)
+            for (int i = 0; i < level.Doorways.Count; i++)
             {
+                var doorway = level.Doorways[i];
                 if (doorway == null) continue;
+                if (!DoorwayCutsEdge(level, doorway, roomIndex, edgeIndex)) continue;
 
-                float doorwayDistance = Poly2D.DistanceToSegment(doorway.center, start, end, out float doorwayT);
-                if (doorwayDistance > snapDistance) continue;
-
+                Poly2D.DistanceToSegment(doorway.center, start, end, out float doorwayT);
                 float halfGap = doorway.width * 0.5f / length;
                 if (Mathf.Abs(pointT - doorwayT) <= halfGap) return false;
             }
@@ -155,34 +154,32 @@ namespace RobotVacuum.Level
                     // A deleted wall contributes nothing, but the floor edge stays put.
                     if (!room.HasWall(e)) continue;
 
-                    CutLine(level, room.outline[e], room.outline[(e + 1) % count], roomIndex, gaps, segments);
+                    CutLine(level, room.outline[e], room.outline[(e + 1) % count], roomIndex, e, gaps, segments);
                 }
             }
 
             foreach (var stroke in level.WallStrokes)
-                if (stroke != null) CutLine(level, stroke.a, stroke.b, -1, gaps, segments);
+                if (stroke != null) CutLine(level, stroke.a, stroke.b, -1, -1, gaps, segments);
 
             return segments;
         }
 
         /// <summary>Emits the solid runs of one wall line after every nearby doorway has cut into it.</summary>
         static void CutLine(
-            LevelData level, Vector2 p0, Vector2 p1, int roomIndex,
+            LevelData level, Vector2 p0, Vector2 p1, int roomIndex, int edgeIndex,
             List<Vector2> gapScratch, List<WallSegment> output)
         {
             float length = Vector2.Distance(p0, p1);
             if (length < 1e-4f) return;
 
-            float snap = level.DoorwaySnapDistance;
             gapScratch.Clear();
 
             foreach (var doorway in level.Doorways)
             {
                 if (doorway == null) continue;
+                if (!DoorwayCutsEdge(level, doorway, roomIndex, edgeIndex)) continue;
 
-                float distance = Poly2D.DistanceToSegment(doorway.center, p0, p1, out float t);
-                if (distance > snap) continue;
-
+                Poly2D.DistanceToSegment(doorway.center, p0, p1, out float t);
                 float halfSpan = doorway.width * 0.5f / length;
                 gapScratch.Add(new Vector2(t - halfSpan, t + halfSpan));
             }
@@ -196,6 +193,84 @@ namespace RobotVacuum.Level
                     roomIndex = roomIndex,
                 });
             }
+        }
+
+        /// <summary>True when a doorway belongs to this wall edge or its matching shared edge.</summary>
+        public static bool DoorwayCutsEdge(LevelData level, Doorway doorway, int roomIndex, int edgeIndex)
+        {
+            if (level == null || doorway == null || roomIndex < 0 || edgeIndex < 0) return false;
+            if (!TryFindHostEdge(level, doorway, out int hostRoomIndex, out int hostEdgeIndex)) return false;
+
+            var hostRoom = level.GetRoom(hostRoomIndex);
+            var targetRoom = level.GetRoom(roomIndex);
+            if (hostRoom == null || targetRoom == null || edgeIndex >= targetRoom.EdgeCount) return false;
+            if (Poly2D.DistanceToSegment(
+                    doorway.center, targetRoom.EdgeStart(edgeIndex), targetRoom.EdgeEnd(edgeIndex), out _) >
+                level.DoorwaySnapDistance)
+                return false;
+
+            if (roomIndex == hostRoomIndex) return edgeIndex == hostEdgeIndex;
+            if (roomIndex != doorway.roomB) return false;
+
+            Vector2 hostStart = hostRoom.EdgeStart(hostEdgeIndex);
+            Vector2 hostEnd = hostRoom.EdgeEnd(hostEdgeIndex);
+            Vector2 targetStart = targetRoom.EdgeStart(edgeIndex);
+            Vector2 targetEnd = targetRoom.EdgeEnd(edgeIndex);
+            Vector2 hostDirection = (hostEnd - hostStart).normalized;
+            Vector2 targetDirection = (targetEnd - targetStart).normalized;
+            if (Mathf.Abs(Vector2.Dot(hostDirection, targetDirection)) < 0.995f) return false;
+            if (Mathf.Abs(Poly2D.Cross(hostDirection, targetStart - hostStart)) > level.DoorwaySnapDistance)
+                return false;
+
+            float targetA = Vector2.Dot(targetStart - hostStart, hostDirection);
+            float targetB = Vector2.Dot(targetEnd - hostStart, hostDirection);
+            float overlapStart = Mathf.Max(0f, Mathf.Min(targetA, targetB));
+            float overlapEnd = Mathf.Min(Vector2.Distance(hostStart, hostEnd), Mathf.Max(targetA, targetB));
+            float doorwayPosition = Vector2.Dot(doorway.center - hostStart, hostDirection);
+            return overlapEnd > overlapStart && doorwayPosition >= overlapStart - level.DoorwaySnapDistance &&
+                   doorwayPosition <= overlapEnd + level.DoorwaySnapDistance;
+        }
+
+        static bool TryFindHostEdge(LevelData level, Doorway doorway, out int roomIndex, out int edgeIndex)
+        {
+            roomIndex = doorway.roomA >= 0 ? doorway.roomA : doorway.roomB;
+            edgeIndex = -1;
+
+            if (roomIndex >= 0)
+                return TryFindNearestEdge(level, doorway.center, roomIndex, out edgeIndex);
+
+            float best = float.MaxValue;
+            for (int i = 0; i < level.Rooms.Count; i++)
+            {
+                if (!TryFindNearestEdge(level, doorway.center, i, out int candidate)) continue;
+                var room = level.GetRoom(i);
+                float distance = Poly2D.DistanceToSegment(
+                    doorway.center, room.EdgeStart(candidate), room.EdgeEnd(candidate), out _);
+                if (distance >= best) continue;
+                best = distance;
+                roomIndex = i;
+                edgeIndex = candidate;
+            }
+
+            return edgeIndex >= 0 && best <= level.DoorwaySnapDistance;
+        }
+
+        static bool TryFindNearestEdge(LevelData level, Vector2 point, int roomIndex, out int edgeIndex)
+        {
+            edgeIndex = -1;
+            var room = level.GetRoom(roomIndex);
+            if (room == null || !room.IsValid) return false;
+
+            float best = float.MaxValue;
+            for (int edge = 0; edge < room.EdgeCount; edge++)
+            {
+                float distance = Poly2D.DistanceToSegment(point, room.EdgeStart(edge), room.EdgeEnd(edge), out _);
+                if (distance >= best) continue;
+                best = distance;
+                edgeIndex = edge;
+            }
+
+            return edgeIndex >= 0 && best <= level.DoorwaySnapDistance;
         }
 
         /// <summary>Merges the gap spans and returns the parts of [0,1] that stay solid.</summary>

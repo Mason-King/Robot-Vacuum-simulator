@@ -103,9 +103,7 @@ namespace RobotVacuum.Level
     }
 
     /// <summary>
-    /// A gap cut through wall geometry, linking two rooms. The gap is applied to any wall
-    /// edge passing near <see cref="center"/>, so it works on non-aligned walls without
-    /// the two rooms needing to share exact vertices.
+    /// A gap cut through one wall edge, optionally linking two rooms across a shared edge.
     /// </summary>
     [Serializable]
     public class Doorway
@@ -155,18 +153,17 @@ namespace RobotVacuum.Level
         /// <summary>How far a doorway can sit from a wall edge and still cut it.</summary>
         public float DoorwaySnapDistance => Mathf.Max(wallThickness, 0.12f);
 
-        /// <summary>True when a doorway already cuts the specified room edge.</summary>
-        public bool HasDoorwayOnWall(int roomIndex, int edge)
+        /// <summary>True when another doorway already cuts the specified room edge.</summary>
+        public bool HasDoorwayOnWall(int roomIndex, int edge, int exceptDoorwayIndex = -1)
         {
             var room = GetRoom(roomIndex);
             if (room == null || edge < 0 || edge >= room.EdgeCount) return false;
 
-            Vector2 start = room.EdgeStart(edge);
-            Vector2 end = room.EdgeEnd(edge);
-            foreach (var doorway in doorways)
+            for (int i = 0; i < doorways.Count; i++)
             {
-                if (doorway != null &&
-                    Poly2D.DistanceToSegment(doorway.center, start, end, out _) <= DoorwaySnapDistance)
+                if (i == exceptDoorwayIndex) continue;
+                var doorway = doorways[i];
+                if (doorway != null && LevelGeometry.DoorwayCutsEdge(this, doorway, roomIndex, edge))
                     return true;
             }
 

@@ -338,6 +338,24 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void AddRoom_RefusesSelfCrossingOutline()
+        {
+            var bowtie = new List<Vector2>
+            {
+                new Vector2(0f, 0f),
+                new Vector2(1f, 1f),
+                new Vector2(1f, 0f),
+                new Vector2(0f, 1f),
+            };
+
+            Assert.IsFalse(session.AddRoom(bowtie));
+
+            Assert.AreEqual(1, session.Level.Rooms.Count);
+            Assert.IsFalse(session.CanUndo);
+            Assert.AreEqual("A room outline can't cross or double back on itself.", notices.Last());
+        }
+
+        [Test]
         public void AddRoom_SkipsNamesAlreadyInUse()
         {
             session.AddRoom(FarSquare());
@@ -550,6 +568,17 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void PlaceDoorway_NearCornerKeepsItsOpeningOnOneWall()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(1.95f, -1.5f)));
+
+            var doorway = session.Level.Doorways.Single();
+            TestLevels.AssertNear(new Vector2(1.55f, -1.5f), doorway.center);
+            Assert.AreEqual(0, doorway.roomA);
+            Assert.IsFalse(session.Level.HasDoorwayOnWall(0, 1));
+        }
+
+        [Test]
         public void PlaceDoorway_AwayFromWalls_IsRefused()
         {
             Assert.IsFalse(session.PlaceDoorway(new Vector2(20f, 20f)));
@@ -591,6 +620,30 @@ namespace RobotVacuum.Tests
             var doorway = session.Level.Doorways[0];
             CollectionAssert.AreEquivalent(new[] { 2, 3 }, new[] { doorway.roomA, doorway.roomB });
             Assert.IsFalse(session.CanUndo);
+        }
+
+        [Test]
+        public void MoveDoorwayLive_RefusesWallWithAnotherDoorway()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(0f, -1.5f)));
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(-2f, 0f)));
+            Vector2 originalCenter = session.Level.Doorways[1].center;
+
+            session.MoveDoorwayLive(1, new Vector2(1.5f, -1.5f));
+
+            Assert.AreEqual(originalCenter, session.Level.Doorways[1].center);
+            Assert.AreEqual(2, session.Level.Doorways.Count);
+        }
+
+        [Test]
+        public void MoveDoorwayLive_AllowsMovingOnItsCurrentWall()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(0f, -1.5f)));
+            Vector2 target = new Vector2(1f, -1.5f);
+
+            session.MoveDoorwayLive(0, target);
+
+            TestLevels.AssertNear(target, session.Level.Doorways[0].center);
         }
 
         [Test]
@@ -710,6 +763,34 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Snap_MasterToggleDisablesGridAndCornerSnapping()
+        {
+            Vector2 point = new Vector2(1.95f, 1.45f);
+            session.SnapEnabled = false;
+
+            Assert.AreEqual(point, session.Snap(point, 100f));
+            Assert.AreEqual(point, session.SnapToGridStep(point));
+        }
+
+        [Test]
+        public void Snap_IsEnabledByDefaultAndShiftPressesToggleOverride()
+        {
+            Vector2 point = new Vector2(1.95f, 1.45f);
+
+            Assert.IsTrue(session.SnapEnabled);
+            Assert.AreNotEqual(point, session.Snap(point, 100f));
+
+            session.ToggleSnapEnabled();
+            Assert.IsFalse(session.SnapEnabled);
+            Assert.AreEqual(point, session.Snap(point, 100f));
+            Assert.AreEqual(point, session.SnapToGridStep(point));
+
+            session.ToggleSnapEnabled();
+            Assert.IsTrue(session.SnapEnabled);
+            Assert.AreNotEqual(point, session.Snap(point, 100f));
+        }
+
+        [Test]
         public void FindVertex_ReturnsTheClosestCornerWithinTolerance()
         {
             Assert.AreEqual(2, session.FindVertex(0, new Vector2(1.9f, 1.4f), 0.2f));
@@ -778,7 +859,11 @@ namespace RobotVacuum.Tests
         [Test]
         public void Validate_SelfCrossingRoom_IsAnError()
         {
-            session.AddRoom(new List<Vector2> { new Vector2(0, 0), new Vector2(1, 1), new Vector2(1, 0), new Vector2(0, 1) });
+            session.Level.Rooms.Add(new Room
+            {
+                name = "Invalid room",
+                outline = { new Vector2(0, 0), new Vector2(1, 1), new Vector2(1, 0), new Vector2(0, 1) },
+            });
 
             var issues = session.Validate();
 
