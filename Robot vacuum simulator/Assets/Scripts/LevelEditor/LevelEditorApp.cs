@@ -58,7 +58,6 @@ namespace RobotVacuum.LevelEditor
         Label coordsLabel;
         Label zoomLabel;
         VisualElement gridToggle;
-        VisualElement snapToggle;
         VisualElement pointsToggle;
         Label snapLabel;
         readonly Dictionary<EditorTool, VisualElement> toolButtons = new Dictionary<EditorTool, VisualElement>();
@@ -374,6 +373,8 @@ namespace RobotVacuum.LevelEditor
 
             BuildViewBar(Ui.Div(stage, "le-float le-bar le-viewbar"));
             BuildZoomBar(Ui.Div(stage, "le-float le-bar le-zoombar"));
+            var snapHelp = Ui.Text(stage, "Press Shift to enable/disable snapping · light on means snapping is off", "le-snap-help");
+            snapHelp.pickingMode = PickingMode.Ignore;
 
             inspector = new InspectorPanel(session);
             inspector.FrameRoomRequested += index => canvas.FrameRoom(index);
@@ -443,16 +444,13 @@ namespace RobotVacuum.LevelEditor
                 "le-toggle", TooltipSide.Above);
             Ui.Div(bar, "le-bar__divider");
 
-            snapToggle = Ui.IconButton(bar, IconKind.Magnet, "Snap to grid · hold Shift to temporarily disable snapping", () => session.SnapToGrid = !session.SnapToGrid,
-                "le-toggle", TooltipSide.Above);
-
             VisualElement stepButton = null;
             stepButton = Ui.Button(bar, string.Empty, null, () => ShowSnapStepMenu(stepButton), "le-toggle");
             snapLabel = stepButton.Q<Label>() ?? Ui.Text(stepButton, string.Empty, "le-btn__label");
             stepButton.RemoveFromClassList("le-btn--icon");
             Ui.Tooltip(stepButton, "Grid step", TooltipSide.Above);
 
-            pointsToggle = Ui.IconButton(bar, IconKind.Points, "Snap to room corners", () => session.SnapToVertices = !session.SnapToVertices,
+            pointsToggle = Ui.IconButton(bar, IconKind.Points, "Snapping · press Shift to enable/disable · light on means snapping is on", session.ToggleSnapEnabled,
                 "le-toggle", TooltipSide.Above);
         }
 
@@ -466,6 +464,7 @@ namespace RobotVacuum.LevelEditor
                 {
                     session.SnapIncrement = captured;
                     session.SnapToGrid = true;
+                    session.SnapEnabled = true;
                 });
                 item.isChecked = Mathf.Approximately(step, session.SnapIncrement);
                 entries.Add(item);
@@ -549,11 +548,11 @@ namespace RobotVacuum.LevelEditor
             hintLabel.text = session.Tool switch
             {
                 EditorTool.Select => "Drag rooms to move · drag corners to reshape · drag a midpoint to add a corner",
-                EditorTool.Rect => "Drag to draw a room · hold Shift to disable snapping and draw a square",
+                EditorTool.Rect => "Drag to draw a room · press Shift to toggle snapping · hold Shift to draw a square",
                 EditorTool.Pen => canvas != null && canvas.PenPointCount >= 3
                     ? "Click the first point or press Enter to finish · Backspace removes a point"
                     : "Click to place corners",
-                EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall · hold Shift to disable snapping",
+                EditorTool.Wall => "Click a side to remove or restore its wall · drag in open space to draw a wall · press Shift to toggle snapping",
                 EditorTool.Doorway => "Click on a wall to cut a doorway",
                 EditorTool.Spawn => "Click to set where the vacuum starts",
                 EditorTool.Obstacle => $"Drag to size a {Obstacle.DefaultName(session.ObstacleKind).ToLowerInvariant()}, or click to drop one · change the kind in the panel",
@@ -566,8 +565,7 @@ namespace RobotVacuum.LevelEditor
             if (session == null || gridToggle == null) return;
 
             Ui.SetClass(gridToggle, "le-toggle--on", session.ShowGrid);
-            Ui.SetClass(snapToggle, "le-toggle--on", session.SnapToGrid);
-            Ui.SetClass(pointsToggle, "le-toggle--on", session.SnapToVertices);
+            Ui.SetClass(pointsToggle, "le-toggle--on", session.SnapEnabled);
             snapLabel.text = FormatStep(session.SnapIncrement);
             snapLabel.parent.SetEnabled(session.SnapToGrid);
             RefreshHint(); // the object hint names the selected kind
@@ -702,7 +700,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (evt.keyCode == KeyCode.None) return;
             if ((evt.keyCode == KeyCode.LeftShift || evt.keyCode == KeyCode.RightShift) && canvas != null)
-                canvas.SetShiftHeld(true);
+                canvas.SetShiftKeyHeld(evt.keyCode, true);
 
             if (evt.keyCode == KeyCode.Escape && overlay.Dismiss())
             {
@@ -729,7 +727,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (evt.keyCode == KeyCode.Space && canvas != null) canvas.SpaceHeld = false;
             if ((evt.keyCode == KeyCode.LeftShift || evt.keyCode == KeyCode.RightShift) && canvas != null)
-                canvas.SetShiftHeld(false);
+                canvas.SetShiftKeyHeld(evt.keyCode, false);
         }
 
         bool HandleCommandShortcut(KeyDownEvent evt, bool typing)
