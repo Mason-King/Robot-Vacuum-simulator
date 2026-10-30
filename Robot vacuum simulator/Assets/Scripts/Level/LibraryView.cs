@@ -6,7 +6,10 @@ using UnityEngine.UIElements;
 
 namespace RobotVacuum.LevelEditor
 {
-    /// <summary>The home screen: every saved floor plan as a card with a live thumbnail.</summary>
+    /// <summary>
+    /// The floor plan list: every saved plan as a card with a live thumbnail. Clicking a card opens it in the
+    /// editor; its hover Run and Headless buttons open the run's settings on that mode.
+    /// </summary>
     public sealed class LibraryView : VisualElement
     {
         readonly FloorPalette palette;
@@ -48,6 +51,9 @@ namespace RobotVacuum.LevelEditor
         /// <summary>The "New floor plan" button was pressed; the element is the anchor for a menu.</summary>
         public event Action<VisualElement> NewRequested;
 
+        /// <summary>One of a card's run buttons was pressed: run it now, watched or headless.</summary>
+        public event Action<LevelLibrary.Entry, RunMode> RunRequested;
+
         /// <summary>A card's overflow button was pressed.</summary>
         public event Action<LevelLibrary.Entry, VisualElement> CardMenuRequested;
 
@@ -59,7 +65,8 @@ namespace RobotVacuum.LevelEditor
             entries.AddRange(LevelLibrary.LoadAll());
             content.Clear();
 
-            subtitle.text = entries.Count == 1 ? "1 floor plan" : $"{entries.Count} floor plans";
+            subtitle.text = (entries.Count == 1 ? "1 floor plan" : $"{entries.Count} floor plans") +
+                            (entries.Count > 0 ? " · click one to edit it, or hover for Run" : string.Empty);
 
             if (entries.Count == 0)
             {
@@ -90,6 +97,14 @@ namespace RobotVacuum.LevelEditor
         {
             var card = Ui.Div(null, "le-card");
             card.Add(new LevelThumbnail(entry.level, palette));
+
+            // Shown on hover over the thumbnail: run straight away. Labelled, so neither needs a tooltip: the
+            // primary pill is the usual watched run, the quieter one beside it runs headless.
+            var run = Ui.Div(card, "le-card__run");
+            Ui.Button(run, "Headless", IconKind.Headless, () => RunRequested?.Invoke(entry, RunMode.Headless),
+                "le-card__run-button le-card__run-headless");
+            Ui.Button(run, "Run", IconKind.Play, () => RunRequested?.Invoke(entry, RunMode.Watch),
+                "le-card__run-button le-card__run-watch");
 
             var body = Ui.Div(card, "le-card__body");
             var text = Ui.Div(body, "le-card__text");

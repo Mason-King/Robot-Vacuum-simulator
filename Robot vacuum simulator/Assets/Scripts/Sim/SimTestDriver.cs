@@ -37,6 +37,7 @@ namespace RobotVacuum.Sim
         LevelData runLevel;
         LevelData handedLevel;
         SimHud hud;
+        HeadlessRunView headlessView;
         RunEndPanel endPanel;
 
         void Awake()
@@ -51,18 +52,33 @@ namespace RobotVacuum.Sim
             runLevel = ResolveLevel(out string source);
             if (runLevel == null) return;
 
-            // A level from the editor runs with the movement pattern chosen there.
-            if (handedLevel != null) settings.pattern = SimLauncher.MovementPattern;
+            // A level from the app runs with the settings chosen for this run, watched or headless.
+            bool headless = false;
+            if (handedLevel != null)
+            {
+                settings = RunPreferences.Run.Copy();
+                headless = SimLauncher.TakeRunMode() == RunMode.Headless;
+            }
 
-            if (!SimulationSession.TryStart(runLevel, settings, headless: false, out session, out string error))
+            if (!SimulationSession.TryStart(runLevel, settings, headless, out session, out string error))
             {
                 Debug.LogError($"SimTestDriver: {error}", this);
                 return;
             }
 
-            session.Finished += OnRunFinished;
             session.Closed += OnSessionClosed;
-            Debug.Log($"SimTestDriver: running {source}, seed {session.Settings.seed}. Run folder: {session.RunFolder}", this);
+            Debug.Log($"SimTestDriver: running {source}{(headless ? " headless" : string.Empty)}, seed {session.Settings.seed}. Run folder: {session.RunFolder}", this);
+
+            if (headless)
+            {
+                // Nothing is drawn, so the camera only clears the screen behind the progress page.
+                if (Camera.main != null) Camera.main.cullingMask = 0;
+                headlessView = new GameObject("Headless Run").AddComponent<HeadlessRunView>();
+                headlessView.Show(session, runLevel, LeaveToEditor); // destroys runLevel when it goes away
+                return;
+            }
+
+            session.Finished += OnRunFinished;
 
             FrameCamera();
 
@@ -84,7 +100,7 @@ namespace RobotVacuum.Sim
                 session = null;
             }
 
-            if (hud == null && runLevel != null) Destroy(runLevel);
+            if (hud == null && headlessView == null && runLevel != null) Destroy(runLevel);
         }
 
         // ---------------------------------------------------------------- level
@@ -191,6 +207,8 @@ namespace RobotVacuum.Sim
             // releases the run's level.
             if (hud != null) Destroy(hud.gameObject);
             hud = null;
+            if (headlessView != null) Destroy(headlessView.gameObject);
+            headlessView = null;
             runLevel = null;
             session = null;
         }

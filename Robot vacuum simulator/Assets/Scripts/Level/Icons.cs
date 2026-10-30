@@ -7,7 +7,23 @@ namespace RobotVacuum.LevelEditor
     {
         Select, Rect, Pen, Wall, Doorway, Spawn,
         Undo, Redo, Play, Pause, Stop, Save, Check, Plus, Minus, Fit, Grid, Magnet, Points,
-        Trash, Duplicate, Back, More, Warning, Close, ChevronDown, Logo, WallsOn, WallsOff, Obstacle,
+        Trash, Duplicate, Back, More, Warning, Close, ChevronDown, Logo, WallsOn, WallsOff, Obstacle, Headless,
+    }
+
+    /// <summary>
+    /// What an icon is drawn with: strokes, fills and dots on a 24-unit grid, y pointing down. Each UI system
+    /// supplies its own pen (Painter2D for UI Toolkit, a mesh for uGUI), so both share one set of icons.
+    /// </summary>
+    public interface IIconPen
+    {
+        void Line(float width, params float[] xy);
+        void Closed(float width, params float[] xy);
+        void Fill(params float[] xy);
+        void Dot(float x, float y, float radius);
+        void Ring(float x, float y, float radius, float width);
+        void Arc(float x, float y, float radius, float from, float to, float width, ArcDirection direction);
+        void RoundRect(float x, float y, float w, float h, float r, float width);
+        void MagnetPath();
     }
 
     /// <summary>
@@ -57,7 +73,8 @@ namespace RobotVacuum.LevelEditor
             Draw(kind, new IconPen(context.painter2D, origin, scale, resolvedStyle.color));
         }
 
-        static void Draw(IconKind kind, IconPen pen)
+        /// <summary>Draws <paramref name="kind"/> with <paramref name="pen"/>. Shared by every UI system's icon.</summary>
+        public static void Draw(IconKind kind, IIconPen pen)
         {
             switch (kind)
             {
@@ -157,6 +174,14 @@ namespace RobotVacuum.LevelEditor
                     pen.Line(1.8f, 9f, 20f, 4f, 20f, 4f, 15f);
                     break;
 
+                case IconKind.Headless:
+                    // A screen with a line through it: the run plays with nothing drawn.
+                    pen.RoundRect(3.5f, 4.5f, 17f, 11.5f, 2f, 1.7f);
+                    pen.Line(1.7f, 9f, 20f, 15f, 20f);
+                    pen.Line(1.7f, 12f, 16f, 12f, 20f);
+                    pen.Line(1.9f, 4f, 3f, 20f, 19f);
+                    break;
+
                 case IconKind.Grid:
                     pen.RoundRect(4f, 4f, 16f, 16f, 2f, 1.6f);
                     pen.Line(1.3f, 9.33f, 4f, 9.33f, 20f);
@@ -233,7 +258,7 @@ namespace RobotVacuum.LevelEditor
             }
         }
 
-        readonly struct IconPen
+        sealed class IconPen : IIconPen
         {
             readonly Painter2D painter;
             readonly Vector2 origin;

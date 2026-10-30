@@ -1112,14 +1112,21 @@
 
 .le-tooltip {
     position: absolute;
-    padding: 5px 9px;
+    padding: 6px 10px;
     border-radius: 6px;
-    background-color: #2B303A;
+    border-width: 1px;
+    border-color: #3E4552;
+    background-color: #0E1116;
     font-size: 12px;
     white-space: nowrap;
     opacity: 0;
     transition-property: opacity;
     transition-duration: 120ms;
+}
+
+.le-app .le-tooltip,
+.le-app .le-tooltip Label {
+    color: #F2F4F7;
 }
 
 .le-tooltip--visible {
@@ -1363,6 +1370,83 @@
     border-color: var(--border);
 }
 
+/* Run buttons on a dark strip across the bottom of the thumbnail, shown while the card is hovered. The
+   strip gives them a solid background whatever the floor plan looks like underneath, so the labels stay
+   readable: a neutral Headless pill beside the primary Run pill. */
+.le-card__run {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 120px;
+    height: 48px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 10px;
+    background-color: rgba(11, 13, 17, 0.94);
+    border-top-width: 1px;
+    border-color: var(--border);
+    opacity: 0;
+    translate: 0 6px;
+    transition-property: opacity, translate;
+    transition-duration: 140ms;
+}
+
+.le-card:hover .le-card__run {
+    opacity: 1;
+    translate: 0 0;
+}
+
+.le-card__run-button {
+    height: 32px;
+    padding: 0 14px 0 10px;
+    border-radius: 16px;
+    border-width: 1px;
+    transition-property: background-color, border-color;
+    transition-duration: 120ms;
+}
+
+.le-card__run-button .le-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.le-app .le-card__run-button .le-btn__label {
+    font-size: 13px;
+    -unity-font-style: bold;
+}
+
+.le-card__run-headless {
+    margin-right: 8px;
+    border-color: var(--border-strong);
+    background-color: var(--surface-3);
+}
+
+.le-card__run-headless:hover {
+    border-color: var(--text-3);
+    background-color: #313745;
+}
+
+.le-card__run-watch {
+    border-color: var(--accent);
+    background-color: var(--accent);
+}
+
+.le-card__run-watch:hover {
+    border-color: var(--accent-hover);
+    background-color: var(--accent-hover);
+}
+
+.le-app .le-card__run-watch .le-btn__label,
+.le-app .le-card__run-watch .le-icon {
+    color: #FFFFFF;
+}
+
+.le-app .le-card__run-headless .le-btn__label,
+.le-app .le-card__run-headless .le-icon {
+    color: #E8EAEE;
+}
+
 .le-card__body {
     flex-direction: row;
     align-items: center;
@@ -1536,6 +1620,264 @@
     height: 40px;
     margin: 0 6px;
     padding: 0 18px;
+}
+
+/* ------------------------------------------------------------ run setup and settings */
+
+.le-setup__content {
+    flex-grow: 1;
+    background-color: var(--canvas);
+}
+
+.le-setup__columns {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px 16px 32px 16px;
+}
+
+.le-setup__preview {
+    width: 360px;
+    flex-shrink: 1;
+    margin: 0 16px 16px 0;
+}
+
+.le-app .le-setup__thumbnail {
+    height: 270px;
+    border-width: 1px;
+    border-radius: 12px;
+    border-color: var(--border);
+    overflow: hidden;
+}
+
+.le-setup__settings {
+    width: 520px;
+    flex-shrink: 1;
+}
+
+.le-setup__mode {
+    margin: 0 10px 0 8px;
+}
+
+.le-setup__settings-header {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.le-settings__column {
+    width: 100%;
+    max-width: 620px;
+    align-self: center;
+    padding: 24px 16px 32px 16px;
+}
+
+/* One run-settings form: titled groups of labelled controls. */
+.le-form__group {
+    margin-bottom: 14px;
+    padding: 16px 18px 18px 18px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: var(--border);
+    background-color: var(--surface);
+}
+
+.le-form__head {
+    flex-grow: 1;
+    flex-shrink: 1;
+    margin-bottom: 8px;
+}
+
+.le-form__title {
+    font-size: 15px;
+    -unity-font-style: bold;
+}
+
+.le-form__text {
+    margin-top: 2px;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-form__text {
+    color: var(--text-3);
+}
+
+.le-form__body .le-field-label {
+    margin-top: 12px;
+}
+
+.le-form__switch {
+    margin-top: 12px;
+}
+
+.le-form__row {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.le-form__row-label {
+    width: 60px;
+    font-size: 12px;
+}
+
+.le-form__seed {
+    width: 140px;
+}
+
+.le-form__seed:disabled {
+    opacity: 0.4;
+}
+
+.le-form__hint {
+    margin-top: 8px;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-form__hint,
+.le-app .le-form__row-label {
+    color: var(--text-3);
+}
+
+.le-setup__preview .le-form__hint {
+    margin-top: 12px;
+}
+
+/* ------------------------------------------------------------ headless run */
+
+.le-headless {
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.le-headless__card {
+    width: 100%;
+    max-width: 560px;
+    padding: 22px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: var(--border);
+    background-color: var(--surface);
+}
+
+.le-headless__header {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 18px;
+}
+
+.le-headless__icon {
+    width: 40px;
+    height: 40px;
+    margin-right: 12px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background-color: var(--accent-soft);
+    color: var(--accent);
+}
+
+.le-headless__titles {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.le-headless__title {
+    font-size: 17px;
+    -unity-font-style: bold;
+}
+
+.le-headless__subtitle {
+    margin-top: 2px;
+    font-size: 12px;
+}
+
+.le-app .le-headless__subtitle {
+    color: var(--text-3);
+}
+
+.le-headless__stats {
+    flex-direction: row;
+}
+
+.le-headless__stat {
+    flex-grow: 1;
+    flex-basis: 0;
+    margin-right: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background-color: var(--surface-2);
+}
+
+.le-headless__stat:last-child {
+    margin-right: 0;
+}
+
+.le-headless__stat-value {
+    font-size: 18px;
+    -unity-font-style: bold;
+    white-space: nowrap;
+}
+
+.le-headless__stat-label {
+    margin-top: 2px;
+    font-size: 11px;
+}
+
+.le-app .le-headless__stat-label {
+    color: var(--text-3);
+}
+
+.le-headless__track {
+    height: 6px;
+    margin-top: 14px;
+    border-radius: 3px;
+    background-color: var(--surface-3);
+    overflow: hidden;
+}
+
+.le-headless__fill {
+    height: 100%;
+    border-radius: 3px;
+    background-color: var(--accent);
+}
+
+.le-headless__results {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background-color: var(--surface-2);
+}
+
+.le-headless__results-text {
+    white-space: normal;
+}
+
+.le-headless__folder {
+    margin-top: 6px;
+    font-size: 11px;
+    white-space: normal;
+}
+
+.le-app .le-headless__folder {
+    color: var(--text-3);
+}
+
+.le-headless__actions {
+    margin-top: 18px;
+}
+
+.le-headless__action-row {
+    flex-direction: row;
+    justify-content: flex-end;
+}
+
+.le-headless__action-row > .le-btn {
+    margin-left: 8px;
 }
 
 /* ------------------------------------------------------------ furniture */

@@ -58,7 +58,8 @@ namespace RobotVacuum.LevelEditor
             screen.pickingMode = PickingMode.Ignore;
 
             var bar = Ui.Div(screen, "le-float le-run-bar");
-            Ui.Button(bar, "Editor", IconKind.Back, Leave, "le-btn--ghost");
+            var back = Ui.Button(bar, "Back", IconKind.Back, Leave, "le-btn--ghost");
+            Ui.Tooltip(back, "Stop the run and go back to where it was started");
             Ui.IconButton(bar, IconKind.Undo, "Restart", Restart, "le-btn--ghost");
 
             VisualElement settingsButton = null;
@@ -86,12 +87,12 @@ namespace RobotVacuum.LevelEditor
                 pauseButton.Q<IconElement>().Kind = isPaused ? IconKind.Play : IconKind.Pause;
             }, "le-btn--ghost");
 
-            var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
+            var movement = new Segmented(MovementBrain.Labels, robot != null ? (int)robot.Pattern : (int)SimLauncher.MovementPattern);
             movement.SelectionChanged += index =>
             {
-                SimLauncher.MovementPattern = (MovementPattern)index;
-                foreach (var robot in FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
-                    robot.Pattern = SimLauncher.MovementPattern;
+                // Only this run changes: the next run keeps the algorithm from its settings.
+                foreach (var vacuum in FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
+                    vacuum.Pattern = (MovementPattern)index;
             };
             Ui.Tooltip(movement, "Movement algorithm");
             bar.Add(movement);
@@ -137,7 +138,11 @@ namespace RobotVacuum.LevelEditor
             cleaning = FindAnyObjectByType<VacuumCleaningController>();
             robot = FindAnyObjectByType<VacuumRobot>();
             battery = robot != null ? robot.GetComponent<Battery>() : null;
-            if (robot != null) vacuumSettings = VacuumSettings.From(robot, battery);
+            if (robot != null)
+            {
+                vacuumSettings = VacuumSettings.From(robot, battery);
+                vacuumSettings.useFeet = RunPreferences.UseFeet;
+            }
             startTime = Time.time;
         }
 

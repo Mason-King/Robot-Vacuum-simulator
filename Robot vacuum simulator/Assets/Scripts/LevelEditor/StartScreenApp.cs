@@ -1,40 +1,108 @@
+using RobotVacuum.UI;
 using UnityEngine;
-using UnityEngine.UIElements;
+using UnityEngine.UI;
 
 namespace RobotVacuum.LevelEditor
 {
-    /// <summary>The app's first screen. Drop this on an empty GameObject in the start scene.</summary>
+    /// <summary>
+    /// The app's first screen: start a simulation (which goes to the floor plan list), open Analysis, or
+    /// change the global settings every run starts from. The pages are uGUI objects in the StartScreen
+    /// prefab (built by Robot Vacuum ▸ UI ▸ Build Start Screen); this only wires them up.
+    /// </summary>
     [DisallowMultipleComponent]
     public sealed class StartScreenApp : MonoBehaviour
     {
-        [Tooltip("Multiplies the UI size on top of the screen's DPI scaling.")]
-        [SerializeField, Range(0.6f, 2f)] float uiScale = 1f;
+        [Header("Pages")]
+        [SerializeField] GameObject homePage;
+        [SerializeField] GameObject settingsPage;
+        [SerializeField] GameObject analysisPage;
 
-        PanelSettings panelSettings;
+        [Header("Home")]
+        [SerializeField] Button startButton;
+        [SerializeField] Button analysisButton;
+        [SerializeField] Button settingsButton;
+        [SerializeField] Button quitButton;
+
+        [Header("Settings")]
+        [SerializeField] Button settingsBackButton;
+        [SerializeField] Button resetButton;
+        [SerializeField] SegmentedControl units;
+        [SerializeField] RunSettingsFormView form;
+
+        [Header("Analysis")]
+        [SerializeField] Button analysisBackButton;
 
         void Start()
         {
-            var root = UiPanel.Create(transform, "Start Screen UI", uiScale, out panelSettings);
-            var screen = Ui.Div(Ui.Div(root, "le-app"), "le-screen le-start");
+            if (homePage == null)
+            {
+                Debug.LogError("StartScreenApp has no pages. Run Robot Vacuum ▸ UI ▸ Build Start Screen to create the start screen prefab.", this);
+                return;
+            }
 
-            var mark = new IconElement(IconKind.Logo);
-            mark.AddToClassList("le-start__mark");
-            screen.Add(mark);
+            UiEventSystem.Ensure();
 
-            Ui.Text(screen, "Robot Vacuum Simulator", "le-start__title");
-            Ui.Text(screen, "Draw a floor plan, then drop the vacuum in and watch it clean.", "le-start__text");
-
-            var actions = Ui.Div(screen, "le-start__actions");
-            Ui.Button(actions, "Level editor", IconKind.Pen, () => SimLauncher.OpenLevelEditor(), "le-btn--primary le-start__button");
+            Click(startButton, () => SimLauncher.OpenFloorPlans());
+            Click(analysisButton, ShowAnalysis);
+            Click(settingsButton, ShowSettings);
+            Click(settingsBackButton, ShowHome);
+            Click(analysisBackButton, ShowHome);
+            Click(resetButton, () =>
+            {
+                RunPreferences.ResetGlobalToDefaults();
+                form?.Refresh();
+            });
 
             // Quitting does nothing inside the Unity Editor, so only offer it in builds.
-            if (!Application.isEditor)
-                Ui.Button(actions, "Quit", IconKind.Close, Application.Quit, "le-btn--ghost le-start__button");
+            if (quitButton != null)
+            {
+                quitButton.gameObject.SetActive(!Application.isEditor);
+                quitButton.onClick.AddListener(Application.Quit);
+            }
+
+            if (units != null)
+            {
+                units.SetSelectedWithoutNotify(RunPreferences.UseFeet ? 0 : 1);
+                units.SelectionChanged += index =>
+                {
+                    RunPreferences.UseFeet = index == 0;
+                    form?.Refresh(); // the read-outs switch unit too
+                };
+            }
+
+            if (form != null)
+            {
+                form.Bind(RunPreferences.Global);
+                form.Changed += RunPreferences.SaveGlobal;
+            }
+
+            ShowHome();
         }
 
-        void OnDestroy()
+        static void Click(Button button, System.Action action)
         {
-            if (panelSettings != null) Destroy(panelSettings);
+            if (button != null) button.onClick.AddListener(() => action());
+        }
+
+        void ShowHome() => ShowPage(homePage);
+
+        void ShowSettings()
+        {
+            form?.Refresh();
+            ShowPage(settingsPage);
+        }
+
+        /// <summary>
+        /// The Analysis page. Placeholder until the analysis work from its own branch is merged in: put that
+        /// page's content in the prefab's Analysis page and fill it from here.
+        /// </summary>
+        void ShowAnalysis() => ShowPage(analysisPage);
+
+        void ShowPage(GameObject page)
+        {
+            if (homePage != null) homePage.SetActive(page == homePage);
+            if (settingsPage != null) settingsPage.SetActive(page == settingsPage);
+            if (analysisPage != null) analysisPage.SetActive(page == analysisPage);
         }
     }
 }

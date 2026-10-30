@@ -51,6 +51,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
 
+        /// <summary>An independent copy, so one run's settings can be edited without touching another's.</summary>
+        public RunSettings Copy() => (RunSettings)MemberwiseClone();
+
         /// <summary>True for a number the caller actually set.</summary>
         public static bool IsSet(float value) => value > 0f;
 

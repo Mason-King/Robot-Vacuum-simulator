@@ -65,7 +65,7 @@ namespace RobotVacuum.LevelEditor
 
         LevelRun run;
 
-        // Captured from the first run's robot, then applied to every later one.
+        // The next run's vacuum settings, copied for each preview so its Settings menu can tweak them freely.
         VacuumSettings vacuumSettings;
 
         FloorPalette Palette => palette != null ? palette : runtimePalette;
@@ -78,10 +78,11 @@ namespace RobotVacuum.LevelEditor
 
             CreatePanel();
 
-            // Coming back from the simulator reopens the floor plan that was playing.
-            string returning = SimLauncher.TakeReturnPath();
-            if (!string.IsNullOrEmpty(returning) && File.Exists(returning)) OpenLevel(returning);
-            else ShowLibrary();
+            // Coming back from the simulator reopens the floor plan that was playing, where it was started.
+            string returning = SimLauncher.TakeReturnPath(out var target);
+            if (string.IsNullOrEmpty(returning) || !File.Exists(returning)) ShowLibrary();
+            else if (target == ReturnTarget.RunSetup) ShowRunSetup(returning, SimLauncher.LastMode);
+            else OpenLevel(returning);
         }
 
         void OnDestroy()
@@ -115,6 +116,7 @@ namespace RobotVacuum.LevelEditor
             library.OpenRequested += OpenLevel;
             library.NewRequested += ShowNewLevelMenu;
             library.CardMenuRequested += ShowCardMenu;
+            library.RunRequested += (entry, mode) => ShowRunSetup(entry.path, mode);
             library.HomeRequested += () => SimLauncher.OpenStartScreen();
 
             // Keyboard events go to the focused element, or the panel root when nothing has focus,
@@ -134,8 +136,11 @@ namespace RobotVacuum.LevelEditor
             root.panel.visualTree.RegisterCallback<KeyUpEvent>(OnKeyUp, TrickleDown.TrickleDown);
         }
 
+        VisualElement currentScreen;
+
         void ShowScreen(VisualElement screen)
         {
+            currentScreen = screen;
             app.Clear();
             if (screen != null) app.Add(screen);
             app.Add(overlay);
@@ -147,6 +152,56 @@ namespace RobotVacuum.LevelEditor
         {
             library.Refresh();
             ShowScreen(library);
+        }
+
+        // ---------------------------------------------------------------- run setup
+
+        /// <summary>A floor plan's Run setup page, opened on <paramref name="mode"/>: this run's settings, then Start.</summary>
+        void ShowRunSetup(string path, RunMode mode)
+        {
+            LevelSnapshot snapshot;
+            try
+            {
+                snapshot = LevelLibrary.Read(path);
+            }
+            catch (Exception exception)
+            {
+                ReportError("Couldn't open the floor plan", exception);
+                return;
+            }
+
+            if (snapshot == null)
+            {
+                overlay.Toast("That file isn't a readable floor plan.");
+                return;
+            }
+
+            var setup = new RunSetupView(snapshot, Palette, fromEditor: false, mode);
+            setup.BackRequested += ShowLibrary;
+            setup.EditRequested += () => OpenLevel(path);
+            setup.RunRequested += mode => SimulateLevel(snapshot, path, mode, ReturnTarget.RunSetup);
+            ShowScreen(setup);
+        }
+
+        /// <summary>The same page for the floor plan open in the editor; Back returns to editing.</summary>
+        void ShowEditorRunSetup(RunMode mode)
+        {
+            if (session == null) return;
+
+            var snapshot = LevelSnapshot.Parse(session.Serialize());
+            if (snapshot == null) return;
+
+            var setup = new RunSetupView(snapshot, Palette, fromEditor: true, mode);
+            setup.BackRequested += ReturnToEditing;
+            setup.RunRequested += Simulate;
+            ShowScreen(setup);
+        }
+
+        void ReturnToEditing()
+        {
+            if (editorScreen == null) return;
+            ShowScreen(editorScreen);
+            canvas?.Focus();
         }
 
         void ShowNewLevelMenu(VisualElement anchor)
@@ -201,8 +256,9 @@ namespace RobotVacuum.LevelEditor
         {
             overlay.ShowMenuBelow(anchor, new List<MenuEntry>
             {
-                MenuEntry.Item("Open", () => OpenLevel(entry.path), IconKind.Select),
-                MenuEntry.Item("Simulate", () => SimulateLevel(entry.level, entry.path), IconKind.Play),
+                MenuEntry.Item("Edit floor plan", () => OpenLevel(entry.path), IconKind.Pen),
+                MenuEntry.Item("Run…", () => ShowRunSetup(entry.path, RunMode.Watch), IconKind.Play),
+                MenuEntry.Item("Run headless…", () => ShowRunSetup(entry.path, RunMode.Headless), IconKind.Headless),
                 MenuEntry.Item("Duplicate", () => DuplicateLevel(entry), IconKind.Duplicate),
                 MenuEntry.Separator(),
                 MenuEntry.Item("Delete…", () => ConfirmDeleteLevel(entry), IconKind.Trash, danger: true),
@@ -422,8 +478,12 @@ namespace RobotVacuum.LevelEditor
             var preview = Ui.Button(bar, "Preview", IconKind.Spawn, StartRun, "le-btn--ghost");
             Ui.Tooltip(preview, "Quick test run without leaving the editor");
 
-            var simulate = Ui.Button(bar, "Simulate", IconKind.Play, Simulate, "le-btn--primary");
-            Ui.Tooltip(simulate, "Save, then open this floor plan in the simulator");
+            // Like a card's buttons: each opens the run's settings on that mode, then Start runs it.
+            var headless = Ui.Button(bar, "Headless", IconKind.Headless, () => ShowEditorRunSetup(RunMode.Headless), "le-btn--ghost");
+            Ui.Tooltip(headless, "Set up a run with nothing drawn, as fast as possible, ending with its results");
+
+            var simulate = Ui.Button(bar, "Run", IconKind.Play, () => ShowEditorRunSetup(RunMode.Watch), "le-btn--primary");
+            Ui.Tooltip(simulate, "Set up a run to watch in the simulator");
         }
 
         void BuildToolRail(VisualElement rail)
@@ -718,7 +778,17 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            if (session == null || editorScreen == null) return;
+            // Escape leaves a Run setup page for wherever it was opened from.
+            if (currentScreen is RunSetupView && evt.keyCode == KeyCode.Escape && !Ui.IsTyping(root.panel))
+            {
+                if (session != null && editorScreen != null) ReturnToEditing();
+                else ShowLibrary();
+                evt.StopPropagation();
+                return;
+            }
+
+            // Editing keys only while the editor itself is showing.
+            if (session == null || editorScreen == null || currentScreen != editorScreen) return;
 
             bool typing = Ui.IsTyping(root.panel);
             if (HandleCommandShortcut(evt, typing) || (!typing && HandleEditorKey(evt)))
@@ -827,7 +897,7 @@ namespace RobotVacuum.LevelEditor
         // ---------------------------------------------------------------- simulator
 
         /// <summary>Saves the open floor plan, then plays it in the simulation scene.</summary>
-        void Simulate()
+        void Simulate(RunMode mode)
         {
             if (session == null) return;
             if (!CanStartSimulation()) return;
@@ -838,17 +908,17 @@ namespace RobotVacuum.LevelEditor
             // Loading the simulator tears down this scene, and the session with it.
             if (session.IsDirty && !TrySave(false)) return;
 
-            SimulateLevel(snapshot, session.FilePath);
+            SimulateLevel(snapshot, session.FilePath, mode, ReturnTarget.Editor);
         }
 
-        void SimulateLevel(LevelSnapshot snapshot, string path)
+        void SimulateLevel(LevelSnapshot snapshot, string path, RunMode mode, ReturnTarget returnTo)
         {
             if (!HasRooms(snapshot)) return;
 
             // Only the serialized palette asset outlives this scene; the built-in one is destroyed with it,
             // so leave it out and let the launcher supply its own.
-            if (!SimLauncher.Simulate(snapshot, palette, path))
-                overlay.Toast("The simulator scene isn't in the build's scene list.");
+            if (!SimLauncher.Simulate(snapshot, palette, path, mode, returnTo))
+                overlay.Toast("The run couldn't start. Check that furniture is clear of walls and the simulator scene is in the build.");
         }
 
         bool HasRooms(LevelSnapshot snapshot)
@@ -928,8 +998,8 @@ namespace RobotVacuum.LevelEditor
             overlay.CloseMenu();
             run = new LevelRun(session.Level);
 
-            if (vacuumSettings == null) vacuumSettings = VacuumSettings.From(run.Robot, run.Battery);
-            else vacuumSettings.ApplyTo(run.Robot, run.Battery);
+            vacuumSettings = RunPreferences.VacuumOf(RunPreferences.Run);
+            vacuumSettings.ApplyTo(run.Robot, run.Battery);
 
             ShowScreen(BuildRunHud());
             app.AddToClassList("le-app--running");
@@ -976,8 +1046,8 @@ namespace RobotVacuum.LevelEditor
             var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
             movement.SelectionChanged += index =>
             {
-                SimLauncher.MovementPattern = (MovementPattern)index;
-                if (run != null && run.Robot != null) run.Robot.Pattern = SimLauncher.MovementPattern;
+                // Only this preview changes; the next run keeps its own algorithm.
+                if (run != null && run.Robot != null) run.Robot.Pattern = (MovementPattern)index;
             };
             Ui.Tooltip(movement, "Movement algorithm");
             bar.Add(movement);

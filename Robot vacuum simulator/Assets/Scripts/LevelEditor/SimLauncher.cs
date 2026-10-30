@@ -9,6 +9,9 @@ namespace RobotVacuum.LevelEditor
     /// Moves between the app's scenes: the start screen, the level editor, and the simulation scene a
     /// floor plan is played in. Every scene here must be in the build profile's scene list to load.
     /// </summary>
+    /// <summary>Where leaving the simulator goes back to.</summary>
+    public enum ReturnTarget { Editor, RunSetup }
+
     public static class SimLauncher
     {
         public const string StartScenePath = "Assets/Scenes/StartScreen.unity";
@@ -17,22 +20,48 @@ namespace RobotVacuum.LevelEditor
 
         static FloorPalette fallbackPalette;
         static string returnPath;
+        static ReturnTarget returnTarget;
+        static RunMode pendingMode;
 
-        /// <summary>The movement algorithm chosen last, carried between the editor's run and the simulator.</summary>
-        public static MovementPattern MovementPattern { get; set; }
+        /// <summary>How the last run was played, so its Run setup page reopens on the same choice.</summary>
+        public static RunMode LastMode { get; private set; }
+
+        /// <summary>The next run's movement algorithm. Changing it customizes the next run (see <see cref="RunPreferences"/>).</summary>
+        public static MovementPattern MovementPattern
+        {
+            get => RunPreferences.Run.pattern;
+            set
+            {
+                if (RunPreferences.Run.pattern == value) return;
+                RunPreferences.Run.pattern = value;
+                RunPreferences.MarkRunCustomized();
+            }
+        }
 
         public static bool OpenStartScreen() => Load(StartScenePath);
 
-        public static bool OpenLevelEditor() => Load(EditorScenePath);
+        /// <summary>The floor plan list, where every run starts. It lives in the editor scene.</summary>
+        public static bool OpenFloorPlans()
+        {
+            returnPath = null;
+            return Load(EditorScenePath);
+        }
 
-        /// <summary>Back to the editor, which reopens the floor plan that was playing.</summary>
+        public static bool OpenLevelEditor() => OpenFloorPlans();
+
+        /// <summary>
+        /// Leaves the simulator for where the run was started: the editor with the floor plan open, or that
+        /// floor plan's Run setup page.
+        /// </summary>
         public static bool ReturnToEditor() => Load(EditorScenePath);
 
         /// <summary>
-        /// Loads the simulation scene with <paramref name="snapshot"/> in place of its saved level.
-        /// <paramref name="filePath"/> is reopened when the player returns to the editor.
+        /// Loads the simulation scene with <paramref name="snapshot"/> in place of its saved level, played in
+        /// <paramref name="mode"/> with <see cref="RunPreferences.Run"/>. Leaving the run goes back to
+        /// <paramref name="filePath"/> in the editor, or on its Run setup page.
         /// </summary>
-        public static bool Simulate(LevelSnapshot snapshot, FloorPalette palette, string filePath)
+        public static bool Simulate(LevelSnapshot snapshot, FloorPalette palette, string filePath,
+            RunMode mode = RunMode.Watch, ReturnTarget returnTo = ReturnTarget.Editor)
         {
             if (snapshot == null || !CanLoad(SimScenePath)) return false;
 
@@ -46,6 +75,9 @@ namespace RobotVacuum.LevelEditor
 
             LevelHandoff.Send(level);
             returnPath = filePath;
+            returnTarget = returnTo;
+            pendingMode = mode;
+            LastMode = mode;
 
             SceneManager.sceneLoaded -= OnSceneLoaded;
             SceneManager.sceneLoaded += OnSceneLoaded;
@@ -53,12 +85,22 @@ namespace RobotVacuum.LevelEditor
             return true;
         }
 
-        /// <summary>The floor plan the editor should reopen, handed out once.</summary>
-        public static string TakeReturnPath()
+        /// <summary>The floor plan the editor should reopen, and where, handed out once.</summary>
+        public static string TakeReturnPath(out ReturnTarget target)
         {
             string path = returnPath;
+            target = returnTarget;
             returnPath = null;
+            returnTarget = ReturnTarget.Editor;
             return path;
+        }
+
+        /// <summary>How the run being started should play, handed out once.</summary>
+        public static RunMode TakeRunMode()
+        {
+            var mode = pendingMode;
+            pendingMode = RunMode.Watch;
+            return mode;
         }
 
         /// <summary>A live copy of a snapshot that shares nothing with it and survives the scene load.</summary>
@@ -165,8 +207,10 @@ namespace RobotVacuum.LevelEditor
         {
             SceneManager.sceneLoaded -= OnSceneLoaded;
             returnPath = null;
+            returnTarget = ReturnTarget.Editor;
+            pendingMode = RunMode.Watch;
+            LastMode = RunMode.Watch;
             fallbackPalette = null;
-            MovementPattern = MovementPattern.RandomBounce;
         }
     }
 }
