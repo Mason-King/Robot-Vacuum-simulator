@@ -1290,6 +1290,7 @@ namespace RobotVacuum.LevelEditor
         readonly float savedTimeScale;
         readonly float savedMaximumDeltaTime;
         readonly float startTime;
+        readonly List<MovingCat> cats;
         float playbackSpeed = 1f;
         bool isPaused;
 
@@ -1324,6 +1325,8 @@ namespace RobotVacuum.LevelEditor
             Robot = robotObject.AddComponent<VacuumRobot>();
             Battery = robotObject.GetComponent<Battery>();
             Robot.Pattern = SimLauncher.MovementPattern;
+            // The run's configured seed (a fresh one when "new random seed every run" is on), not the default.
+            Robot.Seed = SimConfig.ToRunSettings(SimLauncher.MovementPattern).Resolved().seed;
 
             // Coverage tracking and its heatmap, as in the simulation scene.
             Cleaning = robotObject.AddComponent<VacuumCleaningController>();
@@ -1331,8 +1334,9 @@ namespace RobotVacuum.LevelEditor
             heatmap.transform.SetParent(root.transform, false);
             heatmap.AddComponent<CoverageHeatmapRenderer>();
 
+            // ResetToSpawn rebuilds Robot.RandomSource from the seed, so the cats draw their seeds after it.
             Robot.ResetToSpawn();
-            MovingCat.SpawnPlacedCats(renderer, root.transform);
+            cats = MovingCat.SpawnPlacedCats(renderer, root.transform, Robot.RandomSource);
 
             camera = Camera.main;
             if (camera == null)
@@ -1373,6 +1377,7 @@ namespace RobotVacuum.LevelEditor
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
+            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn();
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 

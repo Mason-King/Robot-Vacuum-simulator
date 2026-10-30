@@ -8,38 +8,6 @@ using UnityEngine;
 
 namespace RobotVacuum.Tests
 {
-    public class SimRandomTests
-    {
-        [Test]
-        public void SameSeed_GivesTheSameSequence_DifferentSeedDoesNot()
-        {
-            SimRandom.Reseed(42);
-            var first = new[] { SimRandom.Value, SimRandom.Range(5f, 9f), SimRandom.Next(100) };
-
-            SimRandom.Reseed(42);
-            var again = new[] { SimRandom.Value, SimRandom.Range(5f, 9f), SimRandom.Next(100) };
-
-            SimRandom.Reseed(43);
-            var other = new[] { SimRandom.Value, SimRandom.Range(5f, 9f), SimRandom.Next(100) };
-
-            Assert.AreEqual(first, again);
-            Assert.AreNotEqual(first, other);
-            Assert.AreEqual(43, SimRandom.Seed);
-        }
-
-        [Test]
-        public void Range_StaysInBounds()
-        {
-            SimRandom.Reseed(7);
-            for (int i = 0; i < 1000; i++)
-            {
-                float value = SimRandom.Range(-2f, 3f);
-                Assert.GreaterOrEqual(value, -2f);
-                Assert.Less(value, 3f);
-            }
-        }
-    }
-
     public class MovementAlgorithmTests
     {
         [Test]

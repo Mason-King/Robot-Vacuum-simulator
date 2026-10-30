@@ -20,6 +20,7 @@ public class RandomProvider
         SensorNoise = 0,
         RandomBounceAlgorithm = 1,
         DebrisAccumulation = 2,
+        DynamicObstacles = 3,   // seeds for cats and other moving obstacles
     }
 
     private class RandomHandle
@@ -54,6 +55,13 @@ public class RandomProvider
     {
         var handle = _subGenerators[subsystem];
         return handle.Rng.NextFloat(min, max);
+    }
+
+    /// <summary>Draw a uniform uint from the given subsystem's stream (used to seed per-entity generators).</summary>
+    public uint NextUInt(Subsystem subsystem)
+    {
+        var handle = _subGenerators[subsystem];
+        return handle.Rng.NextUInt(); // mutates in place, handle is a shared reference
     }
 
     // --- Snapshot / restore for replay and telemetry sampling ---
