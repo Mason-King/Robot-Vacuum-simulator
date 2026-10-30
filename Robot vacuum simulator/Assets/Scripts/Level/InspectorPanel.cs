@@ -106,6 +106,14 @@ namespace RobotVacuum.LevelEditor
             });
 
             BuildChecks();
+
+            if (level.Rooms.Count > 0)
+            {
+                Ui.Section(scroll, "Whole house floor", out var house);
+                Ui.Text(house, "Set one covering for every room at once. Rooms can still be changed one by one afterwards.", "le-empty-hint");
+                BuildFloorPicker(house, session.SharedFloor(), session.SetAllRoomFloors);
+            }
+
             BuildRoomList();
             BuildDoorwayList();
             BuildObstacleList();
@@ -122,7 +130,7 @@ namespace RobotVacuum.LevelEditor
 
             Ui.Section(scroll, "Walls", out var wallBody);
             Ui.Text(wallBody, "Thickness", "le-field-label");
-            var thickness = new ValueSlider(0.02f, 0.5f, level.WallThickness, v => $"{v * 100f:0} cm");
+            var thickness = new ValueSlider(0.02f, 0.5f, level.WallThickness, Ui.FormatSmallLength);
             BindContinuous(thickness, "Wall Thickness", session.SetWallThicknessLive);
             wallBody.Add(thickness);
 
@@ -223,7 +231,7 @@ namespace RobotVacuum.LevelEditor
                 icon.AddToClassList("le-list-row__icon");
                 row.Add(icon);
                 Ui.Text(row, session.DoorwayTitle(doorway), "le-list-row__label");
-                Ui.Text(row, $"{doorway.width:0.0} m", "le-list-row__meta");
+                Ui.Text(row, Ui.FormatLength(doorway.width), "le-list-row__meta");
                 Ui.IconButton(row, IconKind.Trash, "Delete doorway", () => session.DeleteDoorway(index), "le-list-row__action");
 
                 row.AddManipulator(new Clickable(() => session.SelectDoorway(index)));
@@ -280,7 +288,7 @@ namespace RobotVacuum.LevelEditor
             {
                 if (!room.IsValid) return;
                 area.text = Ui.FormatArea(room.Area);
-                perimeter.text = Ui.FormatMetres(Perimeter(room));
+                perimeter.text = Ui.FormatLength(Perimeter(room));
                 corners.text = room.outline.Count.ToString();
             });
 
@@ -326,7 +334,7 @@ namespace RobotVacuum.LevelEditor
                     icon.AddToClassList("le-list-row__icon");
                     row.Add(icon);
                     Ui.Text(row, session.NameOfRoom(doorway.Other(index)), "le-list-row__label");
-                    Ui.Text(row, $"{doorway.width:0.0} m", "le-list-row__meta");
+                    Ui.Text(row, Ui.FormatLength(doorway.width), "le-list-row__meta");
                     row.AddManipulator(new Clickable(() => session.SelectDoorway(captured)));
                 }
             }
@@ -372,7 +380,7 @@ namespace RobotVacuum.LevelEditor
                 var text = Ui.Div(card, "le-floor-card__text");
                 Ui.Text(text, palette.LabelOf(i), "le-floor-card__name");
                 if (floor != null)
-                    Ui.Text(text, $"{floor.speedMultiplier:0.##}× speed · {1f / Mathf.Max(0.01f, floor.cleaningEffort):0.##}× clean", "le-floor-card__meta");
+                    Ui.Text(text, $"{floor.speedMultiplier:0.##}× speed · {1f / Mathf.Max(0.01f, FloorTuning.CleaningEffort(floor)):0.##}× clean", "le-floor-card__meta");
 
                 card.AddManipulator(new Clickable(() => onPick(index)));
             }
@@ -390,7 +398,7 @@ namespace RobotVacuum.LevelEditor
             Live(() => title.text = session.DoorwayTitle(doorway));
 
             Ui.Section(scroll, "Width", out var body);
-            var width = new ValueSlider(EditorSession.MinDoorwayWidth, EditorSession.MaxDoorwayWidth, doorway.width, v => $"{v:0.00} m");
+            var width = new ValueSlider(EditorSession.MinDoorwayWidth, EditorSession.MaxDoorwayWidth, doorway.width, Ui.FormatLength);
             BindContinuous(width, "Doorway Width", value => session.SetDoorwayWidthLive(index, value));
             body.Add(width);
             Ui.Text(body, "Drag the doorway along any wall with the Select tool. It links whichever rooms it sits between.", "le-empty-hint");
@@ -422,8 +430,8 @@ namespace RobotVacuum.LevelEditor
             Live(() =>
             {
                 footprint.text = Ui.FormatArea(obstacle.size.x * obstacle.size.y);
-                width.text = Ui.FormatMetres(obstacle.size.x);
-                depth.text = Ui.FormatMetres(obstacle.size.y);
+                width.text = Ui.FormatLength(obstacle.size.x);
+                depth.text = Ui.FormatLength(obstacle.size.y);
             });
 
             Ui.Section(scroll, obstacle.kind == ObstacleKind.Cat ? "Simulation" : "Vacuum", out var vacuumBody);
@@ -446,12 +454,12 @@ namespace RobotVacuum.LevelEditor
 
             Ui.Section(scroll, "Size", out var sizeBody);
             Ui.Text(sizeBody, "Width", "le-field-label");
-            var widthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.x, v => $"{v:0.00} m");
+            var widthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.x, Ui.FormatLength);
             BindContinuous(widthSlider, "Resize Object", v => session.SetObstacleSizeLive(index, new Vector2(v, obstacle.size.y)));
             sizeBody.Add(widthSlider);
 
             Ui.Text(sizeBody, "Depth", "le-field-label");
-            var depthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.y, v => $"{v:0.00} m");
+            var depthSlider = new ValueSlider(Obstacle.MinSize, 4f, obstacle.size.y, Ui.FormatLength);
             BindContinuous(depthSlider, "Resize Object", v => session.SetObstacleSizeLive(index, new Vector2(obstacle.size.x, v)));
             sizeBody.Add(depthSlider);
 

@@ -72,8 +72,38 @@ namespace RobotVacuum.Sim
         // currentSimTime parameter, which drives the event-log throttle.
         float simTimeElapsed;
 
-        // Convenience read-out, e.g. for a debug UI later.
-        public float CoveragePercent => Grid != null ? Grid.CalculateCoveragePercent() : 0f;
+        // Live coverage, kept up to date by the grid itself so it is cheap every tick.
+        public float CoveragePercent => Grid != null ? Grid.CoveragePercent : 0f;
+
+        // Per cell: the step it was last under the footprint, 0 for never.
+        // Lets the controller count revisits: the footprint coming back to a
+        // cell it had already covered and left.
+        int[] lastVisitStep;
+        int stepIndex;
+
+        /// <summary>Times the vacuum came back over floor it had already covered and left (cell entries).</summary>
+        public long RevisitCount { get; private set; }
+
+        /// <summary>Distinct cells the footprint has covered at least once.</summary>
+        public int VisitedCellCount { get; private set; }
+
+        public float CellSizeMeters => cellSizeMeters;
+
+        /// <summary>Furniture moved, appeared or changed mid-run: re-mark the floor it blocks, keeping progress.</summary>
+        public void RefreshObstacles()
+        {
+            if (Grid != null) Grid.RefreshNonCleanable();
+        }
+
+        /// <summary>
+        /// Changes the grid resolution and starts again on a dirty floor. Coverage is a fraction of area, so
+        /// runs at different resolutions stay comparable; finer cells only trace the edges more exactly.
+        /// </summary>
+        public void SetCellSize(float metres)
+        {
+            cellSizeMeters = Mathf.Clamp(metres, 0.005f, 0.5f);
+            ResetCoverage();
+        }
 
         // target_max_clean for this run. Read-only here: it is set before the
         // run (Inspector field, or Initialize from the run config) and fixed
@@ -155,14 +185,21 @@ namespace RobotVacuum.Sim
             // Marks cells under blocking furniture as non-cleanable (see ExternalModelGrid.cs).
             Grid.PopulateFromLevelObject();
             cellRateMultiplier = new float[Grid.Rows * Grid.Cols];
+            lastVisitStep = new int[Grid.Rows * Grid.Cols];
+            stepIndex = 0;
+            RevisitCount = 0;
+            VisitedCellCount = 0;
         }
 
-        void FixedUpdate()
+        void FixedUpdate() => Step(Time.fixedDeltaTime);
+
+        public void Step(float dt)
         {
             if (Grid == null || robotBody == null) return;
 
-            simTimeElapsed += Time.fixedDeltaTime;
-            CleanCellsUnderFootprint(Time.fixedDeltaTime);
+            simTimeElapsed += dt;
+            stepIndex++;
+            CleanCellsUnderFootprint(dt);
         }
 
         // ------------------------------------------------------------------
@@ -204,7 +241,13 @@ namespace RobotVacuum.Sim
                     if (Vector2.Distance(cellCenter, position) > radius) continue; // square box, circular footprint -- corners get skipped here
 
                     CellState cell = Grid.GetCell(row, col);
-                    if (cell.isNonCleanable) continue; // under blocking furniture -- see ExternalModelGrid.PopulateFromLevelObject
+                    if (!cell.CountsTowardCoverage) continue; // under blocking furniture or off the floor -- see ExternalModelGrid.PopulateFromLevelObject
+
+                    int index = row * Grid.Cols + col;
+                    int last = lastVisitStep[index];
+                    if (last == 0) VisitedCellCount++;
+                    else if (last < stepIndex - 1) RevisitCount++;
+                    lastVisitStep[index] = stepIndex;
 
                     // Dwell accrues on every cleanable cell under the footprint,
                     // already-clean ones included; cleanliness scales with the floor.
@@ -219,8 +262,40 @@ namespace RobotVacuum.Sim
         // floor type's cleaningEffort. Off the floor (null) or with no
         // effort set, the base rate applies unchanged.
         // ------------------------------------------------------------------
-        public static float CleaningRate(float baseRatePerSecond, FloorType floor) =>
-            floor != null && floor.cleaningEffort > 0f ? baseRatePerSecond / floor.cleaningEffort : baseRatePerSecond;
+        public static float CleaningRate(float baseRatePerSecond, FloorType floor)
+        {
+            float effort = FloorTuning.CleaningEffort(floor);
+            return floor != null && effort > 0f ? baseRatePerSecond / effort : baseRatePerSecond;
+        }
+
+        // ------------------------------------------------------------------
+        // Coverage of each room on its own, in percent, indexed like
+        // level.Rooms. A room the vacuum never reached reads 0.
+        // ------------------------------------------------------------------
+        public float[] RoomCoveragePercent()
+        {
+            var result = new float[level != null ? level.Rooms.Count : 0];
+            if (Grid == null || result.Length == 0) return result;
+
+            var sums = new double[result.Length];
+            var counts = new int[result.Length];
+            for (int row = 0; row < Grid.Rows; row++)
+            {
+                for (int col = 0; col < Grid.Cols; col++)
+                {
+                    if (!Grid.GetCell(row, col).CountsTowardCoverage) continue;
+
+                    Vector2 world = Grid.GridIndexToWorldCenter(row, col);
+                    int room = level.RoomIndexAt(levelRenderer != null ? levelRenderer.WorldToLevel(world) : world);
+                    if (room < 0) continue;
+                    sums[room] += Grid.CleanFractionOf(row, col);
+                    counts[room]++;
+                }
+            }
+
+            for (int i = 0; i < result.Length; i++) result[i] = counts[i] > 0 ? (float)(sums[i] / counts[i] * 100.0) : 0f;
+            return result;
+        }
 
         float RateMultiplierAt(int row, int col, Vector2 worldCenter)
         {

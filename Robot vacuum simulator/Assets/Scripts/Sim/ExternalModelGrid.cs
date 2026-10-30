@@ -67,6 +67,14 @@ namespace RobotVacuumSim.EnvironmentModel
         // the vacuum passes under leaves its cells cleanable.
         public bool isNonCleanable;
 
+        // Outside every room: the grid covers the floor plan's bounding box, so an
+        // L-shaped house leaves cells that were never floor. They drop out of
+        // coverage like furniture does, but don't count as blocked area.
+        // Set by ExternalModelGrid.PopulateFromLevelObject().
+        public bool isOffFloor;
+
+        public bool CountsTowardCoverage => !isNonCleanable && !isOffFloor;
+
         // The only way to change the cell. No guard against negative amounts:
         // the only writer (VacuumCleaningController) adds positive amounts, and
         // a check on every cell on every tick is cost for nothing. Readers
@@ -185,6 +193,12 @@ namespace RobotVacuumSim.EnvironmentModel
         // How many cells are currently non-cleanable, kept in step by
         // SetNonCleanable() so area read-outs don't rescan the grid.
         private int nonCleanableCount;
+
+        // Cells outside every room, and the running sum of each counted cell's
+        // clean fraction (min(cleanliness / target, 1)), so coverage reads in
+        // O(1) every tick instead of rescanning the grid.
+        private int offFloorCount;
+        private double cleanSum;
 
         // target_max_clean: the cleanliness goalpost. Not a property of any
         // cell -- it is the yardstick coverage and the heatmaps measure
@@ -384,7 +398,10 @@ namespace RobotVacuumSim.EnvironmentModel
             // no throttling -- coverage must stay authoritative at full tick
             // resolution regardless of what the replay log does.
             CellState cell = cells[row, col];
+            float before = ExternalModelData.CleanFraction(cell.Cleanliness, targetMaxClean);
             cell.Accumulate(dwellDeltaSeconds, cleanlinessDelta);
+            if (cell.CountsTowardCoverage)
+                cleanSum += ExternalModelData.CleanFraction(cell.Cleanliness, targetMaxClean) - before;
 
             // Part 2: ask the cell whether enough time has passed to log.
             bool shouldLog = cell.ShouldLogEvent(currentSimTime, EventLogIntervalSeconds);
@@ -399,21 +416,32 @@ namespace RobotVacuumSim.EnvironmentModel
         }
 
         // ------------------------------------------------------------------
-        // STUB: writing a {cellID, time, dwell, cleanliness} event out to
-        // the run's telemetry. Deferred until after the first prototype.
+        // Hands a throttled {cellID, time, dwell, cleanliness} event to
+        // whoever records the run (SDD 7.1). RunRecorder writes them to
+        // cell_events.csv, and the latest entry at or before T reconstructs
+        // any cell's state.
         // ------------------------------------------------------------------
+        // Raised for every logged cell-state change: (row, col, dwellSeconds, cleanliness, simTime).
+        public event System.Action<int, int, float, float, float> CellStateLogged;
+
         private void EmitCellStateChangeEvent(int row, int col, float dwellSeconds, float cleanliness, float simTime)
         {
-            // TODO (post-prototype): append the absolute values to the run's cell-state event log.
+            CellStateLogged?.Invoke(row, col, dwellSeconds, cleanliness, simTime);
         }
 
         public void SetNonCleanable(int row, int col, bool isNonCleanable)
         {
             if (cells[row, col].isNonCleanable == isNonCleanable) return;
 
+            if (!cells[row, col].isOffFloor)
+                cleanSum += (isNonCleanable ? -1.0 : 1.0) * CleanFractionOf(row, col);
             cells[row, col].isNonCleanable = isNonCleanable;
             nonCleanableCount += isNonCleanable ? 1 : -1;
         }
+
+        // How far one cell is toward the target, 0 to 1.
+        public float CleanFractionOf(int row, int col) =>
+            ExternalModelData.CleanFraction(cells[row, col].Cleanliness, targetMaxClean);
 
         // Cells currently excluded from coverage (under blocking furniture).
         public int NonCleanableCellCount => nonCleanableCount;
@@ -421,6 +449,21 @@ namespace RobotVacuumSim.EnvironmentModel
         // Floor the robot can't clean because furniture blocks it, in square
         // metres: the non-cleanable cell count times one cell's area.
         public float NonCleanableAreaSquareMeters => nonCleanableCount * cellSizeMeters * cellSizeMeters;
+
+        // Cells outside every room, excluded from coverage.
+        public int OffFloorCellCount => offFloorCount;
+
+        // Cells that count toward coverage: floor not under blocking furniture.
+        // A cell can be both off-floor and under furniture only if furniture
+        // pokes outside the rooms, which PopulateFromLevelObject never marks.
+        public int CleanableCellCount => rows * cols - nonCleanableCount - offFloorCount;
+
+        public float CleanableAreaSquareMeters => CleanableCellCount * cellSizeMeters * cellSizeMeters;
+
+        // Same answer as CalculateCoveragePercent(), kept up to date as
+        // cells change, so it is cheap enough to read every tick.
+        public float CoveragePercent =>
+            CleanableCellCount > 0 ? (float)(cleanSum / CleanableCellCount * 100.0) : 0f;
 
         public int Rows => rows;
         public int Cols => cols;
@@ -465,7 +508,7 @@ namespace RobotVacuumSim.EnvironmentModel
             {
                 for (int col = 0; col < cols; col++)
                 {
-                    if (cells[row, col].isNonCleanable) continue;
+                    if (!cells[row, col].CountsTowardCoverage) continue; // furniture, or never floor
                     cleanableCellCount++;
                     summed += ExternalModelData.CleanFraction(cells[row, col].Cleanliness, targetMaxClean);
                 }
@@ -484,7 +527,7 @@ namespace RobotVacuumSim.EnvironmentModel
             {
                 for (int col = 0; col < cols; col++)
                 {
-                    if (cells[row, col].isNonCleanable) continue;
+                    if (!cells[row, col].CountsTowardCoverage) continue; // furniture, or never floor
                     cleanableCellCount++;
                     if (cells[row, col].Cleanliness >= targetMaxClean) reached++;
                 }
@@ -560,6 +603,26 @@ namespace RobotVacuumSim.EnvironmentModel
         {
             if (level == null || rows == 0 || cols == 0) return;
 
+            MarkOffFloorCells();
+            MarkBlockedCells();
+        }
+
+        // ------------------------------------------------------------------
+        // Re-derives which cells sit under blocking furniture after the
+        // furniture has changed mid-run, keeping every cell's cleanliness.
+        // ------------------------------------------------------------------
+        public void RefreshNonCleanable()
+        {
+            if (level == null) return;
+
+            for (int row = 0; row < rows; row++)
+                for (int col = 0; col < cols; col++)
+                    SetNonCleanable(row, col, false);
+            MarkBlockedCells();
+        }
+
+        void MarkBlockedCells()
+        {
             var footprint = new List<Vector2>(4);
 
             foreach (var obstacle in level.Obstacles)
@@ -592,6 +655,58 @@ namespace RobotVacuumSim.EnvironmentModel
                     }
                 }
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Marks every cell whose centre lies outside all rooms, so the
+        // bounding box's empty corners don't count as floor left dirty.
+        // ------------------------------------------------------------------
+        void MarkOffFloorCells()
+        {
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    Vector2 center = GridIndexToWorldCenter(row, col);
+                    Vector2 levelPoint = levelRenderer != null ? levelRenderer.WorldToLevel(center) : center;
+                    bool off = level.RoomIndexAt(levelPoint) < 0;
+                    if (cells[row, col].isOffFloor == off) continue;
+
+                    if (!cells[row, col].isNonCleanable)
+                        cleanSum += (off ? -1.0 : 1.0) * CleanFractionOf(row, col);
+                    cells[row, col].isOffFloor = off;
+                    offFloorCount += off ? 1 : -1;
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // A coarse copy of the grid for replays and averaged heatmaps: at
+        // most maxSize blocks on the longer side, each holding the average
+        // clean fraction (0 untouched .. 1 at the target) of its counted
+        // cells, or -1 when the block has no floor that counts.
+        // ------------------------------------------------------------------
+        public float[] Downsample(int maxSize, out int width, out int height)
+        {
+            int block = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(rows, cols) / (float)Mathf.Max(1, maxSize)));
+            width = Mathf.CeilToInt(cols / (float)block);
+            height = Mathf.CeilToInt(rows / (float)block);
+
+            var sums = new float[width * height];
+            var counts = new int[width * height];
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    if (!cells[row, col].CountsTowardCoverage) continue;
+                    int index = row / block * width + col / block;
+                    sums[index] += CleanFractionOf(row, col);
+                    counts[index]++;
+                }
+            }
+
+            for (int i = 0; i < sums.Length; i++) sums[i] = counts[i] > 0 ? sums[i] / counts[i] : -1f;
+            return sums;
         }
 
         // ------------------------------------------------------------------

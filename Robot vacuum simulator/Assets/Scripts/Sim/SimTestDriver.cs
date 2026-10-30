@@ -51,8 +51,20 @@ namespace RobotVacuum.Sim
             runLevel = ResolveLevel(out string source);
             if (runLevel == null) return;
 
-            // A level from the editor runs with the movement pattern chosen there.
-            if (handedLevel != null) settings.pattern = SimLauncher.MovementPattern;
+            if (handedLevel != null)
+            {
+                // A batch experiment asked for from the start screen runs instead of a single run.
+                var batch = SimLauncher.TakePendingBatch();
+                if (batch != null)
+                {
+                    new GameObject("Batch Runner").AddComponent<BatchRunner>().Run(runLevel, batch);
+                    runLevel = null; // the batch runner owns it now
+                    return;
+                }
+
+                // A level from the app runs with the configuration chosen there: algorithm, seed, grid, vacuum.
+                settings = SimConfig.ToRunSettings();
+            }
 
             if (!SimulationSession.TryStart(runLevel, settings, headless: false, out session, out string error))
             {

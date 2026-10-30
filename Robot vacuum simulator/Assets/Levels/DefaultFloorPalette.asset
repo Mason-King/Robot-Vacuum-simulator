@@ -76,6 +76,7 @@ MonoBehaviour:
   m_Name: Stairs Drop
   m_EditorClassIdentifier: Assembly-CSharp::RobotVacuum.Level.FloorType
   displayName: Stairs Drop
+  isFloor: 0
   editorColor: {r: 0.11764706, g: 0.1254902, b: 0.15294118, a: 1}
   pattern: 6
   traversable: 0
@@ -203,6 +204,7 @@ MonoBehaviour:
   m_Name: Threshold
   m_EditorClassIdentifier: Assembly-CSharp::RobotVacuum.Level.FloorType
   displayName: Threshold
+  isFloor: 0
   editorColor: {r: 0.5411765, g: 0.43137255, b: 0.29411766, a: 1}
   pattern: 1
   traversable: 1

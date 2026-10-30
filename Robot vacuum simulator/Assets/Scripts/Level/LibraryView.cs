@@ -31,6 +31,8 @@ namespace RobotVacuum.LevelEditor
             subtitle = Ui.Text(titles, string.Empty, "le-library__subtitle");
 
             Ui.Div(header, "le-topbar__spacer");
+            var import = Ui.Button(header, "Import", IconKind.Plus, () => ImportRequested?.Invoke(), "le-btn--ghost");
+            Ui.Tooltip(import, "Add a floor plan from a JSON file");
             VisualElement newButton = null;
             newButton = Ui.Button(header, "New floor plan", IconKind.Plus, () => NewRequested?.Invoke(newButton), "le-btn--primary");
 
@@ -41,6 +43,9 @@ namespace RobotVacuum.LevelEditor
         }
 
         public event Action<string> OpenRequested;
+
+        /// <summary>The Import button was pressed.</summary>
+        public event Action ImportRequested;
 
         /// <summary>The back button was pressed.</summary>
         public event Action HomeRequested;

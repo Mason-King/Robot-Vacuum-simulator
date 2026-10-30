@@ -5,6 +5,12 @@ using UnityEngine.SceneManagement;
 
 namespace RobotVacuum.LevelEditor
 {
+    /// <summary>The pages of the start screen, which other scenes can ask it to open on.</summary>
+    public enum StartPage { Home, Configuration, Simulate, Analysis }
+
+    /// <summary>Where a simulation was started from, and so where leaving it goes back to.</summary>
+    public enum SimOrigin { Editor, StartScreen }
+
     /// <summary>
     /// Moves between the app's scenes: the start screen, the level editor, and the simulation scene a
     /// floor plan is played in. Every scene here must be in the build profile's scene list to load.
@@ -17,22 +23,73 @@ namespace RobotVacuum.LevelEditor
 
         static FloorPalette fallbackPalette;
         static string returnPath;
+        static StartPage startPage;
+        static string focusedRunId;
+        static BatchSpec pendingBatch;
 
-        /// <summary>The movement algorithm chosen last, carried between the editor's run and the simulator.</summary>
-        public static MovementPattern MovementPattern { get; set; }
+        /// <summary>The movement algorithm, shared with every screen through <see cref="SimConfig"/>.</summary>
+        public static MovementPattern MovementPattern
+        {
+            get => SimConfig.Pattern;
+            set => SimConfig.Pattern = value;
+        }
 
-        public static bool OpenStartScreen() => Load(StartScenePath);
+        /// <summary>Where the running simulation was started from.</summary>
+        public static SimOrigin Origin { get; private set; }
 
-        public static bool OpenLevelEditor() => Load(EditorScenePath);
+        /// <summary>The file of the floor plan playing in the simulator, or null.</summary>
+        public static string SimulatedPath { get; private set; }
 
-        /// <summary>Back to the editor, which reopens the floor plan that was playing.</summary>
-        public static bool ReturnToEditor() => Load(EditorScenePath);
+        public static bool OpenStartScreen(StartPage page = StartPage.Home)
+        {
+            startPage = page;
+            return Load(StartScenePath);
+        }
+
+        /// <summary>Opens the Analysis page with <paramref name="runId"/> selected.</summary>
+        public static bool OpenAnalysis(string runId)
+        {
+            focusedRunId = runId;
+            return OpenStartScreen(StartPage.Analysis);
+        }
+
+        /// <summary>Opens the editor, reopening <paramref name="filePath"/> when given.</summary>
+        public static bool OpenLevelEditor(string filePath = null)
+        {
+            returnPath = filePath;
+            return Load(EditorScenePath);
+        }
+
+        /// <summary>Leaves the simulator for wherever it was started from.</summary>
+        public static bool ReturnFromSimulation() => Origin == SimOrigin.StartScreen
+            ? OpenStartScreen(StartPage.Simulate)
+            : OpenLevelEditor(SimulatedPath);
+
+        /// <summary>Leaves the simulator; the same as <see cref="ReturnFromSimulation"/>.</summary>
+        public static bool ReturnToEditor() => ReturnFromSimulation();
+
+        /// <summary>The start page asked for, handed out once.</summary>
+        public static StartPage TakeStartPage()
+        {
+            var page = startPage;
+            startPage = StartPage.Home;
+            return page;
+        }
+
+        /// <summary>The run the Analysis page should select, handed out once.</summary>
+        public static string TakeFocusedRun()
+        {
+            string id = focusedRunId;
+            focusedRunId = null;
+            return id;
+        }
 
         /// <summary>
         /// Loads the simulation scene with <paramref name="snapshot"/> in place of its saved level.
         /// <paramref name="filePath"/> is reopened when the player returns to the editor.
         /// </summary>
-        public static bool Simulate(LevelSnapshot snapshot, FloorPalette palette, string filePath)
+        public static bool Simulate(LevelSnapshot snapshot, FloorPalette palette, string filePath,
+            SimOrigin origin = SimOrigin.Editor)
         {
             if (snapshot == null || !CanLoad(SimScenePath)) return false;
 
@@ -45,12 +102,36 @@ namespace RobotVacuum.LevelEditor
             }
 
             LevelHandoff.Send(level);
-            returnPath = filePath;
+            SimulatedPath = filePath;
+            Origin = origin;
 
             SceneManager.sceneLoaded -= OnSceneLoaded;
             SceneManager.sceneLoaded += OnSceneLoaded;
             SceneManager.LoadScene(SimScenePath);
             return true;
+        }
+
+        /// <summary>
+        /// Loads the simulation scene and runs <paramref name="spec"/>'s batch on <paramref name="snapshot"/>
+        /// instead of a single interactive run. Returns to the start screen's Analysis page when done.
+        /// </summary>
+        public static bool RunBatch(LevelSnapshot snapshot, FloorPalette palette, string filePath, BatchSpec spec)
+        {
+            if (spec == null || spec.patterns.Count == 0 || spec.trials < 1) return false;
+
+            pendingBatch = spec;
+            if (Simulate(snapshot, palette, filePath, SimOrigin.StartScreen)) return true;
+
+            pendingBatch = null;
+            return false;
+        }
+
+        /// <summary>The batch to run instead of a single interactive run, handed out once.</summary>
+        public static BatchSpec TakePendingBatch()
+        {
+            var batch = pendingBatch;
+            pendingBatch = null;
+            return batch;
         }
 
         /// <summary>The floor plan the editor should reopen, handed out once.</summary>
@@ -95,42 +176,11 @@ namespace RobotVacuum.LevelEditor
             if (scene.path != SimScenePath) return;
             SceneManager.sceneLoaded -= OnSceneLoaded;
 
-            // A scene with a SimTestDriver builds and runs the level itself: the driver has already taken the
-            // handed-over level in its Awake, and it adds the camera framing and the HUD. Nothing to do here.
-            if (Object.FindAnyObjectByType<SimTestDriver>() != null) return;
-
-            // Runs after every Awake in the scene but before any Start, so the robot has not moved yet.
-            var orphan = LevelHandoff.CancelPending();
-            if (orphan != null)
-            {
-                Debug.LogError($"Simulator: {SimScenePath} has no LevelRenderer, so the floor plan couldn't be shown.");
-                Object.Destroy(orphan);
-                return;
-            }
-
-            var level = LevelHandoff.Delivered;
-            var renderer = LevelRenderer.FindFor(level);
-            if (renderer == null) return;
-
-            foreach (var robot in Object.FindObjectsByType<VacuumRobot>(FindObjectsSortMode.None))
-            {
-                robot.Pattern = MovementPattern;
-                robot.ResetToSpawn();
-            }
-
-            MovingCat.SpawnPlacedCats(renderer, renderer.transform);
-
-            if (Camera.main != null) FrameCamera(Camera.main, WorldBounds(renderer, level));
-
-            new GameObject("Simulator HUD").AddComponent<SimHud>().Show(level);
-        }
-
-        static Rect WorldBounds(LevelRenderer renderer, LevelData level)
-        {
-            var bounds = level.Bounds();
-            Vector2 a = renderer.LevelToWorld(bounds.min);
-            Vector2 b = renderer.LevelToWorld(bounds.max);
-            return Rect.MinMaxRect(Mathf.Min(a.x, b.x), Mathf.Min(a.y, b.y), Mathf.Max(a.x, b.x), Mathf.Max(a.y, b.y));
+            // Every run goes through a SimulationSession, which SimTestDriver owns: it takes the handed-over
+            // level in its Awake, then starts the run (or the pending batch), frames the camera and adds the
+            // HUD. PlayScene has one; a scene without one gets one here.
+            if (Object.FindAnyObjectByType<SimTestDriver>() == null)
+                new GameObject("Simulation Driver").AddComponent<SimTestDriver>();
         }
 
         static FloorPalette FallbackPalette()
@@ -165,8 +215,12 @@ namespace RobotVacuum.LevelEditor
         {
             SceneManager.sceneLoaded -= OnSceneLoaded;
             returnPath = null;
+            startPage = StartPage.Home;
+            focusedRunId = null;
+            pendingBatch = null;
+            SimulatedPath = null;
+            Origin = SimOrigin.Editor;
             fallbackPalette = null;
-            MovementPattern = MovementPattern.RandomBounce;
         }
     }
 }

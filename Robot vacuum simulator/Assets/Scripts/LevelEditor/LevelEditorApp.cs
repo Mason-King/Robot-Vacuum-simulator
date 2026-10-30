@@ -25,16 +25,107 @@ namespace RobotVacuum.LevelEditor
         [Tooltip("Multiplies the UI size on top of the screen's DPI scaling.")]
         [SerializeField, Range(0.6f, 2f)] float uiScale = 1f;
 
-        static readonly (EditorTool tool, IconKind icon, string name, string key)[] Tools =
+        /// <summary>A drawing tool: its rail button, its tooltip, and the steps the tool guide walks through.</summary>
+        sealed class ToolInfo
         {
-            (EditorTool.Select, IconKind.Select, "Select", "V"),
-            (EditorTool.Rect, IconKind.Rect, "Rectangle room", "R"),
-            (EditorTool.Pen, IconKind.Pen, "Pen room", "P"),
-            (EditorTool.Wall, IconKind.Wall, "Walls", "W"),
-            (EditorTool.Doorway, IconKind.Doorway, "Doorway", "D"),
-            (EditorTool.Spawn, IconKind.Spawn, "Vacuum start", "S"),
-            (EditorTool.Obstacle, IconKind.Obstacle, "Objects", "O"),
+            public EditorTool tool;
+            public IconKind icon;
+            public string name;
+            public string key;
+            public string summary;
+            public string[] steps;
+            public string tip;
+        }
+
+        static readonly ToolInfo[] Tools =
+        {
+            new ToolInfo
+            {
+                tool = EditorTool.Select, icon = IconKind.Select, name = "Select", key = "V",
+                summary = "Pick, move and reshape rooms, doorways and furniture.",
+                steps = new[]
+                {
+                    "Click a room, doorway or piece of furniture to select it. Its settings open in the panel on the right.",
+                    "Drag it to move it.",
+                    "Drag a corner to reshape a room, or drag the middle of a side to add a corner.",
+                    "Right-click for more: duplicate, delete, add or remove walls.",
+                },
+                tip = "Delete removes the selection · Esc deselects · hold Space and drag to pan",
+            },
+            new ToolInfo
+            {
+                tool = EditorTool.Rect, icon = IconKind.Rect, name = "Rectangle room", key = "R",
+                summary = "Draw a rectangular room with walls on every side.",
+                steps = new[]
+                {
+                    "Press on the canvas where one corner should go.",
+                    "Drag to the opposite corner. The size shows next to the cursor.",
+                    "Let go to create the room, then choose its floor covering in the panel.",
+                },
+                tip = "Hold Shift for a square without grid snapping",
+            },
+            new ToolInfo
+            {
+                tool = EditorTool.Pen, icon = IconKind.Pen, name = "Pen room", key = "P",
+                summary = "Draw a room of any shape, one corner at a time.",
+                steps = new[]
+                {
+                    "Click to place each corner of the room in turn.",
+                    "Close the shape by clicking the first corner again, or press Enter (needs 3 or more corners).",
+                    "Choose the new room's floor covering in the panel.",
+                },
+                tip = "Backspace removes the last corner · Esc cancels the room",
+            },
+            new ToolInfo
+            {
+                tool = EditorTool.Wall, icon = IconKind.Wall, name = "Walls", key = "W",
+                summary = "Remove or restore room walls, or draw free-standing walls.",
+                steps = new[]
+                {
+                    "Click a room's side to remove its wall. Click it again to put the wall back.",
+                    "Remove the wall between two touching rooms to join them into one open space.",
+                    "Drag across open floor to draw a free-standing wall or partition.",
+                },
+                tip = "Never leave an outside side without a wall: the vacuum will drive straight out",
+            },
+            new ToolInfo
+            {
+                tool = EditorTool.Doorway, icon = IconKind.Doorway, name = "Doorway", key = "D",
+                summary = "Cut an opening in a wall so the vacuum can pass between rooms.",
+                steps = new[]
+                {
+                    "Click on a wall that two rooms share, where the door should be.",
+                    "Select the doorway to change its width in the panel.",
+                    "Rooms with no doorway path from the vacuum's start stay dirty; the level checks list them.",
+                },
+                tip = "A doorway in an outside wall leads nowhere and lets the vacuum escape",
+            },
+            new ToolInfo
+            {
+                tool = EditorTool.Spawn, icon = IconKind.Spawn, name = "Vacuum start", key = "S",
+                summary = "Choose where the vacuum begins each run.",
+                steps = new[]
+                {
+                    "Click inside a room to put the vacuum's dock there.",
+                    "Keep it clear of furniture so the vacuum can drive away.",
+                },
+                tip = "Every run, including restarts, begins from this spot",
+            },
+            new ToolInfo
+            {
+                tool = EditorTool.Obstacle, icon = IconKind.Obstacle, name = "Objects", key = "O",
+                summary = "Add furniture, boxes and pets for the vacuum to work around.",
+                steps = new[]
+                {
+                    "Choose what to place (sofa, bed, table, cat…) in the panel on the right.",
+                    "Drag on the floor to size it, or just click to drop it at its usual size.",
+                    "Select it later to move, resize or rotate it, or to let the vacuum pass underneath.",
+                },
+                tip = "Floor under solid furniture is left out of the coverage score",
+            },
         };
+
+        const string ToolGuidePrefsKey = "RobotVacuum.ShowToolGuide";
 
         VisualElement root;
         PanelSettings panelSettings;
@@ -55,6 +146,8 @@ namespace RobotVacuum.LevelEditor
         VisualElement undoButton;
         VisualElement redoButton;
         Label hintLabel;
+        VisualElement toolGuide;
+        VisualElement guideToggle;
         Label coordsLabel;
         Label zoomLabel;
         VisualElement gridToggle;
@@ -65,8 +158,8 @@ namespace RobotVacuum.LevelEditor
 
         LevelRun run;
 
-        // Captured from the first run's robot, then applied to every later one.
-        VacuumSettings vacuumSettings;
+        // Shared with the Configuration screen and the simulator.
+        static VacuumSettings VacuumConfig => SimConfig.Vacuum;
 
         FloorPalette Palette => palette != null ? palette : runtimePalette;
 
@@ -116,6 +209,7 @@ namespace RobotVacuum.LevelEditor
             library.NewRequested += ShowNewLevelMenu;
             library.CardMenuRequested += ShowCardMenu;
             library.HomeRequested += () => SimLauncher.OpenStartScreen();
+            library.ImportRequested += ImportLevels;
 
             // Keyboard events go to the focused element, or the panel root when nothing has focus,
             // so listen on the panel root during trickle-down to see both.
@@ -204,9 +298,59 @@ namespace RobotVacuum.LevelEditor
                 MenuEntry.Item("Open", () => OpenLevel(entry.path), IconKind.Select),
                 MenuEntry.Item("Simulate", () => SimulateLevel(entry.level, entry.path), IconKind.Play),
                 MenuEntry.Item("Duplicate", () => DuplicateLevel(entry), IconKind.Duplicate),
+                MenuEntry.Item("Export…", () => ExportLevel(entry.level), IconKind.Save),
                 MenuEntry.Separator(),
                 MenuEntry.Item("Delete…", () => ConfirmDeleteLevel(entry), IconKind.Trash, danger: true),
             });
+        }
+
+        void ExportLevel(LevelSnapshot level)
+        {
+            try
+            {
+                string path = FloorPlanFiles.Export(level, Palette);
+                if (path != null)
+                    overlay.Toast($"Exported to {path}", "Show", () => FloorPlanFiles.Reveal(Path.GetDirectoryName(path)));
+            }
+            catch (Exception exception)
+            {
+                overlay.Toast($"Couldn't export: {exception.Message}");
+            }
+        }
+
+        void ImportLevels()
+        {
+            var paths = FloorPlanFiles.PickImports("Import floor plan");
+            if (paths.Count == 0)
+            {
+                if (!Application.isEditor)
+                    overlay.Toast($"Put floor plan .json files in {FloorPlanFiles.ImportFolder}, then press Import again.",
+                        "Show folder", () => FloorPlanFiles.Reveal(FloorPlanFiles.ImportFolder));
+                return;
+            }
+
+            int imported = 0;
+            string lastProblem = null;
+            foreach (string path in paths)
+            {
+                var level = FloorPlanFiles.Import(path, Palette, out string problem);
+                if (level == null)
+                {
+                    lastProblem = problem;
+                    continue;
+                }
+
+                var taken = new List<string>();
+                foreach (var entry in LevelLibrary.LoadAll()) taken.Add(entry.level.name);
+                level.name = LevelLibrary.UniqueName(level.name, taken);
+                LevelLibrary.Create(level);
+                FloorPlanFiles.MarkImported(path);
+                imported++;
+            }
+
+            library.Refresh();
+            if (imported > 0) overlay.Toast(imported == 1 ? "Imported 1 floor plan" : $"Imported {imported} floor plans");
+            else if (lastProblem != null) overlay.Toast(lastProblem);
         }
 
         void DuplicateLevel(LevelLibrary.Entry entry)
@@ -366,6 +510,7 @@ namespace RobotVacuum.LevelEditor
             stage.Add(canvas);
 
             BuildToolRail(Ui.Div(stage, "le-float le-toolrail"));
+            toolGuide = Ui.Div(stage, "le-float le-toolguide");
 
             var hint = Ui.Div(stage, "le-float le-hint");
             hint.pickingMode = PickingMode.Ignore;
@@ -431,10 +576,14 @@ namespace RobotVacuum.LevelEditor
             foreach (var entry in Tools)
             {
                 var tool = entry.tool;
-                var button = Ui.IconButton(rail, entry.icon, $"{entry.name}   {entry.key}", () => session.Tool = tool,
-                    "le-tool", TooltipSide.Right);
+                var button = Ui.IconButton(rail, entry.icon, $"<b>{entry.name}</b>   {entry.key}\n{entry.summary}",
+                    () => session.Tool = tool, "le-tool", TooltipSide.Right);
                 toolButtons[tool] = button;
             }
+
+            Ui.Div(rail, "le-toolrail__divider");
+            guideToggle = Ui.IconButton(rail, IconKind.Help, "<b>Tool guide</b>\nShow or hide step-by-step help for the current tool.",
+                () => SetToolGuideVisible(!ToolGuideVisible), "le-tool", TooltipSide.Right);
         }
 
         void BuildViewBar(VisualElement bar)
@@ -475,11 +624,24 @@ namespace RobotVacuum.LevelEditor
             overlay.ShowMenu(new Vector2(bounds.xMin, bounds.yMin - 6f - 34f * (entries.Count + 0.5f)), entries);
         }
 
-        static string FormatStep(float step) => step < 1f ? $"{step * 100f:0} cm" : $"{step:0} m";
+        static string FormatStep(float step) => Ui.FormatStep(step);
 
         void BuildZoomBar(VisualElement bar)
         {
             coordsLabel = Ui.Text(bar, string.Empty, "le-coords");
+            Ui.Div(bar, "le-bar__divider");
+
+            VisualElement unitsButton = null;
+            unitsButton = Ui.Button(bar, SimConfig.UseFeet ? "ft" : "m", null, () =>
+            {
+                SimConfig.UseFeet = !SimConfig.UseFeet;
+                unitsButton.Q<Label>().text = SimConfig.UseFeet ? "ft" : "m";
+                RefreshViewBar();
+                RefreshViewReadouts();
+                canvas.Invalidate();
+                inspector.Rebuild();
+            }, "le-zoom-label");
+            Ui.Tooltip(unitsButton, "Units: switch between feet and metres everywhere", TooltipSide.Above);
             Ui.Div(bar, "le-bar__divider");
             Ui.IconButton(bar, IconKind.Minus, "Zoom out   −", () => canvas.ZoomBy(1f / 1.25f), null, TooltipSide.Above);
 
@@ -540,6 +702,52 @@ namespace RobotVacuum.LevelEditor
                 Ui.SetClass(pair.Value, "le-tool--active", pair.Key == session.Tool);
 
             RefreshHint();
+            RefreshToolGuide();
+        }
+
+        static bool ToolGuideVisible
+        {
+            get { try { return PlayerPrefs.GetInt(ToolGuidePrefsKey, 1) == 1; } catch { return true; } }
+        }
+
+        void SetToolGuideVisible(bool visible)
+        {
+            PlayerPrefs.SetInt(ToolGuidePrefsKey, visible ? 1 : 0);
+            RefreshToolGuide();
+        }
+
+        /// <summary>Fills the guide card with the steps for the active tool, or hides it.</summary>
+        void RefreshToolGuide()
+        {
+            if (toolGuide == null || session == null) return;
+
+            bool visible = ToolGuideVisible;
+            Ui.SetVisible(toolGuide, visible);
+            if (guideToggle != null) Ui.SetClass(guideToggle, "le-tool--active", visible);
+            if (!visible) return;
+
+            var info = Array.Find(Tools, t => t.tool == session.Tool);
+            toolGuide.Clear();
+            if (info == null) return;
+
+            var header = Ui.Div(toolGuide, "le-toolguide__header");
+            var tile = Ui.Div(header, "le-start__step-icon");
+            tile.Add(new IconElement(info.icon));
+            var titles = Ui.Div(header, "le-toolguide__titles");
+            Ui.Text(titles, info.name, "le-toolguide__title");
+            Ui.Text(titles, $"Shortcut {info.key}", "le-toolguide__key");
+            Ui.IconButton(header, IconKind.Close, "Hide the tool guide", () => SetToolGuideVisible(false), "le-btn--ghost le-btn--small");
+
+            Ui.Text(toolGuide, info.summary, "le-toolguide__summary");
+
+            for (int i = 0; i < info.steps.Length; i++)
+            {
+                var step = Ui.Div(toolGuide, "le-toolguide__step");
+                Ui.Text(step, (i + 1).ToString(), "le-toolguide__number");
+                Ui.Text(step, info.steps[i], "le-toolguide__text");
+            }
+
+            if (!string.IsNullOrEmpty(info.tip)) Ui.Text(toolGuide, info.tip, "le-toolguide__tip");
         }
 
         void RefreshHint()
@@ -579,7 +787,7 @@ namespace RobotVacuum.LevelEditor
 
             zoomLabel.text = $"{canvas.ZoomPercent}%";
             var p = canvas.CursorLevel;
-            coordsLabel.text = canvas.CursorInside ? $"x {p.x:0.00}   y {p.y:0.00}" : string.Empty;
+            coordsLabel.text = canvas.CursorInside ? Ui.FormatPoint(p) : string.Empty;
 
             if (session.Tool == EditorTool.Pen) RefreshHint();
         }
@@ -834,17 +1042,25 @@ namespace RobotVacuum.LevelEditor
 
             var snapshot = LevelSnapshot.Parse(session.Serialize());
             if (!HasRooms(snapshot)) return;
+            RunChecks.ConfirmThen(overlay, RunChecks.Problems(session.Level), () => SimulateChecked(snapshot));
+        }
 
+        void SimulateChecked(LevelSnapshot snapshot)
+        {
             // Loading the simulator tears down this scene, and the session with it.
             if (session.IsDirty && !TrySave(false)) return;
 
-            SimulateLevel(snapshot, session.FilePath);
+            SimulateLevelChecked(snapshot, session.FilePath);
         }
 
         void SimulateLevel(LevelSnapshot snapshot, string path)
         {
             if (!HasRooms(snapshot)) return;
+            RunChecks.ConfirmThen(overlay, RunChecks.Problems(snapshot), () => SimulateLevelChecked(snapshot, path));
+        }
 
+        void SimulateLevelChecked(LevelSnapshot snapshot, string path)
+        {
             // Only the serialized palette asset outlives this scene; the built-in one is destroyed with it,
             // so leave it out and let the launcher supply its own.
             if (!SimLauncher.Simulate(snapshot, palette, path))
@@ -872,38 +1088,7 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            int startRoom = session.Level.RoomIndexAt(session.Level.RobotSpawn);
-            if (startRoom < 0)
-            {
-                overlay.ShowDialog(
-                    "Vacuum starts outside",
-                    "The vacuum cannot reach any room from its starting position. Proceeding will leave all rooms at 0% coverage.",
-                    null,
-                    new DialogButton("Cancel", ButtonStyle.Ghost, null),
-                    new DialogButton("Proceed anyway", ButtonStyle.Primary, BeginRun));
-                return;
-            }
-
-            var unreachable = session.Level.UnreachableRooms();
-            if (unreachable.Count > 0)
-            {
-                var names = new List<string>();
-                foreach (int index in unreachable)
-                {
-                    var room = session.Level.GetRoom(index);
-                    names.Add(room != null ? room.name : "Room");
-                }
-
-                overlay.ShowDialog(
-                    "Unreachable rooms",
-                    "No doorway path reaches " + string.Join(", ", names) + ". Proceeding will leave those rooms at 0% coverage.",
-                    null,
-                    new DialogButton("Cancel", ButtonStyle.Ghost, null),
-                    new DialogButton("Proceed anyway", ButtonStyle.Primary, BeginRun));
-                return;
-            }
-
-            BeginRun();
+            RunChecks.ConfirmThen(overlay, RunChecks.Problems(session.Level), BeginRun);
         }
 
         bool CanStartSimulation()
@@ -928,8 +1113,7 @@ namespace RobotVacuum.LevelEditor
             overlay.CloseMenu();
             run = new LevelRun(session.Level);
 
-            if (vacuumSettings == null) vacuumSettings = VacuumSettings.From(run.Robot, run.Battery);
-            else vacuumSettings.ApplyTo(run.Robot, run.Battery);
+            VacuumConfig.ApplyTo(run.Robot, run.Battery);
 
             ShowScreen(BuildRunHud());
             app.AddToClassList("le-app--running");
@@ -995,13 +1179,35 @@ namespace RobotVacuum.LevelEditor
             blocked.text = Ui.FormatArea(session.Level.BlockedFloorArea());
             var cleaned = Ui.RunStat(bar, "Cleaned");
 
+            float offFloorSince = -1f;
             screen.schedule.Execute(() =>
             {
                 if (run == null) return;
                 var robot = run.Robot;
 
+                // A vacuum that drove out through an open wall would go on forever; stop and say why.
+                if (robot != null && !run.IsPaused && LevelGeometry.IsOffFloor(session.Level, robot.LevelPosition))
+                {
+                    if (offFloorSince < 0f) offFloorSince = Time.time;
+                    else if (Time.time - offFloorSince >= 0.5f)
+                    {
+                        offFloorSince = -1f;
+                        run.TogglePause();
+                        overlay.ShowDialog("The vacuum escaped",
+                            "It drove out through a gap in an outside wall and will keep going forever. Add the missing wall, then run it again.",
+                            null,
+                            new DialogButton("Restart", ButtonStyle.Ghost, () =>
+                            {
+                                run?.Restart();
+                                if (run != null && run.IsPaused) run.TogglePause();
+                            }),
+                            new DialogButton("Stop and fix", ButtonStyle.Primary, StopRun));
+                    }
+                }
+                else offFloorSince = -1f;
+
                 runtime.text = VacuumSettings.FormatDuration(run.Elapsed);
-                speed.text = vacuumSettings.FormatSpeed(robot != null ? robot.SpeedMetersPerSecond : 0f);
+                speed.text = VacuumConfig.FormatSpeed(robot != null ? robot.SpeedMetersPerSecond : 0f);
 
                 if (run.Battery != null)
                 {
@@ -1010,7 +1216,7 @@ namespace RobotVacuum.LevelEditor
                         VacuumSettings.IsBatteryLow(run.Battery.CurrentCharge, run.Battery.Capacity));
                 }
 
-                distance.text = Ui.FormatMetres(robot != null ? robot.DistanceTravelled : 0f);
+                distance.text = Ui.FormatLength(robot != null ? robot.DistanceTravelled : 0f);
                 var floor = robot != null ? robot.CurrentFloor : null;
                 surface.text = floor != null ? floor.Label : "—";
                 cleaned.text = run.Cleaning != null && run.Cleaning.Grid != null ? $"{run.Cleaning.CoveragePercent:0.0}%" : "—";
@@ -1032,13 +1238,14 @@ namespace RobotVacuum.LevelEditor
 
         VisualElement BuildVacuumSettings(VisualElement anchor)
         {
-            var settings = vacuumSettings;
+            var settings = VacuumConfig;
             var panel = Ui.Div(null, "le-run-settings");
 
             var units = new Segmented(new[] { "m/s", "ft/s" }, settings.useFeet ? 1 : 0);
             units.SelectionChanged += index =>
             {
                 settings.useFeet = index == 1;
+                SimConfig.Save();
                 ShowVacuumSettings(anchor); // rebuild so the slider read-outs switch unit too
             };
             panel.Add(units);
@@ -1062,7 +1269,8 @@ namespace RobotVacuum.LevelEditor
             slider.ValueChanged += next =>
             {
                 store(next);
-                if (run != null) vacuumSettings.ApplyTo(run.Robot, run.Battery);
+                SimConfig.Save();
+                if (run != null) VacuumConfig.ApplyTo(run.Robot, run.Battery);
             };
             parent.Add(slider);
         }
@@ -1082,6 +1290,7 @@ namespace RobotVacuum.LevelEditor
         readonly float savedTimeScale;
         readonly float savedMaximumDeltaTime;
         readonly float startTime;
+        readonly List<MovingCat> cats;
         float playbackSpeed = 1f;
         bool isPaused;
 
@@ -1116,6 +1325,8 @@ namespace RobotVacuum.LevelEditor
             Robot = robotObject.AddComponent<VacuumRobot>();
             Battery = robotObject.GetComponent<Battery>();
             Robot.Pattern = SimLauncher.MovementPattern;
+            // The run's configured seed (a fresh one when "new random seed every run" is on), not the default.
+            Robot.Seed = SimConfig.ToRunSettings(SimLauncher.MovementPattern).Resolved().seed;
 
             // Coverage tracking and its heatmap, as in the simulation scene.
             Cleaning = robotObject.AddComponent<VacuumCleaningController>();
@@ -1123,8 +1334,9 @@ namespace RobotVacuum.LevelEditor
             heatmap.transform.SetParent(root.transform, false);
             heatmap.AddComponent<CoverageHeatmapRenderer>();
 
+            // ResetToSpawn rebuilds Robot.RandomSource from the seed, so the cats draw their seeds after it.
             Robot.ResetToSpawn();
-            MovingCat.SpawnPlacedCats(renderer, root.transform);
+            cats = MovingCat.SpawnPlacedCats(renderer, root.transform, Robot.RandomSource);
 
             camera = Camera.main;
             if (camera == null)
@@ -1165,6 +1377,7 @@ namespace RobotVacuum.LevelEditor
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
+            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn();
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 

@@ -157,12 +157,12 @@ namespace RobotVacuum.Sim
                 {
                     var cell = grid.GetCell(row, col);
 
-                    // Non-cleanable cells (under furniture that blocks the
-                    // vacuum) stay fully transparent: they are excluded from
-                    // coverage entirely.
+                    // Cells that don't count toward coverage (under furniture
+                    // that blocks the vacuum, or outside every room) stay
+                    // fully transparent.
                     // Texture2D rows run bottom-to-top and so does our grid
                     // (row 0 = lowest Y), so this is a direct index.
-                    pixels[row * builtCols + col] = cell.isNonCleanable
+                    pixels[row * builtCols + col] = !cell.CountsTowardCoverage
                         ? default
                         : HeatmapColors.Evaluate(mode, cell.DwellSeconds, cell.Cleanliness, target);
                 }
