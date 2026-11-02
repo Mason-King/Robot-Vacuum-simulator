@@ -18,6 +18,9 @@ namespace RobotVacuum.Sim.Control
         public float lidarHalfAngleDegrees;
         public int lidarRayCount;
 
+        /// <summary>The vacuum resistance (floor) sensor on/off.</summary>
+        public bool floorSensorEnabled;
+
         /// <summary>The noise scale a Normal run carries: a constant, never the user's setting.</summary>
         public const float NormalNoiseScale = 0f;
 
@@ -29,6 +32,7 @@ namespace RobotVacuum.Sim.Control
             lidarRangeMeters = Sensors.LidarSensor.DefaultRangeMeters,
             lidarHalfAngleDegrees = 180f,
             lidarRayCount = Sensors.LidarRayLayout.MaxRays,
+            floorSensorEnabled = true,
         };
 
         /// <summary>From already-resolved settings. The noise scale is read only when SLAM is on.</summary>
@@ -44,6 +48,7 @@ namespace RobotVacuum.Sim.Control
                 lidarRangeMeters = resolved.lidarRangeMeters,
                 lidarHalfAngleDegrees = resolved.lidarHalfAngleDegrees,
                 lidarRayCount = resolved.lidarRayCount,
+                floorSensorEnabled = resolved.floorSensorEnabled,
             };
         }
     }

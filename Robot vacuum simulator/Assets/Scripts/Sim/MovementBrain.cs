@@ -12,8 +12,8 @@ namespace RobotVacuum.Sim
     /// only writer to the Internal Model. Every physics step, in this order:
     ///
     ///   1. sense      the sensors measure the world from the TRUE pose (they are physical)
-    ///   2. pose       the believed pose: Normal = the true pose; SLAM = the true pose for now (noisy odometry is
-    ///                 slice 2, correction slice 3)
+    ///   2. pose       the believed pose: Normal = the true pose; SLAM = dead reckoning from noisy wheel odometry
+    ///                 (no correction yet: that is slice 3, so in SLAM the believed pose drifts)
     ///   3. observe    readings become per-cell observations, placed using the BELIEVED pose
     ///   4. believe    observations are applied to the Internal Model (assigned in Normal, weighted in SLAM)
     ///   5. goal       every 0.5 s simulated (and at once when a goal ends): report status, ask the algorithm
@@ -49,6 +49,7 @@ namespace RobotVacuum.Sim
 
         readonly List<IRobotSensor> sensors = new List<IRobotSensor>();
         readonly SensorFrame frame = new SensorFrame();
+        readonly OdometrySensor odometry = new OdometrySensor();
         LidarSensor lidar;
 
         MovementPattern activePattern;
@@ -57,6 +58,7 @@ namespace RobotVacuum.Sim
         readonly WaypointDriver driver = new WaypointDriver();
 
         RobotPose believedPose;
+        RobotPose trueAtBelief; // the true pose at the same moment the believed pose was computed, for drift
         float simTime;
         float nextGoalTime;
         float vacuumPower;
@@ -94,10 +96,14 @@ namespace RobotVacuum.Sim
         public ICleaningAlgorithm Algorithm => algorithm;
 
         /// <summary>
-        /// Distance between the believed and the true position, metres. Always 0 in Normal (no pose estimation).
-        /// In SLAM it stays 0 until noisy odometry arrives in slice 2.
+        /// Distance between the believed and the true position, metres, both taken at the same physics step (odometry
+        /// reports a step after it happens, so comparing with the body's current position would count that one-step
+        /// lag as drift). Always 0 in Normal (no pose estimation).
         /// </summary>
-        public float DriftMeters => settings.slam && body != null ? Vector2.Distance(believedPose.position, body.position) : 0f;
+        public float DriftMeters => settings.slam ? Vector2.Distance(believedPose.position, trueAtBelief.position) : 0f;
+
+        /// <summary>Difference between the believed and the true heading, degrees (0–180), at the same step. Always 0 in Normal.</summary>
+        public float DriftHeadingDegrees => settings.slam ? Mathf.Abs(Mathf.DeltaAngle(believedPose.heading, trueAtBelief.heading)) : 0f;
 
         /// <summary>The lidar as built for this run (null before the run starts), for its range and ray count.</summary>
         public LidarSensor Lidar => lidar;
@@ -172,8 +178,12 @@ namespace RobotVacuum.Sim
             lidar = new LidarSensor(settings.lidarEnabled, settings.lidarRangeMeters, settings.lidarHalfAngleDegrees,
                 settings.lidarRayCount, cellSize);
             sensors.Add(lidar);
+            sensors.Add(new FloorSensor(settings.floorSensorEnabled));
 
+            // The robot knows where it starts (its dock / spawn): the believed pose begins exactly at the true pose.
             believedPose = TruePose();
+            trueAtBelief = believedPose;
+            odometry.Reset(believedPose.position, believedPose.heading);
             view.SetBelievedPose(believedPose);
 
             activePattern = robot.Pattern;
@@ -247,8 +257,10 @@ namespace RobotVacuum.Sim
             for (int i = 0; i < sensors.Count; i++)
                 if (sensors[i].Enabled) sensors[i].Sense(context, frame);
 
-            // 2. Pose. Normal: the believed pose IS the true pose. SLAM: also the true pose until slice 2 adds odometry.
-            believedPose = TruePose();
+            // 2. Pose. Normal: the believed pose IS the true pose (no odometry, no noise read).
+            //    SLAM: dead reckoning -- the believed pose moves by what the wheels report.
+            trueAtBelief = TruePose();
+            believedPose = settings.slam ? DeadReckon() : trueAtBelief;
             view.SetBelievedPose(believedPose);
 
             // 3 + 4. Observe and believe, placed by the believed pose.
@@ -338,6 +350,21 @@ namespace RobotVacuum.Sim
             Failure = failure;
             if (robot != null) robot.Command(0f, 0f);
             Debug.LogError($"Movement algorithm '{AlgorithmCatalog.NameOf(activePattern)}' stopped: {failure}", this);
+        }
+
+        /// <summary>SLAM only: the believed pose moved by this step's (noisy) odometry, integrated along the mid-turn heading.</summary>
+        RobotPose DeadReckon()
+        {
+            var truth = TruePose();
+            var floor = levelRenderer != null ? levelRenderer.FloorTypeAtWorld(truth.position) : null;
+            float ease = floor != null ? floor.speedMultiplier : 1f;
+
+            odometry.Measure(truth.position, truth.heading, ease, slam: true, settings.noiseScale, random,
+                out float forward, out float turn);
+
+            float heading = believedPose.heading + turn;
+            Vector2 position = believedPose.position + RobotPose.DirectionOf(believedPose.heading + turn * 0.5f) * forward;
+            return new RobotPose(position, Mathf.DeltaAngle(0f, heading)); // keep the heading in (-180, 180]
         }
 
         RobotPose TruePose() => body != null

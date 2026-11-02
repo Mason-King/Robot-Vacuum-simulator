@@ -403,4 +403,92 @@ namespace RobotVacuum.Tests
             Assert.AreNotEqual(0f, turn);
         }
     }
+
+    public class OdometryAndFloorSensorTests
+    {
+        [Test]
+        public void Odometry_MeasuresMotionAlongTheAxisAndTurns_ButNotSidewaysPushes()
+        {
+            var odometry = new OdometrySensor();
+            odometry.Reset(Vector2.zero, 0f); // facing +y
+
+            odometry.Measure(new Vector2(0f, 0.1f), 0f, 1f, slam: false, 0f, null, out float forward, out float turn);
+            Assert.AreEqual(0.1f, forward, 1e-5f);
+            Assert.AreEqual(0f, turn, 1e-5f);
+
+            odometry.Measure(new Vector2(0.1f, 0.1f), 0f, 1f, slam: false, 0f, null, out forward, out _);
+            Assert.AreEqual(0f, forward, 1e-5f, "pushed sideways: the wheels don't turn");
+
+            odometry.Measure(new Vector2(0.1f, 0.05f), 30f, 1f, slam: false, 0f, null, out forward, out turn);
+            Assert.AreEqual(30f, turn, 1e-4f);
+            Assert.Less(forward, 0f, "reversing reads negative");
+        }
+
+        [Test]
+        public void Odometry_SlamWithNoiseZero_IsExact()
+        {
+            var odometry = new OdometrySensor();
+            odometry.Reset(Vector2.zero, 0f);
+            odometry.Measure(new Vector2(0f, 0.2f), 10f, 1f, slam: true, 0f, new RandomProvider(5u), out float forward, out float turn);
+
+            Assert.AreEqual(0.2f, forward, 1e-3f);
+            Assert.AreEqual(10f, turn, 1e-4f);
+        }
+
+        [Test]
+        public void Odometry_DistanceErrorAfterOneMetre_IsAboutOnePointFiveCentimetres()
+        {
+            const int runs = 300;
+            const int steps = 100; // 1 cm each
+            double sumSq = 0.0;
+
+            for (int run = 0; run < runs; run++)
+            {
+                var odometry = new OdometrySensor();
+                var random = new RandomProvider((uint)(1000 + run));
+                odometry.Reset(Vector2.zero, 0f);
+
+                float measured = 0f;
+                for (int i = 1; i <= steps; i++)
+                {
+                    odometry.Measure(new Vector2(0f, i * 0.01f), 0f, 1f, slam: true, 1f, random, out float forward, out _);
+                    measured += forward;
+                }
+
+                double error = measured - 1.0;
+                sumSq += error * error;
+            }
+
+            double sigma = System.Math.Sqrt(sumSq / runs);
+            Assert.That(sigma, Is.InRange(0.011, 0.019), $"measured σ = {sigma:F4} m");
+        }
+
+        [Test]
+        public void FloorSensorReading_IsAssignedInNormal_AndStepsInSlam()
+        {
+            var pose = new RobotPose(new Vector2(0.01f, 0.01f), 0f);
+            var frame = new SensorFrame();
+            frame.Clear();
+            frame.hasVacuumResistance = true;
+            frame.vacuumResistance = 2f;
+
+            var normal = new InternalModelWriter(new InternalModelGrid(Vector2.zero, 0.05f));
+            new ObservationMapper(normal, slam: false).Apply(frame, pose);
+            Assert.AreEqual(2f, normal.Get(0, 0).vacuumResistanceBelief, 1e-6f);
+
+            var slamWriter = new InternalModelWriter(new InternalModelGrid(Vector2.zero, 0.05f));
+            new ObservationMapper(slamWriter, slam: true).Apply(frame, pose);
+            float once = slamWriter.Get(0, 0).vacuumResistanceBelief;
+            Assert.Greater(once, 1f);
+            Assert.Less(once, 2f);
+        }
+
+        [Test]
+        public void ControllerSettings_CarriesTheFloorSensorSwitch()
+        {
+            Assert.IsTrue(ControllerSettings.Default.floorSensorEnabled);
+            var off = ControllerSettings.From(new RunSettings { randomSeed = false, floorSensorEnabled = false }.Resolved());
+            Assert.IsFalse(off.floorSensorEnabled);
+        }
+    }
 }

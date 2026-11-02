@@ -250,7 +250,15 @@ namespace RobotVacuum.Sim
                 blockedAreaSquareMeters = Runner != null ? Runner.BlockedArea : 0f,
                 simulatedSeconds = SimulatedSeconds,
                 realSeconds = RealSeconds,
+                slam = Settings.slam,
             };
+
+            var brain = Runner != null ? Runner.Brain : null;
+            if (brain != null)
+            {
+                result.driftMeters = brain.DriftMeters;
+                result.driftHeadingDegrees = brain.DriftHeadingDegrees;
+            }
 
             // The one moment the live grid still exists: save the model and the three PNGs, then result.json
             // last, since its existence is what marks the run as finished.

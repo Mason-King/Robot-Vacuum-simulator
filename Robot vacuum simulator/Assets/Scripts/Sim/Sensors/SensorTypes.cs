@@ -135,6 +135,13 @@ namespace RobotVacuum.Sim.Sensors
         /// </summary>
         public float floorEase = 1f;
 
+        // ---- Vacuum resistance (floor) sensor ----
+        /// <summary>True if the floor sensor took a reading this step (it is off when disabled).</summary>
+        public bool hasVacuumResistance;
+
+        /// <summary>How hard the floor under the robot is to clean: 1 = normal, higher = harder. Noisy with SLAM on.</summary>
+        public float vacuumResistance = 1f;
+
         // ---- Cliff sensor (commented out until the Level Object has drops; see CliffSensor.cs) ----
         // public readonly List<CliffPoint> cliffPoints = new List<CliffPoint>(4);
 
@@ -147,6 +154,8 @@ namespace RobotVacuum.Sim.Sensors
             bumpBearing = 0f;
             bumpDistance = 0f;
             floorEase = 1f;
+            hasVacuumResistance = false;
+            vacuumResistance = 1f;
             // cliffPoints.Clear();
         }
     }

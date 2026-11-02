@@ -63,6 +63,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Number of lidar rays, 8–360, used exactly as set. One ray always points straight ahead. Lower it if 360 is too slow; a warning appears if the rays are packed closer than the grid can use.")]
         public int lidarRayCount = 360;
 
+        [Tooltip("The vacuum resistance (floor) sensor on/off: it reads how hard the floor under the robot is to clean. Off in a SLAM run = the robot assumes every floor cleans normally.")]
+        public bool floorSensorEnabled = true;
+
         [Header("Debug")]
         [Tooltip("Draws what the robot believes (its Internal Model, believed position and current waypoint) over the floor. Graphics runs only. Can also be switched during a run on the 'Belief Overlay (debug)' object.")]
         public bool showBeliefOverlay;

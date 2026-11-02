@@ -14,6 +14,7 @@ namespace RobotVacuum.Sim.Control
     ///                        miss, are observed passable at the floor ease the robot remembers for them (1 if unknown)
     ///   whisker bump       → the cell just beyond the contact is set to 0 directly, in both modes (a bump is certain)
     ///   whisker drag       → the cell under the robot: its floor ease
+    ///   floor sensor       → the cell under the robot: its vacuum resistance
     ///   footprint          → cells under the body can't be obstacles; dwell and cleanliness beliefs grow there
     ///
     /// SLAM off: observations are ASSIGNED, except that a preloaded wall is never cleared (see
@@ -38,6 +39,7 @@ namespace RobotVacuum.Sim.Control
         {
             if (frame.hasLidarScan) ApplyLidar(frame, pose);
             ApplyDrag(frame, pose);
+            if (frame.hasVacuumResistance) ApplyVacuumResistance(frame, pose);
             if (frame.bumped) ApplyBump(frame, pose); // last, so a certain 0 is never overwritten by this step's clear views
         }
 
@@ -149,6 +151,20 @@ namespace RobotVacuum.Sim.Control
             writer.SetEase(row, col, ease);
             if (!writer.IsPermanent(row, col))
                 writer.SetTraversability(row, col, ease); // the robot is standing on it, so it is passable at that ease
+        }
+
+        // ---- Vacuum resistance (floor) sensor --------------------------------------------------------------
+
+        void ApplyVacuumResistance(SensorFrame frame, RobotPose pose)
+        {
+            if (!writer.Grid.TryWorldToGridIndex(pose.position, out int row, out int col)) return;
+
+            float value = slam
+                ? BeliefRules.Step(writer.Get(row, col).vacuumResistanceBelief, frame.vacuumResistance,
+                    C.FloorSensorAlpha, 0f, 0f, snapToZero: false)
+                : frame.vacuumResistance;
+
+            writer.SetVacuumResistance(row, col, value);
         }
 
         // ---- Footprint -----------------------------------------------------------------------------------

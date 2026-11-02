@@ -15,6 +15,9 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Base step for the floor-ease reading felt through the drive (the cell under the robot, distance 0).</summary>
         public const float DragAlpha = 0.25f;
 
+        /// <summary>Base step for the vacuum resistance (floor) sensor's reading of the cell under the robot.</summary>
+        public const float FloorSensorAlpha = 0.25f;
+
         /// <summary>Readings at or inside this range get full weight ...</summary>
         public const float FullWeightRangeMeters = 1f;
 

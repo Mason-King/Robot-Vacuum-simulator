@@ -20,6 +20,7 @@ public class RandomProvider
         SensorNoise = 0,
         RandomBounceAlgorithm = 1,
         DebrisAccumulation = 2,
+        Odometry = 3, // appended: each stream's seed is master + its number, so existing streams are unchanged
     }
 
     private class RandomHandle

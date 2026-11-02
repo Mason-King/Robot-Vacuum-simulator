@@ -46,11 +46,30 @@ namespace RobotVacuum.Sim.Sensors
 
         // ---- Odometry and the vacuum resistance sensor (slice 2) -------------------------------------------
 
-        /// <summary>Distance error: standard deviation as a fraction of the distance driven.</summary>
+        /// <summary>
+        /// Distance error: standard deviation as a fraction of the distance driven, MEASURED OVER
+        /// <see cref="OdometryDistanceReferenceMeters"/>. The error is a random walk (a little per physics step), so
+        /// it grows with the square root of the distance: 1.5 cm after 1 m, about 4.7 cm after 10 m, about 15 cm
+        /// after 100 m. (A per-step error that was simply 1.5% of each tiny step would average away to almost
+        /// nothing over a run.)
+        /// </summary>
         public const float OdometryDistanceSigmaFraction = 0.015f;
 
-        /// <summary>Heading error: standard deviation as a fraction of the angle turned.</summary>
+        /// <summary>The distance over which <see cref="OdometryDistanceSigmaFraction"/> holds exactly.</summary>
+        public const float OdometryDistanceReferenceMeters = 1f;
+
+        /// <summary>
+        /// Heading error: standard deviation as a fraction of the angle turned, measured over
+        /// <see cref="OdometryHeadingReferenceDegrees"/> (one full turn): about 5.4° per full turn, about 17° after
+        /// ten. Heading error is what makes an uncorrected map smear, since every later step is placed along it.
+        /// </summary>
         public const float OdometryHeadingSigmaFraction = 0.015f;
+
+        /// <summary>The turn over which <see cref="OdometryHeadingSigmaFraction"/> holds exactly.</summary>
+        public const float OdometryHeadingReferenceDegrees = 360f;
+
+        /// <summary>Carpet slip: the distance error is multiplied by 1 / the floor's ease, but never by more than this.</summary>
+        public const float OdometryMaxSlipFactor = 10f;
 
         /// <summary>Vacuum resistance reading error: standard deviation as a fraction.</summary>
         public const float FloorSensorSigmaFraction = 0.05f;

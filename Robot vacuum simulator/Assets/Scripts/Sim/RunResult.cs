@@ -62,6 +62,12 @@ namespace RobotVacuum.Sim
         public float simulatedSeconds;
         public float realSeconds;
 
+        // SLAM runs: how far the robot's believed pose had drifted from the truth when the run ended. Always 0
+        // in a Normal run, where the believed pose is the true pose.
+        public bool slam;
+        public float driftMeters;
+        public float driftHeadingDegrees;
+
         // Null/empty when a file wasn't produced (e.g. the run failed before
         // completing). heatmapImagePath is the older single-image field and
         // points at the Floor Cleanliness PNG.
