@@ -71,6 +71,9 @@ namespace RobotVacuum.Sim
         public bool showBeliefOverlay;
 
         [Header("Advanced")]
+        [Tooltip("SLAM only: how hard the robot works to correct its position by matching lidar scans to its map. Performance = least CPU, corrects less often; Balanced = the default; Reliable = corrects on every scan, most CPU. Each preset sets the correction rate, the rays used and the search window together.")]
+        public Control.PoseCorrectionQuality slamCorrectionQuality = Control.PoseCorrectionQuality.Balanced;
+
         [Tooltip("Grid cell edge length in metres, shared by both models. 0 = default (SimDefaults.CellSizeMeters, 2 inches).")]
         public float cellSizeMeters;
 

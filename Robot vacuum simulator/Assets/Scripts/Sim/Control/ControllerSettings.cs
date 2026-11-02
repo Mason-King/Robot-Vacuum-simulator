@@ -21,6 +21,9 @@ namespace RobotVacuum.Sim.Control
         /// <summary>The vacuum resistance (floor) sensor on/off.</summary>
         public bool floorSensorEnabled;
 
+        /// <summary>SLAM pose correction preset (CPU vs reliability). Not used in a Normal run.</summary>
+        public PoseCorrectionQuality correctionQuality;
+
         /// <summary>The noise scale a Normal run carries: a constant, never the user's setting.</summary>
         public const float NormalNoiseScale = 0f;
 
@@ -33,6 +36,7 @@ namespace RobotVacuum.Sim.Control
             lidarHalfAngleDegrees = 180f,
             lidarRayCount = Sensors.LidarRayLayout.MaxRays,
             floorSensorEnabled = true,
+            correctionQuality = PoseCorrectionQuality.Balanced,
         };
 
         /// <summary>From already-resolved settings. The noise scale is read only when SLAM is on.</summary>
@@ -49,6 +53,7 @@ namespace RobotVacuum.Sim.Control
                 lidarHalfAngleDegrees = resolved.lidarHalfAngleDegrees,
                 lidarRayCount = resolved.lidarRayCount,
                 floorSensorEnabled = resolved.floorSensorEnabled,
+                correctionQuality = resolved.slamCorrectionQuality,
             };
         }
     }

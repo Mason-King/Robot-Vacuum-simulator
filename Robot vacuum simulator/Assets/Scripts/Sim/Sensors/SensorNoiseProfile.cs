@@ -60,10 +60,10 @@ namespace RobotVacuum.Sim.Sensors
 
         /// <summary>
         /// Heading error: standard deviation as a fraction of the angle turned, measured over
-        /// <see cref="OdometryHeadingReferenceDegrees"/> (one full turn): about 5.4° per full turn, about 17° after
-        /// ten. Heading error is what makes an uncorrected map smear, since every later step is placed along it.
+        /// <see cref="OdometryHeadingReferenceDegrees"/> (one full turn). 0.003 ≈ 1.1° per full turn: a robot with a
+        /// gyro, as real robot vacuums have (Eric's decision, 2026-11-02; it was 0.015 ≈ 5.4° per turn, wheels alone).
         /// </summary>
-        public const float OdometryHeadingSigmaFraction = 0.015f;
+        public const float OdometryHeadingSigmaFraction = 0.003f;
 
         /// <summary>The turn over which <see cref="OdometryHeadingSigmaFraction"/> holds exactly.</summary>
         public const float OdometryHeadingReferenceDegrees = 360f;

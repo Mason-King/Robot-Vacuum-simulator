@@ -18,21 +18,29 @@ namespace RobotVacuum.Sim.Control
     ///   footprint          → cells under the body can't be obstacles; dwell and cleanliness beliefs grow there
     ///
     /// SLAM off: observations are ASSIGNED, except that a preloaded wall is never cleared (see
-    /// <see cref="InternalModelWriter.MarkPermanent"/>). SLAM on: they go through the weighted rule in <see cref="BeliefRules"/>.
-    /// Each branch tests the SLAM bool, never the noise value.
+    /// <see cref="InternalModelWriter.MarkPermanent"/>).
+    /// SLAM on: lidar hits and clear views update the <see cref="EvidenceMap"/> (design doc, section 17), and each
+    /// cell's traversability is read off its evidence score; floor ease and vacuum resistance keep the weighted rule in
+    /// <see cref="BeliefRules"/>. Each branch tests the SLAM bool, never the noise value.
     /// </summary>
     public sealed class ObservationMapper
     {
         readonly InternalModelWriter writer;
         readonly bool slam;
         readonly float cellSize;
+        readonly EvidenceMap evidence;
 
-        public ObservationMapper(InternalModelWriter writer, bool slam)
+        /// <param name="evidenceMap">SLAM only: the evidence map shared with pose correction. Null in SLAM = a private one (tests).</param>
+        public ObservationMapper(InternalModelWriter writer, bool slam, EvidenceMap evidenceMap = null)
         {
             this.writer = writer;
             this.slam = slam;
             cellSize = writer.Grid.CellSizeMeters;
+            if (slam) evidence = evidenceMap ?? new EvidenceMap(writer.Grid.AnchorWorld, cellSize);
         }
+
+        /// <summary>The SLAM evidence map (null in a Normal run).</summary>
+        public EvidenceMap Evidence => evidence;
 
         /// <summary>Applies everything in <paramref name="frame"/>, seen from <paramref name="pose"/>.</summary>
         public void Apply(SensorFrame frame, RobotPose pose)
@@ -47,6 +55,12 @@ namespace RobotVacuum.Sim.Control
 
         void ApplyLidar(SensorFrame frame, RobotPose pose)
         {
+            if (slam)
+            {
+                ApplyLidarEvidence(frame, pose);
+                return;
+            }
+
             var grid = writer.Grid;
             if (!grid.TryWorldToGridIndex(pose.position, out int r0, out int c0)) return;
 
@@ -102,31 +116,87 @@ namespace RobotVacuum.Sim.Control
             }
         }
 
-        void ObserveHit(int row, int col, float range, float maxRange)
-        {
-            if (!slam)
-            {
-                writer.SetTraversability(row, col, 0f);
-                return;
-            }
-
-            float belief = writer.Traversability(row, col);
-            writer.SetTraversability(row, col, BeliefRules.Step(belief, 0f, C.HitAlpha, range, maxRange, snapToZero: true));
-        }
+        // Normal only (SLAM lidar goes through ApplyLidarEvidence).
+        void ObserveHit(int row, int col, float range, float maxRange) => writer.SetTraversability(row, col, 0f);
 
         void ObserveClear(int row, int col, float range, float maxRange)
         {
-            float observed = writer.EaseAt(row, col);
+            if (!writer.IsPermanent(row, col)) writer.SetTraversability(row, col, writer.EaseAt(row, col));
+        }
 
-            if (!slam)
+        // ---- Lidar, SLAM: evidence ---------------------------------------------------------------------------
+
+        /// <summary>
+        /// SLAM: every hit cell is marked first (so this scan never clears a cell it also hit), then each ray is walked:
+        /// clear cells lose evidence (fast within 1 m; never a confirmed wall from further away), the hit cell gains it
+        /// and remembers where the hit landed. Each changed cell's traversability is re-read from its score.
+        /// </summary>
+        void ApplyLidarEvidence(SensorFrame frame, RobotPose pose)
+        {
+            if (!evidence.TryCell(pose.position, out int r0, out int c0)) return;
+
+            evidence.BeginScan();
+            var rays = frame.lidarRays;
+
+            for (int i = 0; i < rays.Count; i++)
             {
-                if (!writer.IsPermanent(row, col)) writer.SetTraversability(row, col, observed);
-                return;
+                if (!rays[i].hit) continue;
+                Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + rays[i].bearing) * rays[i].range;
+                if (evidence.TryCell(end, out int hr, out int hc)) evidence.MarkHit(hr, hc);
             }
 
-            float belief = writer.Traversability(row, col);
-            writer.SetTraversability(row, col, BeliefRules.Step(belief, observed, C.ClearAlpha, range, maxRange, snapToZero: true));
+            for (int i = 0; i < rays.Count; i++)
+            {
+                var ray = rays[i];
+                Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + ray.bearing) * ray.range;
+                if (!evidence.TryCell(end, out int r1, out int c1)) continue;
+                WalkEvidence(r0, c0, r1, c1, ray.range, ray.hit, end);
+            }
         }
+
+        void WalkEvidence(int r0, int c0, int r1, int c1, float range, bool hit, Vector2 end)
+        {
+            int dc = Mathf.Abs(c1 - c0), sc = c0 < c1 ? 1 : -1;
+            int dr = -Mathf.Abs(r1 - r0), sr = r0 < r1 ? 1 : -1;
+            int error = dc + dr;
+
+            int steps = Mathf.Max(dc, -dr);
+            float metersPerStep = steps > 0 ? range / steps : 0f;
+
+            int r = r0, c = c0, step = 0;
+            while (true)
+            {
+                bool last = r == r1 && c == c1;
+
+                if (last && hit)
+                {
+                    evidence.AddHit(r, c, end);
+                    SyncTraversability(r, c);
+                }
+                else if (evidence.Clear(r, c, step * metersPerStep))
+                {
+                    SyncTraversability(r, c);
+                }
+
+                if (last) return;
+
+                int twice = 2 * error;
+                if (twice >= dr)
+                {
+                    error += dr;
+                    c += sc;
+                }
+                if (twice <= dc)
+                {
+                    error += dc;
+                    r += sr;
+                }
+                step++;
+            }
+        }
+
+        void SyncTraversability(int row, int col) =>
+            writer.SetTraversability(row, col, EvidenceMap.Traversability(evidence.Evidence(row, col), writer.EaseAt(row, col)));
 
         // ---- Whisker -------------------------------------------------------------------------------------
 
@@ -137,7 +207,10 @@ namespace RobotVacuum.Sim.Control
             Vector2 contact = pose.position + direction * (frame.bumpDistance + cellSize * 0.25f);
 
             if (writer.Grid.TryWorldToGridIndex(contact, out int row, out int col))
+            {
+                if (slam) evidence.SetCertain(row, col);
                 writer.SetTraversability(row, col, 0f); // certain: set directly in both modes
+            }
         }
 
         void ApplyDrag(SensorFrame frame, RobotPose pose)
@@ -149,6 +222,7 @@ namespace RobotVacuum.Sim.Control
                 : frame.floorEase;
 
             writer.SetEase(row, col, ease);
+            if (slam) evidence.SetFree(row, col); // the robot is standing on it
             if (!writer.IsPermanent(row, col))
                 writer.SetTraversability(row, col, ease); // the robot is standing on it, so it is passable at that ease
         }
@@ -193,8 +267,13 @@ namespace RobotVacuum.Sim.Control
                     float distanceSq = (grid.GridIndexToWorldCenter(row, col) - p).sqrMagnitude;
                     if (distanceSq > coverRadiusSq) continue;
 
-                    if (distanceSq <= solidSq && writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
-                        writer.SetTraversability(row, col, writer.EaseAt(row, col));
+                    if (distanceSq <= solidSq)
+                    {
+                        if (slam && evidence.SetFree(row, col))
+                            writer.SetTraversability(row, col, writer.EaseAt(row, col));
+                        else if (!slam && writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
+                            writer.SetTraversability(row, col, writer.EaseAt(row, col));
+                    }
 
                     float resistance = Mathf.Max(0.01f, writer.Get(row, col).vacuumResistanceBelief);
                     writer.AddDwellAndCleanliness(row, col, dt, dt * vacuumPower / resistance);

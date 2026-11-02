@@ -68,6 +68,18 @@ namespace RobotVacuum.Sim
         public float driftMeters;
         public float driftHeadingDegrees;
 
+        // SLAM pose correction: attempts by outcome, and how many needed the wide search (a real slip).
+        public int poseCorrectionsApplied;
+        public int poseCorrectionsPartial;
+        public int poseCorrectionsTooFewHits;
+        public int poseCorrectionsWeakMatch;
+        public int poseCorrectionsWideSearch;
+
+        // Performance: real milliseconds spent per simulated second on each part of the controller's step.
+        public float msSensingPerSimSecond;
+        public float msPosePerSimSecond;
+        public float msMappingPerSimSecond;
+
         // Null/empty when a file wasn't produced (e.g. the run failed before
         // completing). heatmapImagePath is the older single-image field and
         // points at the Floor Cleanliness PNG.

@@ -12,10 +12,10 @@ namespace RobotVacuum.Sim
     /// only writer to the Internal Model. Every physics step, in this order:
     ///
     ///   1. sense      the sensors measure the world from the TRUE pose (they are physical)
-    ///   2. pose       the believed pose: Normal = the true pose; SLAM = dead reckoning from noisy wheel odometry
-    ///                 (no correction yet: that is slice 3, so in SLAM the believed pose drifts)
+    ///   2. pose       the believed pose: Normal = the true pose; SLAM = dead reckoning from noisy wheel odometry,
+    ///                 then corrected by matching the lidar scan against the evidence map (BEFORE the scan is mapped)
     ///   3. observe    readings become per-cell observations, placed using the BELIEVED pose
-    ///   4. believe    observations are applied to the Internal Model (assigned in Normal, weighted in SLAM)
+    ///   4. believe    observations are applied to the Internal Model (assigned in Normal; evidence counts in SLAM)
     ///   5. goal       every 0.5 s simulated (and at once when a goal ends): report status, ask the algorithm
     ///   6. decide     drive toward the waypoint; local avoidance; recovery
     ///   7. command    forward speed + turn rate to the body (<see cref="VacuumRobot.Command"/>)
@@ -51,6 +51,14 @@ namespace RobotVacuum.Sim
         readonly SensorFrame frame = new SensorFrame();
         readonly OdometrySensor odometry = new OdometrySensor();
         LidarSensor lidar;
+
+        // SLAM only.
+        SlamFrontEnd slamFrontEnd;
+        float startSpinRemaining;
+
+        // Timing (real milliseconds spent, for result.json; reporting only, never read by the simulation).
+        readonly System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
+        double msSensing, msPose, msMapping;
 
         MovementPattern activePattern;
         ICleaningAlgorithm algorithm;
@@ -104,6 +112,14 @@ namespace RobotVacuum.Sim
 
         /// <summary>Difference between the believed and the true heading, degrees (0–180), at the same step. Always 0 in Normal.</summary>
         public float DriftHeadingDegrees => settings.slam ? Mathf.Abs(Mathf.DeltaAngle(believedPose.heading, trueAtBelief.heading)) : 0f;
+
+        /// <summary>SLAM only: pose correction and its evidence map (null in a Normal run).</summary>
+        public SlamFrontEnd SlamCorrection => slamFrontEnd;
+
+        /// <summary>Real milliseconds spent per simulated second on each part of the step (performance read-outs; reporting only).</summary>
+        public float SensingMsPerSimSecond => simTime > 0f ? (float)(msSensing / simTime) : 0f;
+        public float PoseMsPerSimSecond => simTime > 0f ? (float)(msPose / simTime) : 0f;
+        public float MappingMsPerSimSecond => simTime > 0f ? (float)(msMapping / simTime) : 0f;
 
         /// <summary>The lidar as built for this run (null before the run starts), for its range and ray count.</summary>
         public LidarSensor Lidar => lidar;
@@ -168,7 +184,10 @@ namespace RobotVacuum.Sim
 
             writer = new InternalModelWriter(new InternalModelGrid(anchor, cellSize));
             view = new InternalModelView(writer);
-            observations = new ObservationMapper(writer, settings.slam);
+
+            slamFrontEnd = settings.slam ? new SlamFrontEnd(anchor, cellSize, settings.correctionQuality, settings.noiseScale) : null;
+            observations = new ObservationMapper(writer, settings.slam, slamFrontEnd?.Map);
+            msSensing = msPose = msMapping = 0;
 
             if (!settings.slam && level != null)
                 NormalPreload.Run(writer, level, levelRenderer);
@@ -185,6 +204,10 @@ namespace RobotVacuum.Sim
             trueAtBelief = believedPose;
             odometry.Reset(believedPose.position, believedPose.heading);
             view.SetBelievedPose(believedPose);
+
+            // SLAM: start with a full spin in place at the dock, mapping from the one pose known exactly.
+            slamFrontEnd?.Begin(believedPose);
+            startSpinRemaining = settings.slam ? PoseCorrectionConstants.StartSpinDegrees : 0f;
 
             activePattern = robot.Pattern;
             BuildAlgorithm(activePattern);
@@ -248,6 +271,7 @@ namespace RobotVacuum.Sim
             if (Failed) return;
 
             // 1. Sense, from the true pose.
+            stopwatch.Restart();
             frame.Clear();
             bool collided = robot.TakeCollision(out Vector2 contact);
             var context = new SensorContext(body.position, body.rotation, robot.Radius, body, levelRenderer,
@@ -256,20 +280,42 @@ namespace RobotVacuum.Sim
 
             for (int i = 0; i < sensors.Count; i++)
                 if (sensors[i].Enabled) sensors[i].Sense(context, frame);
+            msSensing += stopwatch.Elapsed.TotalMilliseconds;
 
             // 2. Pose. Normal: the believed pose IS the true pose (no odometry, no noise read).
-            //    SLAM: dead reckoning -- the believed pose moves by what the wheels report.
+            //    SLAM: dead reckoning, then the scan is matched against the map BEFORE it is mapped.
+            stopwatch.Restart();
             trueAtBelief = TruePose();
-            believedPose = settings.slam ? DeadReckon() : trueAtBelief;
+            float odometryTurn = 0f;
+            if (settings.slam)
+            {
+                believedPose = DeadReckon(out float odometryForward, out odometryTurn);
+                slamFrontEnd.AddOdometry(odometryForward, odometryTurn);
+                believedPose = slamFrontEnd.Correct(frame, believedPose, simTime, dt);
+            }
+            else
+            {
+                believedPose = trueAtBelief;
+            }
             view.SetBelievedPose(believedPose);
+            msPose += stopwatch.Elapsed.TotalMilliseconds;
 
             // 3 + 4. Observe and believe, placed by the believed pose.
+            stopwatch.Restart();
             observations.Apply(frame, believedPose);
             observations.ApplyFootprint(believedPose, robot.Radius, dt, vacuumPower);
+            msMapping += stopwatch.Elapsed.TotalMilliseconds;
 
             // 5 - 7. Goal, decide, command.
             float forward, turn;
-            if (legacy != null)
+            if (startSpinRemaining > 0f)
+            {
+                // SLAM start: spin in place at the dock before the algorithm takes over.
+                startSpinRemaining -= Mathf.Abs(odometryTurn);
+                forward = 0f;
+                turn = PoseCorrectionConstants.StartSpinDegreesPerSecond;
+            }
+            else if (legacy != null)
             {
                 legacy.Tick(dt, frame.bumped, out forward, out turn);
                 if (legacy.Failed)
@@ -353,14 +399,14 @@ namespace RobotVacuum.Sim
         }
 
         /// <summary>SLAM only: the believed pose moved by this step's (noisy) odometry, integrated along the mid-turn heading.</summary>
-        RobotPose DeadReckon()
+        RobotPose DeadReckon(out float forward, out float turn)
         {
             var truth = TruePose();
             var floor = levelRenderer != null ? levelRenderer.FloorTypeAtWorld(truth.position) : null;
             float ease = floor != null ? floor.speedMultiplier : 1f;
 
             odometry.Measure(truth.position, truth.heading, ease, slam: true, settings.noiseScale, random,
-                out float forward, out float turn);
+                out forward, out turn);
 
             float heading = believedPose.heading + turn;
             Vector2 position = believedPose.position + RobotPose.DirectionOf(believedPose.heading + turn * 0.5f) * forward;

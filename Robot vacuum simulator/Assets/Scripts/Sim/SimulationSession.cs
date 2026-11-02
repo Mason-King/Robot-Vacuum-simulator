@@ -258,6 +258,19 @@ namespace RobotVacuum.Sim
             {
                 result.driftMeters = brain.DriftMeters;
                 result.driftHeadingDegrees = brain.DriftHeadingDegrees;
+                result.msSensingPerSimSecond = brain.SensingMsPerSimSecond;
+                result.msPosePerSimSecond = brain.PoseMsPerSimSecond;
+                result.msMappingPerSimSecond = brain.MappingMsPerSimSecond;
+
+                var correction = brain.SlamCorrection;
+                if (correction != null)
+                {
+                    result.poseCorrectionsApplied = correction.Applied;
+                    result.poseCorrectionsPartial = correction.Partial;
+                    result.poseCorrectionsTooFewHits = correction.TooFewHits;
+                    result.poseCorrectionsWeakMatch = correction.WeakMatch;
+                    result.poseCorrectionsWideSearch = correction.WideSearches;
+                }
             }
 
             // The one moment the live grid still exists: save the model and the three PNGs, then result.json
