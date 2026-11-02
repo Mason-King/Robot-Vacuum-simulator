@@ -9,9 +9,14 @@ using UnityEditor;
 namespace RobotVacuum.Sim
 {
     /// <summary>
-    /// The vacuum's body: drives forward, and when a whisker or a real collision finds something, backs
-    /// off and performs a manoeuvre. Drive speed is scaled by the floor covering beneath it. Where it
-    /// steers is decided by the selected <see cref="MovementPattern"/> (see <see cref="MovementBrain"/>).
+    /// The vacuum's BODY (design doc, section 3). It executes motion commands, owns the physics (rigidbody and
+    /// collider), the speed limits, the floor's speed effect, battery drain from the work actually done, its visuals,
+    /// and its TRUE pose. It decides nothing: <see cref="MovementBrain"/>, the controller on the same object, senses,
+    /// believes and decides, then calls <see cref="Command"/> every physics step.
+    ///
+    /// The true pose (<see cref="Heading"/>, the rigidbody position) is for the sensors, the External Model and
+    /// reporting. The controller's decision logic and the algorithms never read it; they use the believed pose.
+    /// (The legacy reactive patterns are the one exception, which is why they are refused in SLAM runs.)
     /// </summary>
     [ExecuteAlways]
     [RequireComponent(typeof(Rigidbody2D))]
@@ -21,14 +26,7 @@ namespace RobotVacuum.Sim
     {
         const float StalledMovementThreshold = 0.0005f;
         const float StalledTurnThreshold = 0.05f;
-
-        enum State { Driving, Backing, Turning, Shifting }
-
-        struct Step
-        {
-            public bool turn;
-            public float amount; // degrees for a turn, metres for a drive
-        }
+        const float CommandEpsilon = 1e-4f;
 
         [Header("Level")]
         [Tooltip("Left empty, the robot finds the first LevelRenderer in the scene.")]
@@ -44,9 +42,7 @@ namespace RobotVacuum.Sim
         [SerializeField] float reverseSpeed = 0.35f;
         [SerializeField] float turnSpeed = 320f;
 
-        [Tooltip("How far ahead the bump whisker looks, in metres.")]
-        [SerializeField] float lookAhead = 0.09f;
-
+        [Header("Legacy patterns (Spiral, Wall follow, Lawnmower)")]
         [SerializeField] float backupDuration = 0.28f;
         [SerializeField] Vector2 turnAngleRange = new Vector2(70f, 250f);
 
@@ -54,6 +50,7 @@ namespace RobotVacuum.Sim
         [SerializeField] float wanderDegreesPerSecond = 12f;
 
         [Header("Movement")]
+        [Tooltip("The algorithm. The controller (MovementBrain) picks up a change at its next step.")]
         [SerializeField] MovementPattern movementPattern = MovementPattern.RandomBounce;
 
         [Tooltip("Seeds every random choice the vacuum makes. The same seed drives the same route each run.")]
@@ -62,33 +59,34 @@ namespace RobotVacuum.Sim
         Rigidbody2D body;
         CircleCollider2D circle;
         Battery battery;
-        State state = State.Driving;
-        float stateTimer;
-        float targetHeading;
         MovementBrain brain;
-        MovementPattern brainPattern;
 
-        int brainSeed;
-        bool algorithmFailed;
-        float speedScale = 1f;
+        float commandForward;
+        float commandTurn;
+
+        bool collided;
+        Vector2 collisionPoint;
+
         Vector2 batterySamplePosition;
         float batterySampleHeading;
         bool hasBatterySample;
 
-        readonly Queue<Step> steps = new Queue<Step>();
-        readonly RaycastHit2D[] whiskerHits = new RaycastHit2D[8];
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
 
-        /// <summary>Metres driven since the last reset, for coverage read-outs.</summary>
+        /// <summary>Raised at the end of <see cref="ResetToSpawn"/>, once the body is back on its spawn point. The controller starts its run here.</summary>
+        public event System.Action Respawned;
+
+        /// <summary>Metres actually moved since the last reset (forward, reverse or pushed), for coverage read-outs.</summary>
         public float DistanceTravelled { get; private set; }
 
         /// <summary>
-        /// Seconds of simulated time since the last reset, accumulated on the physics step. Brains steer by
-        /// this rather than <see cref="Time.time"/>, which counts from app start and is scaled by run speed.
+        /// Seconds of simulated time since the last reset, accumulated on the physics step while the battery can
+        /// operate. The legacy brains steer by this rather than <see cref="Time.time"/>.
         /// </summary>
         public float SimTime { get; private set; }
 
-        public bool AlgorithmFailed => algorithmFailed;
+        /// <summary>True when the controller stopped because its algorithm failed (the run then ends with an error).</summary>
+        public bool AlgorithmFailed => Brain != null && Brain.Failed;
 
         public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
 
@@ -114,57 +112,46 @@ namespace RobotVacuum.Sim
         public FloorType CurrentFloor =>
             levelRenderer != null ? levelRenderer.FloorTypeAtWorld(WorldPosition) : null;
 
-        /// <summary>The movement algorithm. Switching mid-run carries on from where the robot is.</summary>
+        /// <summary>The movement algorithm. Switching mid-run: the controller carries on from where the robot is.</summary>
         public MovementPattern Pattern
         {
             get => movementPattern;
-            set
-            {
-                if (movementPattern == value) return;
-                movementPattern = value;
-                steps.Clear();
-                state = State.Driving;
-                speedScale = 1f;
-                algorithmFailed = false;
-            }
+            set => movementPattern = value;
         }
 
-        /// <summary>
-        /// Seeds the vacuum's random choices. Setting it starts the algorithm's sequence again, so two runs
-        /// of the same level, pattern and seed take the same route.
-        /// </summary>
+        /// <summary>Seeds the vacuum's random choices. Takes effect at the next <see cref="ResetToSpawn"/>.</summary>
         public int Seed
         {
             get => seed;
-            set
-            {
-                if (seed == value) return;
-                seed = value;
-                brain = null; // rebuilt from the new seed on next use
-            }
+            set => seed = value;
         }
 
         /// <summary>
-        /// The shared random source for this run. SimulationRunner builds ONE of these per run and assigns
-        /// it here, so every subsystem that draws randomness (movement, and eventually sensor noise, debris
-        /// accumulation) pulls from the same instance -- needed for RNG-state snapshot/restore to mean
-        /// anything (SDD 2.9/2.10): a freshly-built same-seed provider always restarts its streams from the
-        /// top, not from wherever a shared instance currently sits.
-        ///
-        /// Left unset, a robot builds its own from <see cref="Seed"/> the first time a brain is needed --
-        /// keeps standalone testing (a VacuumRobot dropped into a scene directly, no SimulationRunner
-        /// involved) working exactly as before.
+        /// The shared random source for this run. SimulationRunner builds ONE of these per run and assigns it here,
+        /// so every subsystem that draws randomness (the algorithm, sensor noise, and eventually debris
+        /// accumulation) pulls from the same instance -- needed for RNG-state snapshot/restore to mean anything
+        /// (SDD 2.9/2.10). <see cref="ResetToSpawn"/> rebuilds it from <see cref="Seed"/>, so a restart repeats the
+        /// run from the top.
         /// </summary>
         public RandomProvider RandomSource { get; set; }
 
-        /// <summary>Multiplies drive speed, so a brain can slow down for careful work. Back to 1 on reset.</summary>
-        public float SpeedScale
+        public LevelData Level => levelRenderer != null ? levelRenderer.Level : null;
+
+        /// <summary>The level as placed in the scene (the sensors and the Normal preload read it).</summary>
+        public LevelRenderer LevelRenderer => levelRenderer;
+
+        /// <summary>The controller on this object, or null (a bare body in a test).</summary>
+        public MovementBrain Brain
         {
-            get => speedScale;
-            set => speedScale = Mathf.Clamp01(value);
+            get
+            {
+                if (brain == null) brain = GetComponent<MovementBrain>();
+                return brain;
+            }
         }
 
-        public LevelData Level => levelRenderer != null ? levelRenderer.Level : null;
+        /// <summary>The physics body. Its position and rotation are the TRUE pose.</summary>
+        public Rigidbody2D Body => body;
 
         /// <summary>
         /// Where the body actually is. The transform is interpolated for smooth drawing, so it trails the
@@ -177,32 +164,6 @@ namespace RobotVacuum.Sim
         public Vector2 LevelPosition =>
             levelRenderer != null ? levelRenderer.WorldToLevel(WorldPosition) : (Vector2)WorldPosition;
 
-        MovementBrain Brain
-        {
-            get
-            {
-                if (brain == null || brainPattern != movementPattern || brainSeed != seed)
-                {
-                    // ??= assigns only if RandomSource is still null -- if SimulationRunner already
-                    // injected one, this does nothing; if nobody did (standalone testing), it builds one
-                    // from the local seed so the robot still works on its own.
-                    RandomSource ??= new RandomProvider((uint)seed);
-
-                    var replacement = MovementBrain.Create(movementPattern, RandomSource);
-                    if (!MovementBrainExecution.TryReset(replacement, this, out string failure))
-                    {
-                        FailAlgorithm($"Reset failed: {failure}");
-                        return null;
-                    }
-
-                    brain = replacement;
-                    brainPattern = movementPattern;
-                    brainSeed = seed;
-                }
-                return brain;
-            }
-        }
-
         public float Radius => radius;
 
         /// <summary>Width of floor cleaned in one pass, in metres.</summary>
@@ -210,11 +171,15 @@ namespace RobotVacuum.Sim
 
         public Vector2 TurnAngleRange => turnAngleRange;
         public float WanderDegreesPerSecond => wanderDegreesPerSecond;
+        public float BackupDuration => backupDuration;
 
-        /// <summary>Forward speed on the floor it is on now, in metres per second.</summary>
-        public float DriveSpeedNow => driveSpeed * SurfaceSpeedMultiplier() * speedScale;
+        /// <summary>True while the battery has charge to move.</summary>
+        public bool CanOperate => battery != null && battery.CanOperate;
 
-        /// <summary>Facing, in degrees counter-clockwise; 0 faces +y.</summary>
+        /// <summary>Forward speed limit on the floor it is on now, in metres per second.</summary>
+        public float DriveSpeedNow => driveSpeed * SurfaceSpeedMultiplier();
+
+        /// <summary>TRUE facing, in degrees counter-clockwise; 0 faces +y.</summary>
         public float Heading => body != null ? body.rotation : transform.eulerAngles.z;
 
         public Vector2 Forward
@@ -256,6 +221,11 @@ namespace RobotVacuum.Sim
             if (levelRenderer == null)
                 levelRenderer = FindAnyObjectByType<LevelRenderer>(FindObjectsInactive.Include);
 
+            // Every running body gets a controller. Added here, not with RequireComponent, so a bare body in an
+            // edit-mode test stays bare, and the two components don't require each other in a loop.
+            if (Application.isPlaying && GetComponent<MovementBrain>() == null)
+                brain = gameObject.AddComponent<MovementBrain>();
+
             ResetBatteryMotionSample();
         }
 
@@ -294,19 +264,45 @@ namespace RobotVacuum.Sim
             if (circle != null) circle.radius = radius;
         }
 
+        // ---------------------------------------------------------------- commands
+
+        /// <summary>
+        /// What to do on this physics step: forward speed in m/s (negative = reverse) and turn rate in deg/s
+        /// (positive = left). Clamped to [-reverse speed, drive speed × the floor's speed multiplier] and
+        /// [-turn speed, turn speed]. Applied once, on this step's FixedUpdate, then cleared: a body that is not
+        /// commanded again stops. Nothing moves when the battery is empty.
+        /// </summary>
+        public void Command(float forwardMetersPerSecond, float turnDegreesPerSecond)
+        {
+            commandForward = IsFinite(forwardMetersPerSecond) ? forwardMetersPerSecond : 0f;
+            commandTurn = IsFinite(turnDegreesPerSecond) ? turnDegreesPerSecond : 0f;
+        }
+
+        /// <summary>
+        /// Hands over (and clears) the collision the body had since the controller last asked. Collisions are
+        /// reported by physics after a step, so the controller reads them at the start of the next.
+        /// </summary>
+        public bool TakeCollision(out Vector2 point)
+        {
+            point = collisionPoint;
+            bool result = collided;
+            collided = false;
+            return result;
+        }
+
         // ---------------------------------------------------------------- behaviour
 
         void FixedUpdate()
         {
             if (!Application.isPlaying || body == null) return;
 
+            // The work done by the last step's motion is paid for before this step's command is applied.
             ConsumeCompletedWork();
 
-            if (algorithmFailed)
-            {
-                body.linearVelocity = Vector2.zero;
-                return;
-            }
+            float forward = commandForward;
+            float turn = commandTurn;
+            commandForward = 0f;
+            commandTurn = 0f;
 
             if (!battery.CanOperate)
             {
@@ -317,28 +313,18 @@ namespace RobotVacuum.Sim
             float dt = Time.fixedDeltaTime;
             SimTime += dt;
 
-            switch (state)
-            {
-                case State.Driving:
-                    Drive(dt);
-                    break;
+            forward = Mathf.Clamp(forward, -reverseSpeed, DriveSpeedNow);
+            turn = Mathf.Clamp(turn, -turnSpeed, turnSpeed);
 
-                case State.Backing:
-                    body.linearVelocity = -Forward * reverseSpeed;
-                    if ((stateTimer -= dt) <= 0f) NextStep();
-                    break;
+            body.linearVelocity = Forward * forward;
+            if (Mathf.Abs(turn) > CommandEpsilon) body.MoveRotation(body.rotation + turn * dt);
 
-                case State.Turning:
-                    body.linearVelocity = Vector2.zero;
-                    TurnTowardsTarget(dt);
-                    break;
-
-                case State.Shifting:
-                    Shift(dt);
-                    break;
-            }
-
+            lastForward = forward;
+            lastTurn = turn;
         }
+
+        float lastForward;
+        float lastTurn;
 
         void ConsumeCompletedWork()
         {
@@ -353,6 +339,7 @@ namespace RobotVacuum.Sim
                 FloorType floor = levelRenderer != null ? levelRenderer.FloorTypeAtWorld(midpoint) : null;
                 float surfaceMultiplier = floor != null ? floor.energyCostMultiplier : 1f;
                 battery.ConsumeWork(distance, turn, surfaceMultiplier);
+                DistanceTravelled += distance;
 
                 if (IsMotionStalled(distance, turn)) battery.ConsumeStalledTime(Time.fixedDeltaTime);
             }
@@ -362,21 +349,12 @@ namespace RobotVacuum.Sim
             hasBatterySample = true;
         }
 
+        /// <summary>Commanded to move on the last step, but didn't (pushing against something): the motors still draw power.</summary>
         bool IsMotionStalled(float distance, float turn)
         {
-            if (state == State.Turning)
-                return turnSpeed > 0f && Mathf.Abs(Mathf.DeltaAngle(body.rotation, targetHeading)) > 1f &&
-                       turn < StalledTurnThreshold;
-
-            float expectedSpeed = state switch
-            {
-                State.Driving => DriveSpeedNow,
-                State.Backing => reverseSpeed,
-                State.Shifting => DriveSpeedNow,
-                _ => 0f,
-            };
-
-            return expectedSpeed > 0f && distance < StalledMovementThreshold;
+            if (Mathf.Abs(lastForward) > CommandEpsilon) return distance < StalledMovementThreshold;
+            if (Mathf.Abs(lastTurn) > CommandEpsilon) return turn < StalledTurnThreshold;
+            return false;
         }
 
         void ResetBatteryMotionSample()
@@ -386,33 +364,8 @@ namespace RobotVacuum.Sim
             batterySamplePosition = body.position;
             batterySampleHeading = body.rotation;
             hasBatterySample = true;
-        }
-
-        void Drive(float dt)
-        {
-            float speed = DriveSpeedNow;
-            body.linearVelocity = Forward * speed;
-            DistanceTravelled += speed * dt;
-
-            if (!MovementBrainExecution.TrySteer(Brain, this, dt, out float steer, out string failure))
-            {
-                FailAlgorithm($"Steering failed: {failure}");
-                return;
-            }
-
-            if (steer != 0f) body.MoveRotation(body.rotation + steer * dt);
-
-            if (WhiskerBlocked()) BeginBackup();
-        }
-
-        /// <summary>A set-distance drive inside a manoeuvre, such as stepping over to the next lawnmower lane.</summary>
-        void Shift(float dt)
-        {
-            float speed = DriveSpeedNow;
-            body.linearVelocity = Forward * speed;
-            DistanceTravelled += speed * dt;
-
-            if ((stateTimer -= speed * dt) <= 0f || WhiskerBlocked()) NextStep();
+            lastForward = 0f;
+            lastTurn = 0f;
         }
 
         float SurfaceSpeedMultiplier()
@@ -421,26 +374,10 @@ namespace RobotVacuum.Sim
             return floor != null ? floor.speedMultiplier : 1f;
         }
 
-        bool WhiskerBlocked()
-        {
-            var filter = ContactFilter2D.noFilter;
-            filter.useTriggers = false;
-
-            int count = Physics2D.CircleCast(
-                body.position, radius * 0.95f, Forward, filter, whiskerHits, lookAhead);
-
-            for (int i = 0; i < count; i++)
-            {
-                var hit = whiskerHits[i];
-                if (hit.collider == null || hit.collider.attachedRigidbody == body) continue;
-                return true;
-            }
-            return false;
-        }
-
         /// <summary>
-        /// Distance from the robot's edge to the nearest wall or furniture along <paramref name="direction"/>,
-        /// or positive infinity when nothing is within <paramref name="maxDistance"/>.
+        /// LEGACY PATTERNS ONLY (Wall follow): distance from the robot's edge to the nearest wall or furniture along
+        /// <paramref name="direction"/>, or positive infinity when nothing is within <paramref name="maxDistance"/>.
+        /// It probes the TRUE world, which is why those patterns are refused in SLAM runs.
         /// </summary>
         public float ProbeDistance(Vector2 direction, float maxDistance)
         {
@@ -466,113 +403,47 @@ namespace RobotVacuum.Sim
         {
             if (!Application.isPlaying) return;
 
-            if (state == State.Driving) BeginBackup();
-            else if (state == State.Shifting) NextStep();
+            collided = true;
+            collisionPoint = collision.contactCount > 0 ? collision.GetContact(0).point : (Vector2)collision.transform.position;
         }
 
-        void BeginBackup()
-        {
-            state = State.Backing;
-            stateTimer = backupDuration;
-
-            if (!MovementBrainExecution.TryAfterBump(Brain, this, out var manoeuvre, out string failure))
-            {
-                FailAlgorithm($"Bump handling failed: {failure}");
-                return;
-            }
-
-            steps.Clear();
-            steps.Enqueue(new Step { turn = true, amount = manoeuvre.turn });
-
-            if (manoeuvre.driveAfter > 0f)
-            {
-                steps.Enqueue(new Step { turn = false, amount = manoeuvre.driveAfter });
-                steps.Enqueue(new Step { turn = true, amount = manoeuvre.turnAfter });
-            }
-        }
-
-        void NextStep()
-        {
-            if (steps.Count == 0)
-            {
-                state = State.Driving;
-                return;
-            }
-
-            var step = steps.Dequeue();
-            if (step.turn)
-            {
-                state = State.Turning;
-                targetHeading = body.rotation + step.amount;
-            }
-            else
-            {
-                state = State.Shifting;
-                stateTimer = step.amount;
-            }
-        }
-
-        void FailAlgorithm(string failure)
-        {
-            if (algorithmFailed) return;
-
-            algorithmFailed = true;
-            state = State.Driving;
-            steps.Clear();
-            speedScale = 0f;
-            if (body != null) body.linearVelocity = Vector2.zero;
-            Debug.LogError($"Movement algorithm '{movementPattern}' stopped: {failure}", this);
-        }
-
-        void TurnTowardsTarget(float dt)
-        {
-            float next = Mathf.MoveTowardsAngle(body.rotation, targetHeading, turnSpeed * dt);
-            body.MoveRotation(next);
-
-            if (Mathf.Abs(Mathf.DeltaAngle(next, targetHeading)) < 1f) NextStep();
-        }
-
-        /// <summary>Drops the robot back on the level's spawn point, clears its odometer and restarts its algorithm.</summary>
+        /// <summary>Drops the robot back on the level's spawn point, clears its odometer, and tells the controller to start its run again.</summary>
         public void ResetToSpawn()
         {
-            steps.Clear();
-            state = State.Driving;
-            algorithmFailed = false;
-            speedScale = 1f;
             SimTime = 0f;
+            commandForward = 0f;
+            commandTurn = 0f;
+            collided = false;
 
             // Back to the same random sequence, so a repeat of a run matches it step for step. A fresh
             // RandomProvider from the same seed reproduces the same per-subsystem streams from the top --
-            // see VacuumRobot.RandomSource's doc comment for why this has to be a real rebuild, not just
-            // telling the existing shared instance to rewind.
+            // see RandomSource's doc comment for why this has to be a real rebuild, not just telling the
+            // existing shared instance to rewind.
             RandomSource = new RandomProvider((uint)seed);
-            var activeBrain = Brain;
-            if (activeBrain == null) return; // creation failed and was already reported
-            activeBrain.AssignRandomSource(RandomSource);
-            if (!MovementBrainExecution.TryReset(activeBrain, this, out string failure))
+
+            if (levelRenderer != null && levelRenderer.Level != null)
             {
-                FailAlgorithm($"Reset failed: {failure}");
-                return;
+                transform.position = levelRenderer.LevelToWorld(
+                    levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
+
+                DistanceTravelled = 0f;
+                battery.ResetCharge();
+
+                if (body != null)
+                {
+                    // Move the body itself, and face the same way every time: the transform alone would leave
+                    // the first physics step starting from wherever the last run happened to end up.
+                    body.position = transform.position;
+                    body.rotation = 0f;
+                    body.linearVelocity = Vector2.zero;
+                }
+                ResetBatteryMotionSample();
             }
 
-            if (levelRenderer == null || levelRenderer.Level == null) return;
-
-            transform.position = levelRenderer.LevelToWorld(
-                levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
-
-            DistanceTravelled = 0f;
-            battery.ResetCharge();
-
-            if (body != null)
-            {
-                // Move the body itself, and face the same way every time: the transform alone would leave
-                // the first physics step starting from wherever the last run happened to end up.
-                body.position = transform.position;
-                body.rotation = 0f;
-                body.linearVelocity = Vector2.zero;
-            }
-            ResetBatteryMotionSample();
+            Respawned?.Invoke();
         }
+
+        static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
         // ---------------------------------------------------------------- visual
 

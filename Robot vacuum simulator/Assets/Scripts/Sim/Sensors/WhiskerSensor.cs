@@ -34,6 +34,7 @@ namespace RobotVacuum.Sim.Sensors
             {
                 frame.bumped = true;
                 frame.bumpBearing = BearingTo(context, context.collisionPoint);
+                frame.bumpDistance = Vector2.Distance(context.truePosition, context.collisionPoint);
                 return;
             }
 
@@ -52,6 +53,7 @@ namespace RobotVacuum.Sim.Sensors
 
                 frame.bumped = true;
                 frame.bumpBearing = BearingTo(context, hit.point);
+                frame.bumpDistance = Vector2.Distance(context.truePosition, hit.point);
                 return;
             }
         }

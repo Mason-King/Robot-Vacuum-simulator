@@ -63,6 +63,10 @@ namespace RobotVacuum.Sim
         [Tooltip("Number of lidar rays, 8–360, used exactly as set. One ray always points straight ahead. Lower it if 360 is too slow; a warning appears if the rays are packed closer than the grid can use.")]
         public int lidarRayCount = 360;
 
+        [Header("Debug")]
+        [Tooltip("Draws what the robot believes (its Internal Model, believed position and current waypoint) over the floor. Graphics runs only. Can also be switched during a run on the 'Belief Overlay (debug)' object.")]
+        public bool showBeliefOverlay;
+
         [Header("Advanced")]
         [Tooltip("Grid cell edge length in metres, shared by both models. 0 = default (SimDefaults.CellSizeMeters, 2 inches).")]
         public float cellSizeMeters;

@@ -19,8 +19,8 @@ namespace RobotVacuum.Sim.Sensors
     /// </summary>
     public sealed class LidarSensor : IRobotSensor
     {
-        /// <summary>Scans per simulated second. Starting value, to be tuned by testing (CPU vs map freshness).</summary>
-        public const float ScanRateHz = 10f;
+        /// <summary>Scans per simulated second. Starting value, to be tuned by testing (CPU vs map freshness). Set in ControllerConstants.</summary>
+        public const float ScanRateHz = Control.ControllerConstants.LidarScanRateHz;
 
         /// <summary>The shortest range the lidar can be set to, metres.</summary>
         public const float MinRangeMeters = 0.2f;

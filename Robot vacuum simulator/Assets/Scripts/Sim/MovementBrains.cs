@@ -2,6 +2,20 @@ using System.Collections.Generic;
 using RobotVacuum.Level;
 using UnityEngine;
 
+// ============================================================================================================
+// LEGACY REACTIVE PATTERNS (Spiral, Wall follow, Lawnmower).
+//
+// These are the original movement brains, kept working on the controller branch until the four intelligent
+// algorithms replace them. They are no longer "the brain": MovementBrain (MovementBrain.cs) is now the
+// controller, and it runs these through LegacyPatternDriver (Control/LegacyPatternDriver.cs), which turns
+// their steer / after-bump answers into commands for the body.
+//
+// They steer by probing the TRUE world (VacuumRobot.ProbeDistance) and the true heading, so they cannot run with
+// SLAM on; a SLAM run with one of them is refused at start (AlgorithmCatalog.SlamRefusal).
+//
+// RandomBounce is no longer here: it is now a goal-picking algorithm (Control/RandomBounceAlgorithm.cs).
+// ============================================================================================================
+
 namespace RobotVacuum.Sim
 {
     /// <summary>How the vacuum chooses where to go. The order matches <see cref="MovementBrain.Labels"/>.</summary>
@@ -26,13 +40,11 @@ namespace RobotVacuum.Sim
     }
 
     /// <summary>
-    /// A movement algorithm. <see cref="VacuumRobot"/> does the driving, backing off and turning; a brain
-    /// only decides how to steer while driving freely and what to do after each bump.
+    /// A legacy reactive pattern. <see cref="Control.LegacyPatternDriver"/> does the driving, backing off and
+    /// turning; a brain only decides how to steer while driving freely and what to do after each bump.
     /// </summary>
-    public abstract class MovementBrain
+    public abstract class LegacyPatternBrain
     {
-        public static readonly string[] Labels = { "Random", "Spiral", "Wall follow", "Lawnmower" };
-
         /// <summary>
         /// Where every random choice a brain makes comes from. Shared with the rest of the run (assigned by
         /// <see cref="AssignRandomSource"/>, not owned here) so the same seed always steers the same way --
@@ -44,17 +56,18 @@ namespace RobotVacuum.Sim
         /// <summary>Offset into the wander noise, so runs with different seeds drift apart from the first step.</summary>
         float wanderPhase;
 
-        public static MovementBrain Create(MovementPattern pattern, RandomProvider randomSource)
+        /// <summary>The legacy brain for a pattern, or null for one that is not a legacy pattern (RandomBounce).</summary>
+        public static LegacyPatternBrain Create(MovementPattern pattern, RandomProvider randomSource)
         {
-            MovementBrain brain = pattern switch
+            LegacyPatternBrain brain = pattern switch
             {
                 MovementPattern.Spiral => new SpiralBrain(),
                 MovementPattern.WallFollow => new WallFollowBrain(),
                 MovementPattern.Lawnmower => new LawnmowerBrain(),
-                _ => new RandomBounceBrain(),
+                _ => null,
             };
 
-            brain.AssignRandomSource(randomSource);
+            brain?.AssignRandomSource(randomSource);
             return brain;
         }
 
@@ -89,13 +102,13 @@ namespace RobotVacuum.Sim
             (Mathf.PerlinNoise(wanderPhase + robot.SimTime * 0.35f, 0f) - 0.5f) * 2f * robot.WanderDegreesPerSecond;
     }
 
-    public static class MovementBrainExecution
+    public static class LegacyPatternExecution
     {
         const float MaxSteeringDegreesPerSecond = 360f;
         const float MaxTurnDegrees = 360f;
         const float MaxDriveDistance = 100f;
 
-        public static bool TryReset(MovementBrain brain, VacuumRobot robot, out string failure)
+        public static bool TryReset(LegacyPatternBrain brain, VacuumRobot robot, out string failure)
         {
             failure = null;
             try
@@ -110,7 +123,7 @@ namespace RobotVacuum.Sim
             }
         }
 
-        public static bool TrySteer(MovementBrain brain, VacuumRobot robot, float dt, out float steering, out string failure)
+        public static bool TrySteer(LegacyPatternBrain brain, VacuumRobot robot, float dt, out float steering, out string failure)
         {
             steering = 0f;
             failure = null;
@@ -129,7 +142,7 @@ namespace RobotVacuum.Sim
             return false;
         }
 
-        public static bool TryAfterBump(MovementBrain brain, VacuumRobot robot, out Manoeuvre manoeuvre, out string failure)
+        public static bool TryAfterBump(LegacyPatternBrain brain, VacuumRobot robot, out Manoeuvre manoeuvre, out string failure)
         {
             manoeuvre = default;
             failure = null;
@@ -153,19 +166,11 @@ namespace RobotVacuum.Sim
         static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
-    /// <summary>Straight runs with a slight drift and a random turn at every bump. Simple, thorough eventually, wasteful.</summary>
-    public sealed class RandomBounceBrain : MovementBrain
-    {
-        public override float Steer(VacuumRobot robot, float dt) => Wander(robot);
-
-        public override Manoeuvre AfterBump(VacuumRobot robot) => new Manoeuvre(RandomTurn(robot));
-    }
-
     /// <summary>
     /// Spirals outward from wherever it is, each loop one cleaning width wider than the last. A bump or an
     /// oversized spiral switches to random bouncing for a while, then a fresh spiral starts.
     /// </summary>
-    public sealed class SpiralBrain : MovementBrain
+    public sealed class SpiralBrain : LegacyPatternBrain
     {
         public const float StartRadius = 0.15f;
         public const float MaxRadius = 2.5f;
@@ -211,7 +216,7 @@ namespace RobotVacuum.Sim
     /// Drives until it finds a wall, then keeps it on its right, hugging walls and furniture edges all the
     /// way round. Covers perimeters and skirting well; leaves open floor untouched.
     /// </summary>
-    public sealed class WallFollowBrain : MovementBrain
+    public sealed class WallFollowBrain : LegacyPatternBrain
     {
         /// <summary>The gap it tries to keep between its edge and the wall, in metres.</summary>
         public const float Gap = 0.05f;
@@ -270,7 +275,7 @@ namespace RobotVacuum.Sim
     /// Back-and-forth lanes: at each end it turns, steps over by slightly less than one cleaning width, and
     /// turns again, alternating sides. Efficient in open rectangular rooms, awkward around clutter.
     /// </summary>
-    public sealed class LawnmowerBrain : MovementBrain
+    public sealed class LawnmowerBrain : LegacyPatternBrain
     {
         public const float LaneOverlap = 0.9f;
 

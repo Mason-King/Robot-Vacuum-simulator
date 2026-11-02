@@ -126,6 +126,9 @@ namespace RobotVacuum.Sim.Sensors
         /// <summary>Direction of the contact in the robot's frame: degrees CCW from straight ahead. Valid only when <see cref="bumped"/>.</summary>
         public float bumpBearing;
 
+        /// <summary>Distance from the robot's centre to the contact point, metres. Valid only when <see cref="bumped"/>.</summary>
+        public float bumpDistance;
+
         /// <summary>
         /// How easily the floor under the robot lets it move, as felt through the drive: 1 = normal, lower =
         /// harder (carpet). Noisy with SLAM on.
@@ -142,6 +145,7 @@ namespace RobotVacuum.Sim.Sensors
             lidarRange = 0f;
             bumped = false;
             bumpBearing = 0f;
+            bumpDistance = 0f;
             floorEase = 1f;
             // cliffPoints.Clear();
         }
