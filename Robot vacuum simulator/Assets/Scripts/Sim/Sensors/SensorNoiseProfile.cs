@@ -1,0 +1,58 @@
+namespace RobotVacuum.Sim.Sensors
+{
+    /// <summary>
+    /// EVERY SENSOR ERROR SIZE LIVES IN THIS ONE FILE. These are the errors of a realistic budget robot at a
+    /// noise scale of 1. The run's single user-facing noise scale multiplies all of them, so 0 = perfect
+    /// readings, 1 = this profile, 2 = twice as bad.
+    ///
+    /// Noise is applied ONLY when the run has SLAM on. With SLAM off, sensors use exact readings and never
+    /// read the noise scale. (SLAM on with a noise scale of 0 still runs the noisy code path, with zero error.)
+    ///
+    /// Starting values, to be tuned by testing.
+    /// </summary>
+    public static class SensorNoiseProfile
+    {
+        // ---- Lidar ----------------------------------------------------------------------------------------
+
+        /// <summary>Range error that doesn't depend on distance: standard deviation, metres.</summary>
+        public const float LidarRangeSigmaMeters = 0.01f;
+
+        /// <summary>Range error proportional to distance: standard deviation as a fraction of the range (0.01 = 1%).</summary>
+        public const float LidarRangeSigmaFraction = 0.01f;
+
+        /// <summary>
+        /// Beam direction error: standard deviation, degrees. The sideways error this causes grows with
+        /// distance (about 0.9 cm at 1 m, about 7 cm at 8 m at 0.5°).
+        /// </summary>
+        public const float LidarBearingSigmaDegrees = 0.5f;
+
+        /// <summary>Chance a ray returns nothing at 1 m or closer (0.01 = 1%).</summary>
+        public const float LidarMissChanceAtOneMeter = 0.01f;
+
+        /// <summary>
+        /// Extra miss chance per metre beyond 1 m, by ABSOLUTE distance (not relative to the lidar's maximum
+        /// range), so a longer-range lidar misses more at its far edge than a shorter one does at its own.
+        /// 0.0114 gives about 9% at 8 m and about 16% at 15 m.
+        /// </summary>
+        public const float LidarMissChancePerMeter = 0.0114f;
+
+        /// <summary>The miss chance never exceeds this, whatever the distance or noise scale.</summary>
+        public const float LidarMissChanceCap = 0.5f;
+
+        // ---- Whisker --------------------------------------------------------------------------------------
+
+        /// <summary>Error in the felt floor drag (ease): standard deviation as a fraction (0.05 = 5%). Bumps are never noisy.</summary>
+        public const float WhiskerDragSigmaFraction = 0.05f;
+
+        // ---- Odometry and the vacuum resistance sensor (slice 2) -------------------------------------------
+
+        /// <summary>Distance error: standard deviation as a fraction of the distance driven.</summary>
+        public const float OdometryDistanceSigmaFraction = 0.015f;
+
+        /// <summary>Heading error: standard deviation as a fraction of the angle turned.</summary>
+        public const float OdometryHeadingSigmaFraction = 0.015f;
+
+        /// <summary>Vacuum resistance reading error: standard deviation as a fraction.</summary>
+        public const float FloorSensorSigmaFraction = 0.05f;
+    }
+}

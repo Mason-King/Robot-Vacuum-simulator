@@ -56,6 +56,22 @@ public class RandomProvider
         return handle.Rng.NextFloat(min, max);
     }
 
+    /// <summary>
+    /// Draw from a normal (Gaussian) distribution with the given mean and standard deviation, from the given
+    /// subsystem's stream. Box–Muller transform on two uniform draws. Always consumes exactly two draws, so
+    /// the stream stays in step however the result is used, and no extra state is kept between calls (the
+    /// snapshot below stays one integer per subsystem).
+    /// </summary>
+    public double NextGaussian(Subsystem subsystem, double mean = 0.0, double standardDeviation = 1.0)
+    {
+        double u1 = NextDouble(subsystem);
+        double u2 = NextDouble(subsystem);
+
+        // u1 is in [0,1); 1 - u1 is in (0,1], so the log is always finite.
+        double magnitude = Math.Sqrt(-2.0 * Math.Log(1.0 - u1));
+        return mean + standardDeviation * magnitude * Math.Cos(2.0 * Math.PI * u2);
+    }
+
     // --- Snapshot / restore for replay and telemetry sampling ---
     // Random's entire state is a single uint, so this is trivially cheap —
     // no serialization, just copying/restoring one integer per subsystem.

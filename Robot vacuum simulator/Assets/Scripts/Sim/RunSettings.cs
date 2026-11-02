@@ -44,12 +44,34 @@ namespace RobotVacuum.Sim
         [Tooltip("Battery capacity in work units. 0 = the battery's own default.")]
         public float batteryCapacity;
 
+        [Header("Sensing")]
+        [Tooltip("SLAM on: the robot starts with no map, its sensors and odometry are noisy, and it must build its map and track its own position. SLAM off (Normal): the map is preloaded and readings are exact.")]
+        public bool slam;
+
+        [Tooltip("How noisy the sensors are in a SLAM run: 0 = perfect, 1 = a realistic budget robot, higher = worse (max 10). Used ONLY when SLAM is on; a Normal run never reads it. Unlike most settings here, 0 is a real value, not 'default'.")]
+        public float noiseScale = 1f;
+
+        [Tooltip("Lidar on/off. Off = the robot senses by whisker only.")]
+        public bool lidarEnabled = true;
+
+        [Tooltip("Lidar maximum range in metres. 0 = default (8 m). Never below 0.2 m.")]
+        public float lidarRangeMeters;
+
+        [Tooltip("Lidar view half-angle in degrees, measured from straight ahead and spread equally to both sides: 180 = full circle, 0 = no rays (whisker only). Clamped to 0–180. Unlike most settings here, 0 is a real value.")]
+        public float lidarHalfAngleDegrees = 180f;
+
+        [Tooltip("Number of lidar rays, 8–360, used exactly as set. One ray always points straight ahead. Lower it if 360 is too slow; a warning appears if the rays are packed closer than the grid can use.")]
+        public int lidarRayCount = 360;
+
         [Header("Advanced")]
         [Tooltip("Grid cell edge length in metres, shared by both models. 0 = default (SimDefaults.CellSizeMeters, 2 inches).")]
         public float cellSizeMeters;
 
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
+
+        /// <summary>The highest noise scale allowed.</summary>
+        public const float MaxNoiseScale = 10f;
 
         /// <summary>True for a number the caller actually set.</summary>
         public static bool IsSet(float value) => value > 0f;
@@ -74,6 +96,15 @@ namespace RobotVacuum.Sim
             if (!IsSet(resolved.targetMaxClean)) resolved.targetMaxClean = HeatmapDefaults.TargetMaxClean;
             if (!IsSet(resolved.cellSizeMeters)) resolved.cellSizeMeters = SimDefaults.CellSizeMeters;
             if (!IsSet(resolved.vacuumPower)) resolved.vacuumPower = HeatmapDefaults.BaseVacuumPower;
+
+            // Sensing. The noise scale is touched ONLY when SLAM is on (clamped to 0–MaxNoiseScale). In a Normal
+            // run it is neither read nor changed: it is recorded exactly as set, and nothing uses it.
+            if (resolved.slam)
+                resolved.noiseScale = float.IsNaN(resolved.noiseScale) ? 1f : Mathf.Clamp(resolved.noiseScale, 0f, MaxNoiseScale);
+            if (!IsSet(resolved.lidarRangeMeters)) resolved.lidarRangeMeters = Sensors.LidarSensor.DefaultRangeMeters;
+            resolved.lidarRangeMeters = Mathf.Max(Sensors.LidarSensor.MinRangeMeters, resolved.lidarRangeMeters);
+            resolved.lidarHalfAngleDegrees = Sensors.LidarRayLayout.ClampHalfAngle(resolved.lidarHalfAngleDegrees);
+            resolved.lidarRayCount = Sensors.LidarRayLayout.ClampCount(resolved.lidarRayCount);
 
             return resolved;
         }
