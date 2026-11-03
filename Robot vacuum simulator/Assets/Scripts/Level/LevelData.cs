@@ -20,6 +20,10 @@ namespace RobotVacuum.Level
         [Tooltip("Index into the level's floor palette.")]
         public int floorIndex;
 
+        [Tooltip("Floor covering by name, used only in exported files so they read without the palette. " +
+                 "When set on import it wins over floorIndex.")]
+        public string floor;
+
         [Tooltip("Room rotation in degrees, used by the editor's rotation controls.")]
         public float rotation;
 

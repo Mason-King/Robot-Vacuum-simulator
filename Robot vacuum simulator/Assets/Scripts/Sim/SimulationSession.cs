@@ -49,7 +49,16 @@ namespace RobotVacuum.Sim
         /// couldn't be built.
         /// </summary>
         public static bool TryStart(LevelData level, RunSettings settings, bool headless,
-            out SimulationSession session, out string error)
+            out SimulationSession session, out string error) =>
+            TryStart(level, settings, headless, null, out session, out error);
+
+        /// <summary>
+        /// As above, and calls <paramref name="runBegan"/> each time a run has been built and is about to
+        /// move: the first run and every <see cref="Restart"/>. Use it to adjust the fresh robot or attach a
+        /// recorder; it is called before the first physics step.
+        /// </summary>
+        public static bool TryStart(LevelData level, RunSettings settings, bool headless,
+            Action<SimulationSession> runBegan, out SimulationSession session, out string error)
         {
             session = null;
 
@@ -65,7 +74,7 @@ namespace RobotVacuum.Sim
                 return false;
             }
 
-            var created = new SimulationSession(level, settings ?? new RunSettings(), headless);
+            var created = new SimulationSession(level, settings ?? new RunSettings(), headless) { runBegan = runBegan };
             if (!created.BeginRun(out error))
             {
                 created.State = Phase.Closed;
@@ -81,6 +90,7 @@ namespace RobotVacuum.Sim
         readonly float savedTimeScale;
         readonly float savedMaximumDeltaTime;
         SessionClock clock;
+        Action<SimulationSession> runBegan;
 
         SimulationSession(LevelData level, RunSettings requested, bool headless)
         {
@@ -194,6 +204,7 @@ namespace RobotVacuum.Sim
                 if (Headless) SimulationSpeed.Apply(HeadlessTimeScale, savedMaximumDeltaTime);
 
                 State = Phase.Running;
+                runBegan?.Invoke(this);
                 error = null;
                 return true;
             }

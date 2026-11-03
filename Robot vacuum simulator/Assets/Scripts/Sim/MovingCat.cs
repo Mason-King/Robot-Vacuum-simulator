@@ -25,17 +25,23 @@ namespace RobotVacuum.Sim
             new Vector2(0.04f, -0.19f), new Vector2(-0.04f, -0.19f),
         };
         Rigidbody2D body;
+        Vector2 spawnPosition;
         Vector2 direction;
         Vector2 target;
         Rect bounds;
         float behaviorTimer;
         float startleTimer;
-        System.Random random;
+        Unity.Mathematics.Random random;   // fully qualified: `Random` is ambiguous with UnityEngine
+        uint seed;
+        bool initialized;
         VacuumRobot vacuum;
         Mesh[] catMeshes;
         Material[] catMaterials;
 
         public Vector2 Direction => direction;
+
+        /// <summary>The seed this cat's random sequence starts from.</summary>
+        public uint Seed => seed;
         public float MoveSpeed => CurrentBehavior switch
         {
             Behavior.Startled => Speed * 1.7f,
@@ -67,25 +73,35 @@ namespace RobotVacuum.Sim
             if (catMeshes == null) BuildVisual();
         }
 
-        public void Initialize(Rect movementBounds, Vector2 position, Vector2 initialDirection, int seed)
+        public void Initialize(Rect movementBounds, Vector2 position, uint seed)
         {
             if (body == null) Configure();
             bounds = movementBounds;
+            spawnPosition = position;
+            this.seed = seed;
+            random = Unity.Mathematics.Random.CreateFromIndex(seed);
+            initialized = true;
+
             body.position = position;
+            body.linearVelocity = Vector2.zero;
             transform.position = position;
-            direction = initialDirection.sqrMagnitude > 0f ? initialDirection.normalized : Vector2.right;
-            random = new System.Random(seed);
+            direction = RandomDirection(ref random);
             CurrentBehavior = Behavior.Roaming;
+            startleTimer = 0f;
             behaviorTimer = NextRange(3f, 6f);
             target = position + direction * NextRange(0.6f, 1.2f);
             vacuum = FindAnyObjectByType<VacuumRobot>();
         }
 
-        void FixedUpdate()
-        {
-            if (!Application.isPlaying || random == null) return;
+        /// <summary>Back to the placed position and the start of this cat's random sequence.</summary>
+        public void ResetToSpawn() => Initialize(bounds, spawnPosition, seed);
 
-            float dt = Time.fixedDeltaTime;
+        void FixedUpdate() => Step(Time.fixedDeltaTime);
+
+        public void Step(float dt)
+        {
+            if (!Application.isPlaying || !initialized) return;
+
             if (vacuum == null) vacuum = FindAnyObjectByType<VacuumRobot>();
 
             Vector2 position = body.position;
@@ -194,7 +210,7 @@ namespace RobotVacuum.Sim
                 NextRange(Mathf.Min(minX, maxX), Mathf.Max(minX, maxX)),
                 NextRange(Mathf.Min(minY, maxY), Mathf.Max(minY, maxY)));
             if ((target - position).sqrMagnitude < 0.12f * 0.12f)
-                target = position + RandomDirection(random) * 0.5f;
+                target = position + RandomDirection(ref random) * 0.5f;
         }
 
         void BeginResting()
@@ -213,15 +229,18 @@ namespace RobotVacuum.Sim
             return Vector2.Reflect(incoming.normalized, normal).normalized;
         }
 
-        public static List<MovingCat> SpawnPlacedCats(LevelRenderer renderer, Transform parent)
+        /// <summary>
+        /// Spawns the level's placed cats. Each draws its own seed from <paramref name="randomSource"/>, in
+        /// <see cref="LevelData.Obstacles"/> order, so the cats are the same for the same run seed.
+        /// </summary>
+        public static List<MovingCat> SpawnPlacedCats(LevelRenderer renderer, Transform parent, RandomProvider randomSource)
         {
             var spawned = new List<MovingCat>();
             if (renderer == null || renderer.Level == null) return spawned;
+            if (randomSource == null) throw new System.ArgumentNullException(nameof(randomSource));
 
             LevelData level = renderer.Level;
             Rect bounds = WorldBounds(renderer, level.Bounds());
-            var random = new System.Random(6321);
-
             foreach (Obstacle obstacle in level.Obstacles)
             {
                 if (obstacle == null || obstacle.kind != ObstacleKind.Cat) continue;
@@ -233,7 +252,7 @@ namespace RobotVacuum.Sim
                 if (parent != null) catObject.transform.SetParent(parent, true);
                 catObject.transform.position = position;
                 var cat = catObject.AddComponent<MovingCat>();
-                cat.Initialize(bounds, position, RandomDirection(random), random.Next());
+                cat.Initialize(bounds, position, randomSource.NextUInt(RandomProvider.Subsystem.DynamicObstacles));
                 spawned.Add(cat);
             }
 
@@ -394,14 +413,12 @@ namespace RobotVacuum.Sim
             triangles.Add(first + 3);
         }
 
-        float NextRange(float min, float max) => NextRange(random, min, max);
+        float NextRange(float min, float max) => random.NextFloat(min, max);
 
-        static float NextRange(System.Random random, float min, float max) =>
-            min + (float)random.NextDouble() * (max - min);
-
-        static Vector2 RandomDirection(System.Random random)
+        // By ref: the generator is a struct, so a copy would not advance this cat's sequence.
+        static Vector2 RandomDirection(ref Unity.Mathematics.Random rng)
         {
-            float angle = NextRange(random, -180f, 180f) * Mathf.Deg2Rad;
+            float angle = rng.NextFloat(-180f, 180f) * Mathf.Deg2Rad;
             return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
         }
 

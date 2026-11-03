@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using RobotVacuum.Level;
 using UnityEngine;
 
@@ -62,8 +63,9 @@ namespace RobotVacuum.Sim
                 new Options { visuals = false, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean };
         }
 
-        SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning, CoverageHeatmapRenderer heatmap, int seed)
+        SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning, CoverageHeatmapRenderer heatmap, int seed, List<MovingCat> cats)
         {
+            this.cats = cats;
             Root = root;
             Level = level;
             Robot = robot;
@@ -72,6 +74,8 @@ namespace RobotVacuum.Sim
             Seed = seed;
             Battery = robot != null ? robot.GetComponent<Battery>() : null;
         }
+
+        readonly List<MovingCat> cats;
 
         public GameObject Root { get; }
         public LevelRenderer Level { get; }
@@ -130,14 +134,18 @@ namespace RobotVacuum.Sim
                 heatmapRenderer.Mode = options.heatmapMode;
             }
 
+            // ResetToSpawn rebuilds robot.RandomSource from the seed, so the cats draw their seeds after it.
+            // A repeat of the run meets the same cats doing the same things.
             robot.ResetToSpawn();
-            return new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, options.seed);
+            var cats = MovingCat.SpawnPlacedCats(renderer, root.transform, robot.RandomSource);
+            return new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, options.seed, cats);
         }
 
-        /// <summary>Puts the vacuum back at its start point and forgets all coverage.</summary>
+        /// <summary>Puts the vacuum and the cats back at their start points and forgets all coverage.</summary>
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
+            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn();
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 

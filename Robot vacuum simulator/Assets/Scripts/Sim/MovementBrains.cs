@@ -26,12 +26,126 @@ namespace RobotVacuum.Sim
     }
 
     /// <summary>
-    /// A movement algorithm. <see cref="VacuumRobot"/> does the driving, backing off and turning; a brain
-    /// only decides how to steer while driving freely and what to do after each bump.
+    /// The contract every movement algorithm meets. The engine only ever talks to an algorithm through these
+    /// three calls (wrapped by <see cref="MovementBrainExecution"/>, which isolates failures), so algorithms
+    /// never touch engine internals.
     /// </summary>
-    public abstract class MovementBrain
+    public interface IMovementAlgorithm
     {
-        public static readonly string[] Labels = { "Random", "Spiral", "Wall follow", "Lawnmower" };
+        /// <summary>Called when the algorithm starts driving a robot, and when the robot is reset.</summary>
+        void Reset(VacuumRobot robot);
+
+        /// <summary>Degrees per second to rotate while driving forward freely. Positive turns left.</summary>
+        float Steer(VacuumRobot robot, float dt);
+
+        /// <summary>Called when the robot bumps into something; it backs off, then performs the result.</summary>
+        Manoeuvre AfterBump(VacuumRobot robot);
+    }
+
+    /// <summary>
+    /// Registers a <see cref="MovementBrain"/> subclass as a selectable algorithm under <see cref="Label"/>.
+    /// The class needs a public parameterless constructor. Nothing else in the project has to change: the
+    /// algorithm appears in every algorithm picker, runs in the simulator and shows up in the analysis.
+    /// </summary>
+    [System.AttributeUsage(System.AttributeTargets.Class, Inherited = false)]
+    public sealed class MovementAlgorithmAttribute : System.Attribute
+    {
+        public MovementAlgorithmAttribute(string label) => Label = label;
+
+        public string Label { get; }
+    }
+
+    /// <summary>
+    /// Every available algorithm: the built-in ones in <see cref="MovementPattern"/> order, then any class
+    /// marked <see cref="MovementAlgorithmAttribute"/>, numbered after them in name order.
+    /// </summary>
+    public static class MovementAlgorithms
+    {
+        sealed class Entry
+        {
+            public string label;
+            public System.Func<MovementBrain> create;
+        }
+
+        static List<Entry> entries;
+        static string[] labels;
+
+        static List<Entry> Entries
+        {
+            get
+            {
+                if (entries != null) return entries;
+
+                entries = new List<Entry>
+                {
+                    new Entry { label = "Random", create = () => new RandomBounceBrain() },
+                    new Entry { label = "Spiral", create = () => new SpiralBrain() },
+                    new Entry { label = "Wall follow", create = () => new WallFollowBrain() },
+                    new Entry { label = "Lawnmower", create = () => new LawnmowerBrain() },
+                };
+                entries.AddRange(DiscoverPlugins());
+                labels = entries.ConvertAll(entry => entry.label).ToArray();
+                return entries;
+            }
+        }
+
+        public static int Count => Entries.Count;
+
+        public static string[] Labels
+        {
+            get
+            {
+                _ = Entries;
+                return labels;
+            }
+        }
+
+        public static bool IsDefined(MovementPattern pattern) => (int)pattern >= 0 && (int)pattern < Count;
+
+        public static string LabelOf(MovementPattern pattern) => IsDefined(pattern) ? Labels[(int)pattern] : $"Algorithm {(int)pattern}";
+
+        public static MovementBrain Create(MovementPattern pattern) =>
+            (IsDefined(pattern) ? Entries[(int)pattern] : Entries[0]).create();
+
+        static IEnumerable<Entry> DiscoverPlugins()
+        {
+            var found = new List<(string name, Entry entry)>();
+            foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                System.Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException exception) { types = exception.Types; }
+
+                foreach (var type in types)
+                {
+                    if (type == null || type.IsAbstract || !typeof(MovementBrain).IsAssignableFrom(type)) continue;
+
+                    var attribute = (MovementAlgorithmAttribute)System.Attribute.GetCustomAttribute(type, typeof(MovementAlgorithmAttribute));
+                    if (attribute == null || type.GetConstructor(System.Type.EmptyTypes) == null) continue;
+
+                    var captured = type;
+                    found.Add((type.FullName, new Entry
+                    {
+                        label = string.IsNullOrWhiteSpace(attribute.Label) ? type.Name : attribute.Label,
+                        create = () => (MovementBrain)System.Activator.CreateInstance(captured),
+                    }));
+                }
+            }
+
+            found.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
+            return found.ConvertAll(item => item.entry);
+        }
+    }
+
+    /// <summary>
+    /// A movement algorithm. <see cref="VacuumRobot"/> does the driving, backing off and turning; a brain
+    /// only decides how to steer while driving freely and what to do after each bump. To add one, subclass
+    /// this and mark it <see cref="MovementAlgorithmAttribute"/>.
+    /// </summary>
+    public abstract class MovementBrain : IMovementAlgorithm
+    {
+        /// <summary>Every algorithm's display name, indexed by <see cref="MovementPattern"/>.</summary>
+        public static string[] Labels => MovementAlgorithms.Labels;
 
         /// <summary>
         /// Where every random choice a brain makes comes from. Shared with the rest of the run (assigned by
@@ -46,14 +160,7 @@ namespace RobotVacuum.Sim
 
         public static MovementBrain Create(MovementPattern pattern, RandomProvider randomSource)
         {
-            MovementBrain brain = pattern switch
-            {
-                MovementPattern.Spiral => new SpiralBrain(),
-                MovementPattern.WallFollow => new WallFollowBrain(),
-                MovementPattern.Lawnmower => new LawnmowerBrain(),
-                _ => new RandomBounceBrain(),
-            };
-
+            MovementBrain brain = MovementAlgorithms.Create(pattern);
             brain.AssignRandomSource(randomSource);
             return brain;
         }
@@ -74,6 +181,12 @@ namespace RobotVacuum.Sim
         /// <summary>Called when the robot bumps into something; it backs off, then performs the result.</summary>
         public abstract Manoeuvre AfterBump(VacuumRobot robot);
 
+        /// <summary>Randomness for algorithms. Always use these, never UnityEngine.Random, so runs replay from their seed.</summary>
+        protected float RandomValue => (float)RandomSource.NextDouble(RandomProvider.Subsystem.RandomBounceAlgorithm);
+
+        protected float RandomRange(float min, float max) =>
+            RandomSource.NextFloat(RandomProvider.Subsystem.RandomBounceAlgorithm, min, max);
+
         protected float RandomTurn(VacuumRobot robot)
         {
             float amount = RandomSource.NextFloat(RandomProvider.Subsystem.RandomBounceAlgorithm, robot.TurnAngleRange.x, robot.TurnAngleRange.y);
@@ -89,8 +202,15 @@ namespace RobotVacuum.Sim
             (Mathf.PerlinNoise(wanderPhase + robot.SimTime * 0.35f, 0f) - 0.5f) * 2f * robot.WanderDegreesPerSecond;
     }
 
+    /// <summary>
+    /// Calls into an algorithm on the engine's behalf and contains whatever goes wrong: an exception, an
+    /// invalid result, or a call that takes far too long, all become a failure message instead of taking the
+    /// session down. (A call that never returns can't be pre-empted on Unity's main thread; the robot's
+    /// no-progress watchdog catches algorithms that loop without getting anywhere.)
+    /// </summary>
     public static class MovementBrainExecution
     {
+        const double MaxCallMilliseconds = 250.0;
         const float MaxSteeringDegreesPerSecond = 360f;
         const float MaxTurnDegrees = 360f;
         const float MaxDriveDistance = 100f;
@@ -117,7 +237,9 @@ namespace RobotVacuum.Sim
 
             try
             {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 steering = brain.Steer(robot, dt);
+                if (TooSlow(clock, out failure)) return false;
                 if (IsFinite(steering) && Mathf.Abs(steering) <= MaxSteeringDegreesPerSecond) return true;
                 failure = $"Invalid steering output: {steering}.";
             }
@@ -136,7 +258,9 @@ namespace RobotVacuum.Sim
 
             try
             {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 manoeuvre = brain.AfterBump(robot);
+                if (TooSlow(clock, out failure)) return false;
                 if (IsFinite(manoeuvre.turn) && Mathf.Abs(manoeuvre.turn) <= MaxTurnDegrees &&
                     IsFinite(manoeuvre.driveAfter) && manoeuvre.driveAfter >= 0f && manoeuvre.driveAfter <= MaxDriveDistance &&
                     IsFinite(manoeuvre.turnAfter) && Mathf.Abs(manoeuvre.turnAfter) <= MaxTurnDegrees) return true;
@@ -148,6 +272,14 @@ namespace RobotVacuum.Sim
             }
 
             return false;
+        }
+
+        static bool TooSlow(System.Diagnostics.Stopwatch clock, out string failure)
+        {
+            failure = clock.Elapsed.TotalMilliseconds > MaxCallMilliseconds
+                ? $"A single call took {clock.Elapsed.TotalMilliseconds:0} ms (limit {MaxCallMilliseconds:0} ms)."
+                : null;
+            return failure != null;
         }
 
         static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
