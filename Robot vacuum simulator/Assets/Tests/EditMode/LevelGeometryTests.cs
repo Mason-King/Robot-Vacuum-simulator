@@ -103,6 +103,19 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void CollectWallSegments_DoorwayNearCornerDoesNotCutPerpendicularWall()
+        {
+            level.Doorways.Add(new Doorway { roomA = 0, center = new Vector2(1.95f, -1.5f), width = 0.9f });
+
+            var rightWall = LevelGeometry.CollectWallSegments(level)
+                .Where(s => Mathf.Abs(s.a.x - 2f) < 1e-4f && Mathf.Abs(s.b.x - 2f) < 1e-4f)
+                .ToList();
+
+            Assert.AreEqual(1, rightWall.Count);
+            Assert.AreEqual(3f, rightWall[0].Length, TestLevels.Tolerance);
+        }
+
+        [Test]
         public void CollectWallSegments_DoorwayFarFromWalls_CutsNothing()
         {
             level.Doorways.Add(new Doorway { center = Vector2.zero, width = 1f });

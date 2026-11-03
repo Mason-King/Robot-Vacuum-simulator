@@ -123,6 +123,18 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(Poly2D.IsSimple(null));
         }
 
+        [Test]
+        public void CanAppendToSimplePolyline_RejectsCrossingAndBacktrackingSegments()
+        {
+            var points = new List<Vector2> { Vector2.zero, new Vector2(2f, 2f), new Vector2(2f, 0f) };
+
+            Assert.IsFalse(Poly2D.CanAppendToSimplePolyline(points, new Vector2(0f, 2f)));
+            Assert.IsTrue(Poly2D.CanAppendToSimplePolyline(points, new Vector2(3f, -1f)));
+            Assert.IsFalse(Poly2D.CanAppendToSimplePolyline(
+                new List<Vector2> { Vector2.zero, Vector2.right },
+                Vector2.zero));
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void Triangulate_ConcaveOutline_CoversExactlyItsArea(bool clockwise)
