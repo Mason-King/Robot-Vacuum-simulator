@@ -134,6 +134,7 @@ namespace RobotVacuum.LevelEditor
         readonly SimWorld world;
         readonly RunReport report;
         readonly float telemetryInterval;
+        readonly VacuumSettings vacuumOverride;
         readonly StringBuilder telemetry = new StringBuilder();
         readonly List<CellEvent> cellEvents = new List<CellEvent>();
         readonly RunReplay replay = new RunReplay();
@@ -178,11 +179,15 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>Starts recording the session's current run. Call it as the run begins, before it moves.</summary>
-        public RunRecorder(SimWorld world, string batchId = null, int trial = 0, bool headless = false)
+        /// <param name="telemetryIntervalOverride">Simulated seconds between telemetry samples; 0 or less uses the GUI's SimConfig.</param>
+        /// <param name="vacuumOverride">The vacuum settings to record in the summary; null uses the GUI's SimConfig.</param>
+        public RunRecorder(SimWorld world, string batchId = null, int trial = 0, bool headless = false,
+            float telemetryIntervalOverride = 0f, VacuumSettings vacuumOverride = null)
         {
             this.world = world;
             int seed = world.Seed;
-            telemetryInterval = SimConfig.TelemetryInterval;
+            telemetryInterval = telemetryIntervalOverride > 0f ? telemetryIntervalOverride : SimConfig.TelemetryInterval;
+            this.vacuumOverride = vacuumOverride;
 
             report = new RunReport
             {
@@ -451,7 +456,7 @@ namespace RobotVacuum.LevelEditor
             report.endReason = reason;
             report.durationSeconds = time;
             report.coveragePercent = world.Coverage;
-            report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(SimConfig.Vacuum));
+            report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(vacuumOverride ?? SimConfig.Vacuum));
             report.distanceMeters = robot != null ? robot.DistanceTravelled : 0f;
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;

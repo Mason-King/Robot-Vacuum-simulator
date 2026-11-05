@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "campaignName": "baseline vs fast",
+  "description": "Four algorithms x two vacuum configurations x 20 seeds on two floor plans = 320 runs (AT-2.8, AT-4.5).",
+
+  "floorTypes": [],
+
+  "floorPlans": [
+    { "file": "floorplans/two-rooms.json" },
+    {
+      "version": 1,
+      "name": "L-shaped studio",
+      "rooms": [
+        {
+          "name": "Studio",
+          "outline": [ { "x": 0, "y": 0 }, { "x": 6, "y": 0 }, { "x": 6, "y": 2.5 }, { "x": 2.5, "y": 2.5 }, { "x": 2.5, "y": 5 }, { "x": 0, "y": 5 } ],
+          "floor": "Hardwood"
+        }
+      ],
+      "doorways": [],
+      "wallStrokes": [],
+      "obstacles": [
+        { "name": "Bed", "kind": 1, "center": { "x": 1.2, "y": 3.8 }, "size": { "x": 1.6, "y": 2 }, "rotation": 0, "blocksVacuum": false },
+        { "name": "Cat", "kind": 6, "center": { "x": 4.5, "y": 1.2 }, "size": { "x": 0.42, "y": 0.5 }, "rotation": 0, "blocksVacuum": false }
+      ],
+      "wallThickness": 0.12,
+      "robotSpawn": { "x": 0.6, "y": 0.6 }
+    }
+  ],
+
+  "configurations": [
+    {
+      "name": "baseline",
+      "vacuum":     { "driveSpeed": 0.65, "reverseSpeed": 0.35, "turnSpeed": 320, "vacuumPower": 1.0 },
+      "battery":    { "capacity": 300, "distanceEnergyPerMeter": 1.0, "turnEnergyPerDegree": 0.01,
+                      "operatingEnergyPerSecond": 0.1, "stalledEnergyPerSecond": 0.03 },
+      "simulation": { "cellSizeMeters": 0.0508, "targetMaxClean": 2.0, "maxSimulatedSeconds": 1800,
+                      "telemetryInterval": 0.5, "heatmapMode": "FloorCleanliness" },
+      "floorEfforts": []
+    },
+    {
+      "name": "fast",
+      "vacuum":     { "driveSpeed": 1.0 },
+      "battery":    { "capacity": 400 },
+      "floorEfforts": [ { "floor": "Low Carpet", "effort": 2.0 } ]
+    }
+  ],
+
+  "sweep": {
+    "algorithms": [ "RandomBounce", "Spiral", "WallFollow", "Lawnmower" ],
+    "seedStart": 1,
+    "seedCount": 20
+  },
+
+  "execution": {
+    "shardCount": 8,
+    "reportEveryNRuns": 1,
+    "saveExternalModel": true,
+    "saveHeatmapImages": true,
+    "maxRealSecondsPerRun": 1800
+  }
+}

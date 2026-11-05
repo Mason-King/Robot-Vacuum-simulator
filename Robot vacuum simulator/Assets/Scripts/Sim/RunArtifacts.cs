@@ -23,8 +23,31 @@ namespace RobotVacuum.Sim
         public const string ResultFileName = "result.json";
         public const string ConfigFileName = "config.json";
 
+        /// <summary>
+        /// When set, run folders are made here instead of under persistentDataPath. The headless job mode sets
+        /// it to the job's output folder so a cloud node's results are all in one place to upload.
+        /// </summary>
+        public static string RootOverride { get; set; }
+
+        /// <summary>Write external_model.json. Coverage figures are computed either way; only the file is skipped.</summary>
+        public static bool SaveModelFile { get; set; } = true;
+
+        /// <summary>Write the three heatmap PNGs.</summary>
+        public static bool SaveImages { get; set; } = true;
+
         /// <summary>The folder every run folder lives in.</summary>
-        public static string RunsRoot => Path.Combine(Application.persistentDataPath, "Runs");
+        public static string RunsRoot => !string.IsNullOrEmpty(RootOverride)
+            ? RootOverride
+            : Path.Combine(Application.persistentDataPath, "Runs");
+
+        // Statics survive entering Play Mode when domain reload is off.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetStatics()
+        {
+            RootOverride = null;
+            SaveModelFile = true;
+            SaveImages = true;
+        }
 
         /// <summary>Makes a fresh, empty folder for a new run and returns its path.</summary>
         public static string NewRunFolder()
@@ -57,13 +80,18 @@ namespace RobotVacuum.Sim
             Directory.CreateDirectory(runFolder);
 
             // Compact JSON on purpose: pretty-printing puts every array element on its own line.
-            string modelPath = Path.Combine(runFolder, ModelFileName);
-            File.WriteAllText(modelPath, JsonUtility.ToJson(data, prettyPrint: false));
-            result.externalModelPath = modelPath;
+            if (SaveModelFile)
+            {
+                string modelPath = Path.Combine(runFolder, ModelFileName);
+                File.WriteAllText(modelPath, JsonUtility.ToJson(data, prettyPrint: false));
+                result.externalModelPath = modelPath;
+            }
 
             result.targetMaxClean = data.targetMaxClean;
             result.coveragePercent = data.CoveragePercent();
             result.fullyCleanedPercent = data.FullyCleanedPercent();
+
+            if (!SaveImages) return;
 
             result.cleanlinessImagePath = WriteImage(data, runFolder, HeatmapMode.FloorCleanliness);
             result.coverageImagePath = WriteImage(data, runFolder, HeatmapMode.FloorCoverage);
@@ -73,15 +101,32 @@ namespace RobotVacuum.Sim
             result.heatmapImagePath = result.cleanlinessImagePath;
         }
 
+        // An image that can't be made (for example a build without texture support) is skipped with a warning
+        // rather than failing the run: the numbers and the model are what the results depend on.
         static string WriteImage(ExternalModelData data, string runFolder, HeatmapMode mode)
         {
-            var texture = CoverageImage.Create(data, mode);
+            Texture2D texture;
+            try
+            {
+                texture = CoverageImage.Create(data, mode);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"RunArtifacts: could not draw the {mode} heatmap: {ex.Message}");
+                return null;
+            }
             if (texture == null) return null;
 
             string path = ImagePath(runFolder, mode);
             try
             {
                 File.WriteAllBytes(path, texture.EncodeToPNG());
+            }
+            catch (Exception ex) when (!(ex is IOException) && !(ex is UnauthorizedAccessException))
+            {
+                // Encoding problems only; a disk that can't be written still fails the run as before.
+                Debug.LogWarning($"RunArtifacts: could not encode the {mode} heatmap: {ex.Message}");
+                return null;
             }
             finally
             {

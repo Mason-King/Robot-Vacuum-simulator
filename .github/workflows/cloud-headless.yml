@@ -1,0 +1,176 @@
+# Cloud headless node - CI (requirement 3.10, cloud parts; SDD 12: CI owner Mason, GameCI + GitHub Actions)
+#
+# On every commit:  CLI unit tests + CloudFormation lint  ->  headless-job EditMode tests
+#                   ->  Linux Dedicated Server build (artifact)  ->  Docker image + 4-run smoke test in the container
+# On main only:     push the image to ECR (as :latest and :<sha>) using GitHub OIDC - no AWS keys stored.
+#
+# Repository settings needed (Settings > Secrets and variables > Actions):
+#   secrets   UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD   (see https://game.ci/docs/github/activation)
+#   variables UNITY_CI_ENABLED = true                      (turns on the Unity jobs once the secrets exist)
+#             AWS_REGION        e.g. us-east-2
+#             AWS_ROLE_ARN      the CiImagePushRoleArn output of `python -m vacuumctl bootstrap --github-repo ...`
+
+name: Cloud headless node
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: cloud-headless-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_PATH: Robot vacuum simulator
+  BUILD_NAME: RobotVacuumServer
+
+jobs:
+  cli-and-infra:
+    name: vacuumctl tests + template lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r vacuumctl/requirements.txt cfn-lint
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Lint CloudFormation
+        run: cfn-lint infra/base.yaml infra/compute.yaml
+      - name: Validate example campaigns
+        run: |
+          python -m vacuumctl validate examples/campaign.example.json
+          python -m vacuumctl validate examples/smoke.json --write smoke.expanded.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-job
+          path: cloud/smoke.expanded.json
+
+  unity-tests:
+    name: Headless job EditMode tests
+    if: ${{ vars.UNITY_CI_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_PATH }}/Library
+          key: Library-tests-${{ hashFiles(format('{0}/Packages/manifest.json', env.PROJECT_PATH), format('{0}/ProjectSettings/ProjectVersion.txt', env.PROJECT_PATH)) }}
+          restore-keys: Library-tests-
+      - uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: ${{ env.PROJECT_PATH }}
+          testMode: editmode
+          customParameters: -testFilter RobotVacuum.Tests.HeadlessJobTests
+          artifactsPath: test-results
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: Headless job tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unity-test-results
+          path: test-results
+
+  linux-server-build:
+    name: Linux headless server build
+    needs: [cli-and-infra, unity-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_PATH }}/Library
+          key: Library-linux-${{ hashFiles(format('{0}/Packages/manifest.json', env.PROJECT_PATH), format('{0}/ProjectSettings/ProjectVersion.txt', env.PROJECT_PATH)) }}
+          restore-keys: Library-linux-
+      - uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          # Set to Player if the CI editor image lacks the Linux Dedicated Server module.
+          HEADLESS_SUBTARGET: Server
+        with:
+          projectPath: ${{ env.PROJECT_PATH }}
+          targetPlatform: StandaloneLinux64
+          buildName: ${{ env.BUILD_NAME }}
+          buildMethod: RobotVacuum.EditorTools.HeadlessBuild.BuildLinuxServer
+          versioning: None
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-server-${{ github.sha }}
+          path: build/StandaloneLinux64
+          retention-days: 14
+
+  docker-image:
+    name: Docker image + smoke test (+ push on main)
+    needs: linux-server-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # GitHub OIDC -> AWS role (push step only)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-server-${{ github.sha }}
+          path: cloud/docker/build
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-job
+          path: smoke
+      - name: Build image
+        run: docker build --platform linux/amd64 --build-arg GIT_SHA=${{ github.sha }} -t vacuum-headless:ci cloud/docker
+      - name: Smoke test - 4 short runs headless inside the container
+        run: |
+          mkdir -p smoke/out && chmod 777 smoke/out
+          docker run --rm -v "$PWD/smoke:/smoke" vacuum-headless:ci \
+            --job-file /smoke/smoke.expanded.json --output-dir /smoke/out --shard-index 0 --shard-count 1
+          python3 - <<'PY'
+          import json
+          d = json.load(open("smoke/out/shard-0000/results.json"))
+          print(json.dumps({k: d[k] for k in ("status", "completedRuns", "failedRuns")}))
+          for r in d["runs"]:
+              print(r["runIndex"], r["algorithm"], r["seed"], r["endReason"], round(r["coveragePercent"], 2))
+          assert d["status"] == "completed", d.get("errors")
+          assert d["completedRuns"] == 4 and d["failedRuns"] == 0, "smoke runs failed"
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-output
+          path: smoke/out
+          retention-days: 7
+      - name: Configure AWS credentials
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Log in to ECR
+        id: ecr
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Push image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.AWS_ROLE_ARN != ''
+        run: |
+          repo="${{ steps.ecr.outputs.registry }}/robot-vacuum-sim-headless"
+          for tag in latest ${{ github.sha }}; do
+            docker tag vacuum-headless:ci "$repo:$tag"
+            docker push "$repo:$tag"
+          done

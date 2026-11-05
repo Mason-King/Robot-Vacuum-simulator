@@ -51,6 +51,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
 
+        [Tooltip("Ends the run (as TimeCap) after this many simulated seconds if the battery hasn't run out. 0 = the program's safety cap (SimDefaults.MaxSimulatedSeconds). Never above that cap.")]
+        public float maxSimulatedSeconds;
+
         /// <summary>True for a number the caller actually set.</summary>
         public static bool IsSet(float value) => value > 0f;
 
@@ -74,6 +77,9 @@ namespace RobotVacuum.Sim
             if (!IsSet(resolved.targetMaxClean)) resolved.targetMaxClean = HeatmapDefaults.TargetMaxClean;
             if (!IsSet(resolved.cellSizeMeters)) resolved.cellSizeMeters = SimDefaults.CellSizeMeters;
             if (!IsSet(resolved.vacuumPower)) resolved.vacuumPower = HeatmapDefaults.BaseVacuumPower;
+            resolved.maxSimulatedSeconds = IsSet(resolved.maxSimulatedSeconds)
+                ? Mathf.Min(resolved.maxSimulatedSeconds, SimDefaults.MaxSimulatedSeconds)
+                : SimDefaults.MaxSimulatedSeconds;
 
             return resolved;
         }

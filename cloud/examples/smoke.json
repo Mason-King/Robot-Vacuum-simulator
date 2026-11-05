@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "campaignName": "smoke test",
+  "description": "A 4-run check that a build or image works end to end. Takes a minute or two.",
+  "floorPlans": [ { "file": "floorplans/two-rooms.json" } ],
+  "configurations": [ { "name": "short", "simulation": { "maxSimulatedSeconds": 120 } } ],
+  "sweep": { "algorithms": [ "RandomBounce", "Lawnmower" ], "seedStart": 1, "seedCount": 2 },
+  "execution": { "shardCount": 2, "saveExternalModel": false }
+}

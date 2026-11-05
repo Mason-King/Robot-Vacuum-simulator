@@ -123,6 +123,14 @@ namespace RobotVacuum.Sim
         public float SimulatedSeconds { get; private set; }
         public float RealSeconds { get; private set; }
 
+        /// <summary>
+        /// Simulated seconds after which the run ends as <see cref="RunEndReason.TimeCap"/>: the run's own
+        /// cap (<see cref="RunSettings.maxSimulatedSeconds"/>), never above the program's safety cap.
+        /// </summary>
+        public float TimeCapSeconds => Settings != null && Settings.maxSimulatedSeconds > 0f
+            ? Mathf.Min(Settings.maxSimulatedSeconds, SimDefaults.MaxSimulatedSeconds)
+            : SimDefaults.MaxSimulatedSeconds;
+
         /// <summary>Raised once when a run ends on its own (battery, time cap, error). Not raised by Restart or Close.</summary>
         public event Action<SimulationSession> Finished;
 
@@ -232,7 +240,7 @@ namespace RobotVacuum.Sim
                 EndRun(RunEndReason.Error, "The movement algorithm failed. See the Console for details.", raiseFinished: true);
             else if (Runner.Battery != null && !Runner.Battery.CanOperate)
                 EndRun(RunEndReason.BatteryDepleted, null, raiseFinished: true);
-            else if (SimulatedSeconds >= SimDefaults.MaxSimulatedSeconds)
+            else if (SimulatedSeconds >= TimeCapSeconds)
                 EndRun(RunEndReason.TimeCap, null, raiseFinished: true);
         }
 
