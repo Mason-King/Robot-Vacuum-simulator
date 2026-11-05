@@ -287,7 +287,7 @@ MonoBehaviour:
     driveSpeed: 0
     reverseSpeed: 0
     turnSpeed: 0
-    batteryCapacity: 200
+    batteryCapacity: 3000
     slam: 1
     noiseScale: 1
     lidarEnabled: 1
@@ -297,6 +297,7 @@ MonoBehaviour:
     floorSensorEnabled: 1
     showBeliefOverlay: 1
     slamCorrectionQuality: 0
+    slamLoopClosure: 1
     cellSizeMeters: 0
     vacuumPower: 0
 --- !u!4 &588408581

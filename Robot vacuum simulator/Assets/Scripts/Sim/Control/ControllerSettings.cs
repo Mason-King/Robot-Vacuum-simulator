@@ -24,6 +24,9 @@ namespace RobotVacuum.Sim.Control
         /// <summary>SLAM pose correction preset (CPU vs reliability). Not used in a Normal run.</summary>
         public PoseCorrectionQuality correctionQuality;
 
+        /// <summary>SLAM loop closure on/off (on by default). Not used in a Normal run.</summary>
+        public bool loopClosure;
+
         /// <summary>The noise scale a Normal run carries: a constant, never the user's setting.</summary>
         public const float NormalNoiseScale = 0f;
 
@@ -37,6 +40,7 @@ namespace RobotVacuum.Sim.Control
             lidarRayCount = Sensors.LidarRayLayout.MaxRays,
             floorSensorEnabled = true,
             correctionQuality = PoseCorrectionQuality.Balanced,
+            loopClosure = true,
         };
 
         /// <summary>From already-resolved settings. The noise scale is read only when SLAM is on.</summary>
@@ -54,6 +58,7 @@ namespace RobotVacuum.Sim.Control
                 lidarRayCount = resolved.lidarRayCount,
                 floorSensorEnabled = resolved.floorSensorEnabled,
                 correctionQuality = resolved.slamCorrectionQuality,
+                loopClosure = resolved.slamLoopClosure,
             };
         }
     }

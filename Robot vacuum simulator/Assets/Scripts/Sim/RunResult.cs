@@ -68,17 +68,38 @@ namespace RobotVacuum.Sim
         public float driftMeters;
         public float driftHeadingDegrees;
 
-        // SLAM pose correction: attempts by outcome, and how many needed the wide search (a real slip).
-        public int poseCorrectionsApplied;
-        public int poseCorrectionsPartial;
-        public int poseCorrectionsTooFewHits;
-        public int poseCorrectionsWeakMatch;
-        public int poseCorrectionsWideSearch;
+        // SLAM local tracking: scans matched to the map, scans with too few returns to match, scans added to the
+        // submaps (after the motion filter), and submaps started.
+        public int scanMatches;
+        public int scanMatchesTooFewHits;
+        public int scansInserted;
+        public int submaps;
 
         // Performance: real milliseconds spent per simulated second on each part of the controller's step.
         public float msSensingPerSimSecond;
         public float msPosePerSimSecond;
         public float msMappingPerSimSecond;
+
+        // SLAM accuracy over the whole run, step by step (the target: within 5 cm and 2° for 99% of the time, never
+        // beyond 8 cm / 3°, within 5 cm at the end). Percentiles are to the nearest millimetre / 0.01°, rounded up.
+        public float driftMaxMeters;
+        public float driftP99Meters;
+        public float driftP95Meters;
+        public float driftRmsMeters;
+        public float driftMaxHeadingDegrees;
+        public float driftP99HeadingDegrees;
+        public float driftRmsHeadingDegrees;
+
+        // SLAM loop closure (global SLAM): whether it ran, submap searches made, loop-closure links accepted, pose
+        // graph solves, and its cost.
+        public bool loopClosure;
+        public int loopSearches;
+        public int loopLinks;
+        public int poseGraphSolves;
+        public float msLoopClosurePerSimSecond;
+
+        // The longest single physics step the controller took (sense + pose + map + loop closure), real milliseconds.
+        public float msLongestStep;
 
         // Null/empty when a file wasn't produced (e.g. the run failed before
         // completing). heatmapImagePath is the older single-image field and

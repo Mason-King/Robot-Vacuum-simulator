@@ -213,16 +213,26 @@ namespace RobotVacuum.Tests
         [Test]
         public void Slam_OneHitIsNotEnough_ButRepeatedHitsAre()
         {
-            var mapper = new ObservationMapper(writer, slam: true);
+            // SLAM maps the lidar through local SLAM's submaps (probability grids): one hit makes a cell 0.55 likely
+            // a wall (shaded), and it takes six scans' hits to reach 0.75 (a wall). The scans are 6 s apart so the
+            // motion filter (0.2 m, 1° or 5 s) lets each one in while the robot stands still.
+            var slam = new LocalSlam(writer.Grid.AnchorWorld, writer.Grid.CellSizeMeters, PoseCorrectionQuality.Balanced, 1f);
+            var mapper = new ObservationMapper(writer, slam: true, slam);
             var pose = new RobotPose(new Vector2(0.01f, 0.01f), 0f);
             var frame = OneRayStraightAhead(0.52f, hit: true);
+            slam.Begin(pose);
 
+            slam.Track(frame, pose, 0f);
             mapper.Apply(frame, pose);
             float once = TraversabilityAt(new Vector2(0.01f, 0.52f));
             Assert.Greater(once, 0f);
             Assert.Less(once, 1f);
 
-            mapper.Apply(frame, pose);
+            for (int scan = 1; scan < 6; scan++)
+            {
+                slam.Track(frame, pose, 6f * scan);
+                mapper.Apply(frame, pose);
+            }
             Assert.AreEqual(0f, TraversabilityAt(new Vector2(0.01f, 0.52f)));
         }
 

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using RobotVacuum.Sim.Sensors;
 using UnityEngine;
 using C = RobotVacuum.Sim.Control.BeliefUpdateConstants;
@@ -19,28 +20,33 @@ namespace RobotVacuum.Sim.Control
     ///
     /// SLAM off: observations are ASSIGNED, except that a preloaded wall is never cleared (see
     /// <see cref="InternalModelWriter.MarkPermanent"/>).
-    /// SLAM on: lidar hits and clear views update the <see cref="EvidenceMap"/> (design doc, section 17), and each
-    /// cell's traversability is read off its evidence score; floor ease and vacuum resistance keep the weighted rule in
-    /// <see cref="BeliefRules"/>. Each branch tests the SLAM bool, never the noise value.
+    /// SLAM on: the lidar scan has already gone into <see cref="LocalSlam"/>'s submaps (design doc, section 19); each
+    /// cell that scan changed takes its traversability from the submaps' occupancy probability. Floor ease and vacuum
+    /// resistance keep the weighted rule in <see cref="BeliefRules"/>. Each branch tests the SLAM bool, never the
+    /// noise value.
     /// </summary>
     public sealed class ObservationMapper
     {
         readonly InternalModelWriter writer;
         readonly bool slam;
         readonly float cellSize;
-        readonly EvidenceMap evidence;
+        readonly LocalSlam localSlam;
+        readonly GlobalSlam globalSlam;
 
-        /// <param name="evidenceMap">SLAM only: the evidence map shared with pose correction. Null in SLAM = a private one (tests).</param>
-        public ObservationMapper(InternalModelWriter writer, bool slam, EvidenceMap evidenceMap = null)
+        /// <summary>SLAM: every Internal Model cell drawn from the submaps (so a redraw can clear the ones no longer drawn).</summary>
+        HashSet<long> drawn = new HashSet<long>();
+        HashSet<long> drawing = new HashSet<long>();
+
+        /// <param name="localSlam">SLAM only: the submaps the lidar is mapped into (by <see cref="LocalSlam.Track"/>, before <see cref="Apply"/>).</param>
+        /// <param name="globalSlam">SLAM with loop closure: where the submaps really are (null = local SLAM's frame is the global frame).</param>
+        public ObservationMapper(InternalModelWriter writer, bool slam, LocalSlam localSlam = null, GlobalSlam globalSlam = null)
         {
             this.writer = writer;
             this.slam = slam;
+            this.localSlam = localSlam;
+            this.globalSlam = globalSlam;
             cellSize = writer.Grid.CellSizeMeters;
-            if (slam) evidence = evidenceMap ?? new EvidenceMap(writer.Grid.AnchorWorld, cellSize);
         }
-
-        /// <summary>The SLAM evidence map (null in a Normal run).</summary>
-        public EvidenceMap Evidence => evidence;
 
         /// <summary>Applies everything in <paramref name="frame"/>, seen from <paramref name="pose"/>.</summary>
         public void Apply(SensorFrame frame, RobotPose pose)
@@ -57,7 +63,7 @@ namespace RobotVacuum.Sim.Control
         {
             if (slam)
             {
-                ApplyLidarEvidence(frame, pose);
+                SyncFromSubmaps();
                 return;
             }
 
@@ -116,7 +122,7 @@ namespace RobotVacuum.Sim.Control
             }
         }
 
-        // Normal only (SLAM lidar goes through ApplyLidarEvidence).
+        // Normal only (SLAM lidar goes through the submaps: SyncFromSubmaps).
         void ObserveHit(int row, int col, float range, float maxRange) => writer.SetTraversability(row, col, 0f);
 
         void ObserveClear(int row, int col, float range, float maxRange)
@@ -124,79 +130,191 @@ namespace RobotVacuum.Sim.Control
             if (!writer.IsPermanent(row, col)) writer.SetTraversability(row, col, writer.EaseAt(row, col));
         }
 
-        // ---- Lidar, SLAM: evidence ---------------------------------------------------------------------------
+        // ---- Lidar, SLAM: from the submaps ---------------------------------------------------------------------
 
         /// <summary>
-        /// SLAM: every hit cell is marked first (so this scan never clears a cell it also hit), then each ray is walked:
-        /// clear cells lose evidence (fast within 1 m; never a confirmed wall from further away), the hit cell gains it
-        /// and remembers where the hit landed. Each changed cell's traversability is re-read from its score.
+        /// SLAM: every cell this step's scan changed in the submaps gets its traversability re-read from them, at the
+        /// cell's place in the global frame (the matching submap's correction; the same cell without loop closure).
         /// </summary>
-        void ApplyLidarEvidence(SensorFrame frame, RobotPose pose)
+        void SyncFromSubmaps()
         {
-            if (!evidence.TryCell(pose.position, out int r0, out int c0)) return;
+            if (localSlam == null) return;
+            var cells = localSlam.ChangedCells;
+            bool corrected = globalSlam != null && globalSlam.SubmapGlobalPoses.Count > 0;
+            float cos = 1f, sin = 0f;
+            Vector2 localOrigin = Vector2.zero, globalOrigin = Vector2.zero;
+            if (corrected) globalSlam.Transform(globalSlam.ReferenceSubmap, out cos, out sin, out localOrigin, out globalOrigin);
 
-            evidence.BeginScan();
-            var rays = frame.lidarRays;
-
-            for (int i = 0; i < rays.Count; i++)
+            for (int i = 0; i < cells.Count; i++)
             {
-                if (!rays[i].hit) continue;
-                Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + rays[i].bearing) * rays[i].range;
-                if (evidence.TryCell(end, out int hr, out int hc)) evidence.MarkHit(hr, hc);
-            }
-
-            for (int i = 0; i < rays.Count; i++)
-            {
-                var ray = rays[i];
-                Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + ray.bearing) * ray.range;
-                if (!evidence.TryCell(end, out int r1, out int c1)) continue;
-                WalkEvidence(r0, c0, r1, c1, ray.range, ray.hit, end);
+                int row = (int)(cells[i] >> 32), col = (int)cells[i];
+                float p = localSlam.Probability(row, col);
+                int gRow = row, gCol = col;
+                if (corrected && !ToGlobalCell(row, col, cos, sin, localOrigin, globalOrigin, out gRow, out gCol)) continue;
+                writer.SetTraversability(gRow, gCol, LocalSlam.Traversability(p, writer.EaseAt(gRow, gCol)));
+                drawn.Add(CellIndex.Pack(gRow, gCol));
             }
         }
 
-        void WalkEvidence(int r0, int c0, int r1, int c1, float range, bool hit, Vector2 end)
+        bool ToGlobalCell(int row, int col, float cos, float sin, Vector2 localOrigin, Vector2 globalOrigin, out int gRow, out int gCol)
         {
-            int dc = Mathf.Abs(c1 - c0), sc = c0 < c1 ? 1 : -1;
-            int dr = -Mathf.Abs(r1 - r0), sr = r0 < r1 ? 1 : -1;
-            int error = dc + dr;
+            Vector2 centre = writer.Grid.GridIndexToWorldCenter(row, col) - localOrigin;
+            Vector2 g = new Vector2(cos * centre.x - sin * centre.y, sin * centre.x + cos * centre.y) + globalOrigin;
+            return writer.Grid.TryWorldToGridIndex(g, out gRow, out gCol);
+        }
 
-            int steps = Mathf.Max(dc, -dr);
-            float metersPerStep = steps > 0 ? range / steps : 0f;
+        /// <summary>
+        /// SLAM with loop closure, after the submaps moved: the Internal Model is redrawn from every submap at its global
+        /// pose. Each cell takes its probability from the newest submap that has seen it (the active ones first, as for
+        /// live updates); cells no longer drawn by any submap go back to unknown (the floor's ease).
+        ///
+        /// Done in a dense window over every submap's global footprint (no per-cell hashing), and only cells whose value
+        /// actually changes are written. Gives exactly the cells and values of <see cref="RedrawFromSubmapsReference"/>.
+        /// </summary>
+        public void RedrawFromSubmaps()
+        {
+            if (localSlam == null || globalSlam == null) return;
+            var submaps = localSlam.Submaps;
+            var active = localSlam.ActiveSubmaps;
 
-            int r = r0, c = c0, step = 0;
-            while (true)
+            // 1. The window: every drawable submap's corner cells in the global frame, plus a cell all round.
+            int minRow = int.MaxValue, minCol = int.MaxValue, maxRow = int.MinValue, maxCol = int.MinValue;
+            for (int i = 0; i < submaps.Count; i++)
             {
-                bool last = r == r1 && c == c1;
+                var grid = submaps[i].grid;
+                if (submaps[i].index >= globalSlam.SubmapGlobalPoses.Count || grid.rows == 0 || grid.cols == 0) continue;
+                globalSlam.Transform(submaps[i].index, out float cos, out float sin, out Vector2 localOrigin, out Vector2 globalOrigin);
+                for (int corner = 0; corner < 4; corner++)
+                {
+                    int row = grid.minRow + ((corner & 1) == 0 ? 0 : grid.rows - 1);
+                    int col = grid.minCol + ((corner & 2) == 0 ? 0 : grid.cols - 1);
+                    if (!ToGlobalCell(row, col, cos, sin, localOrigin, globalOrigin, out int gRow, out int gCol)) continue;
+                    minRow = Mathf.Min(minRow, gRow);
+                    maxRow = Mathf.Max(maxRow, gRow);
+                    minCol = Mathf.Min(minCol, gCol);
+                    maxCol = Mathf.Max(maxCol, gCol);
+                }
+            }
 
-                if (last && hit)
-                {
-                    evidence.AddHit(r, c, end);
-                    SyncTraversability(r, c);
-                }
-                else if (evidence.Clear(r, c, step * metersPerStep))
-                {
-                    SyncTraversability(r, c);
-                }
+            if (minRow <= maxRow)
+            {
+                windowMinRow = minRow - 1;
+                windowMinCol = minCol - 1;
+                windowRows = maxRow - minRow + 3;
+                windowCols = maxCol - minCol + 3;
+            }
+            else
+            {
+                windowMinRow = windowMinCol = windowRows = windowCols = 0;
+            }
+            int total = windowRows * windowCols;
+            if (window.Length < total) window = new float[total];
+            else System.Array.Clear(window, 0, total);
 
-                if (last) return;
+            // 2. Newest first: the active submaps, then the finished ones newest to oldest. A cell keeps the first value.
+            for (int a = 0; a < active.Count; a++) DrawIntoWindow(active[a]);
+            for (int i = submaps.Count - 1; i >= 0; i--)
+                if (submaps[i].Finished) DrawIntoWindow(submaps[i]);
 
-                int twice = 2 * error;
-                if (twice >= dr)
+            // 3. Cells drawn before but not now go back to unknown.
+            foreach (long key in drawn)
+            {
+                int row = (int)(key >> 32), col = (int)key;
+                if (WindowValue(row, col) > 0f) continue;
+                writer.SetTraversability(row, col, writer.EaseAt(row, col));
+            }
+
+            // 4. Write the window (the writer skips cells already equal) and remember what is drawn.
+            drawn.Clear();
+            for (int r = 0; r < windowRows; r++)
+            {
+                int row = windowMinRow + r;
+                for (int c = 0; c < windowCols; c++)
                 {
-                    error += dr;
-                    c += sc;
+                    float p = window[r * windowCols + c];
+                    if (p <= 0f) continue;
+                    int col = windowMinCol + c;
+                    writer.SetTraversability(row, col, LocalSlam.Traversability(p, writer.EaseAt(row, col)));
+                    drawn.Add(CellIndex.Pack(row, col));
                 }
-                if (twice <= dc)
-                {
-                    error += dc;
-                    r += sr;
-                }
-                step++;
             }
         }
 
-        void SyncTraversability(int row, int col) =>
-            writer.SetTraversability(row, col, EvidenceMap.Traversability(evidence.Evidence(row, col), writer.EaseAt(row, col)));
+        // The redraw window: the newest probability for each global cell (0 = not drawn).
+        float[] window = new float[0];
+        int windowMinRow, windowMinCol, windowRows, windowCols;
+
+        float WindowValue(int row, int col)
+        {
+            int r = row - windowMinRow, c = col - windowMinCol;
+            if (r < 0 || c < 0 || r >= windowRows || c >= windowCols) return 0f;
+            return window[r * windowCols + c];
+        }
+
+        void DrawIntoWindow(Submap submap)
+        {
+            if (submap.index >= globalSlam.SubmapGlobalPoses.Count) return;
+            globalSlam.Transform(submap.index, out float cos, out float sin, out Vector2 localOrigin, out Vector2 globalOrigin);
+            var grid = submap.grid;
+            var probability = grid.probability;
+            for (int r = 0; r < grid.rows; r++)
+            {
+                int rowStart = r * grid.cols;
+                for (int c = 0; c < grid.cols; c++)
+                {
+                    float p = probability[rowStart + c];
+                    if (p <= 0f) continue;
+                    if (!ToGlobalCell(grid.minRow + r, grid.minCol + c, cos, sin, localOrigin, globalOrigin, out int gRow, out int gCol)) continue;
+                    int wr = gRow - windowMinRow, wc = gCol - windowMinCol;
+                    if (wr < 0 || wc < 0 || wr >= windowRows || wc >= windowCols) continue; // cannot happen: the window holds every corner
+                    int index = wr * windowCols + wc;
+                    if (window[index] <= 0f) window[index] = p;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tests only: the original, straightforward redraw (a hash set per cell, every cell rewritten), kept so the
+        /// fast <see cref="RedrawFromSubmaps"/> can be checked against it cell for cell.
+        /// </summary>
+        internal void RedrawFromSubmapsReference()
+        {
+            if (localSlam == null || globalSlam == null) return;
+            drawing.Clear();
+
+            var submaps = localSlam.Submaps;
+            var active = localSlam.ActiveSubmaps;
+            for (int a = 0; a < active.Count; a++) DrawSubmapReference(active[a]);
+            for (int i = submaps.Count - 1; i >= 0; i--)
+                if (submaps[i].Finished) DrawSubmapReference(submaps[i]);
+
+            foreach (long key in drawn)
+            {
+                if (drawing.Contains(key)) continue;
+                int row = (int)(key >> 32), col = (int)key;
+                writer.SetTraversability(row, col, writer.EaseAt(row, col));
+            }
+            (drawn, drawing) = (drawing, drawn);
+        }
+
+        void DrawSubmapReference(Submap submap)
+        {
+            if (submap.index >= globalSlam.SubmapGlobalPoses.Count) return;
+            globalSlam.Transform(submap.index, out float cos, out float sin, out Vector2 localOrigin, out Vector2 globalOrigin);
+            var grid = submap.grid;
+            var probability = grid.probability;
+            for (int r = 0; r < grid.rows; r++)
+            {
+                for (int c = 0; c < grid.cols; c++)
+                {
+                    float p = probability[r * grid.cols + c];
+                    if (p <= 0f) continue;
+                    if (!ToGlobalCell(grid.minRow + r, grid.minCol + c, cos, sin, localOrigin, globalOrigin, out int gRow, out int gCol)) continue;
+                    if (!drawing.Add(CellIndex.Pack(gRow, gCol))) continue; // a newer submap already drew it
+                    writer.SetTraversability(gRow, gCol, LocalSlam.Traversability(p, writer.EaseAt(gRow, gCol)));
+                }
+            }
+        }
 
         // ---- Whisker -------------------------------------------------------------------------------------
 
@@ -208,7 +326,7 @@ namespace RobotVacuum.Sim.Control
 
             if (writer.Grid.TryWorldToGridIndex(contact, out int row, out int col))
             {
-                if (slam) evidence.SetCertain(row, col);
+                if (slam) localSlam?.MarkCertain(globalSlam != null ? globalSlam.ToLocal(contact) : contact);
                 writer.SetTraversability(row, col, 0f); // certain: set directly in both modes
             }
         }
@@ -222,7 +340,6 @@ namespace RobotVacuum.Sim.Control
                 : frame.floorEase;
 
             writer.SetEase(row, col, ease);
-            if (slam) evidence.SetFree(row, col); // the robot is standing on it
             if (!writer.IsPermanent(row, col))
                 writer.SetTraversability(row, col, ease); // the robot is standing on it, so it is passable at that ease
         }
@@ -269,9 +386,7 @@ namespace RobotVacuum.Sim.Control
 
                     if (distanceSq <= solidSq)
                     {
-                        if (slam && evidence.SetFree(row, col))
-                            writer.SetTraversability(row, col, writer.EaseAt(row, col));
-                        else if (!slam && writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
+                        if (writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
                             writer.SetTraversability(row, col, writer.EaseAt(row, col));
                     }
 

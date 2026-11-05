@@ -261,15 +261,37 @@ namespace RobotVacuum.Sim
                 result.msSensingPerSimSecond = brain.SensingMsPerSimSecond;
                 result.msPosePerSimSecond = brain.PoseMsPerSimSecond;
                 result.msMappingPerSimSecond = brain.MappingMsPerSimSecond;
+                result.msLoopClosurePerSimSecond = brain.LoopClosureMsPerSimSecond;
+                result.msLongestStep = brain.LongestStepMs;
 
-                var correction = brain.SlamCorrection;
-                if (correction != null)
+                var drift = brain.Drift;
+                if (Settings.slam && drift != null)
                 {
-                    result.poseCorrectionsApplied = correction.Applied;
-                    result.poseCorrectionsPartial = correction.Partial;
-                    result.poseCorrectionsTooFewHits = correction.TooFewHits;
-                    result.poseCorrectionsWeakMatch = correction.WeakMatch;
-                    result.poseCorrectionsWideSearch = correction.WideSearches;
+                    result.driftMaxMeters = drift.MaxMeters;
+                    result.driftP99Meters = drift.PositionPercentile(0.99f);
+                    result.driftP95Meters = drift.PositionPercentile(0.95f);
+                    result.driftRmsMeters = drift.RmsMeters;
+                    result.driftMaxHeadingDegrees = drift.MaxDegrees;
+                    result.driftP99HeadingDegrees = drift.HeadingPercentile(0.99f);
+                    result.driftRmsHeadingDegrees = drift.RmsDegrees;
+                }
+
+                var tracking = brain.SlamTracking;
+                if (tracking != null)
+                {
+                    result.scanMatches = tracking.Matches;
+                    result.scanMatchesTooFewHits = tracking.TooFewHits;
+                    result.scansInserted = tracking.ScansInserted;
+                    result.submaps = tracking.Submaps.Count;
+                }
+
+                var loop = brain.SlamLoopClosure;
+                if (loop != null)
+                {
+                    result.loopClosure = true;
+                    result.loopSearches = loop.Searches;
+                    result.loopLinks = loop.LoopLinks;
+                    result.poseGraphSolves = loop.Optimisations;
                 }
             }
 

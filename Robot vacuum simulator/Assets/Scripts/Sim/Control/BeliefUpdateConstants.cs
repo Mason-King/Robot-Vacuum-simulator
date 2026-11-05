@@ -4,7 +4,7 @@ namespace RobotVacuum.Sim.Control
     /// The SLAM weighted-update rule's constants (design doc, section 6.2). Used ONLY when SLAM is on; a Normal run
     /// assigns observations directly and never reads these.
     ///
-    /// Since slice 3, SLAM traversability comes from the evidence map (<see cref="EvidenceConstants"/>), so
+    /// SLAM traversability now comes from the submaps' occupancy probability (<see cref="LocalSlamConstants"/>), so
     /// <see cref="HitAlpha"/> and <see cref="ClearAlpha"/> no longer drive the map; the weighted rule still updates
     /// floor ease (<see cref="DragAlpha"/>) and vacuum resistance (<see cref="FloorSensorAlpha"/>).
     /// </summary>
