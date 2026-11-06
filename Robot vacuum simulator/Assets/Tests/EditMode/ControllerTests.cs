@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
+using RobotVacuum.AlgorithmApi;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
 using RobotVacuum.Sim.Control;
@@ -308,10 +309,11 @@ namespace RobotVacuum.Tests
         public void RandomBounce_PicksWaypointsInsideTheRoom_ShortOfTheWalls()
         {
             var algorithm = new RandomBounceAlgorithm();
-            algorithm.Initialize(new AlgorithmContext(new RandomProvider(3u), 0.17f, 0.34f, 0.05f, slam: false, lidarRangeMeters: 8f));
+            algorithm.Initialize(new AlgorithmContext(new ProviderRandom(new RandomProvider(3u)), 0.17f, 0.34f, 0.05f, slam: false, lidarRangeMeters: 8f));
 
             var pose = new RobotPose(Vector2.zero, 0f);
             view.SetBelievedPose(pose);
+            var map = new BeliefMapAdapter(view);
 
             // Inner face of the walls: 2 m and 1.5 m from the centre, less half a 0.12 m wall.
             float maxX = 2f - 0.06f - 0.17f + 0.05f; // one cell of grid rounding allowed
@@ -319,24 +321,25 @@ namespace RobotVacuum.Tests
 
             for (int i = 0; i < 40; i++)
             {
-                var goal = algorithm.NextGoal(view, pose, i == 0 ? GoalStatus.None : GoalStatus.Reached);
+                var goal = algorithm.NextGoal(map, pose.ToApi(), i == 0 ? GoalStatus.None : GoalStatus.Reached);
                 Assert.IsTrue(goal.HasValue);
                 Assert.LessOrEqual(Mathf.Abs(goal.Value.x), maxX, $"goal {goal.Value}");
                 Assert.LessOrEqual(Mathf.Abs(goal.Value.y), maxY, $"goal {goal.Value}");
-                Assert.IsFalse(view.IsBlockedAt(goal.Value));
+                Assert.IsFalse(view.IsBlockedAt(goal.Value.ToUnity()));
             }
         }
 
         [Test]
         public void RandomBounce_IsReproducibleFromTheSeed()
         {
-            List<Vector2> Run()
+            List<Vec2> Run()
             {
                 var algorithm = new RandomBounceAlgorithm();
-                algorithm.Initialize(new AlgorithmContext(new RandomProvider(11u), 0.17f, 0.34f, 0.05f, false, 8f));
-                var list = new List<Vector2>();
+                algorithm.Initialize(new AlgorithmContext(new ProviderRandom(new RandomProvider(11u)), 0.17f, 0.34f, 0.05f, false, 8f));
+                var map = new BeliefMapAdapter(view);
+                var list = new List<Vec2>();
                 for (int i = 0; i < 10; i++)
-                    list.Add(algorithm.NextGoal(view, new RobotPose(Vector2.zero, 0f), GoalStatus.Blocked).Value);
+                    list.Add(algorithm.NextGoal(map, new Pose2(Vec2.Zero, 0f), GoalStatus.Blocked).Value);
                 return list;
             }
 

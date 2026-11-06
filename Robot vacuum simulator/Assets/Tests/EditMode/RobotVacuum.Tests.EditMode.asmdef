@@ -3,6 +3,7 @@
     "rootNamespace": "RobotVacuum.Tests",
     "references": [
         "RobotVacuum",
+        "RobotVacuum.AlgorithmApi",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

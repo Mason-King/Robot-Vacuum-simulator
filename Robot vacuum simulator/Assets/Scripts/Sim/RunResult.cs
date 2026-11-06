@@ -50,6 +50,10 @@ namespace RobotVacuum.Sim
         public int seed;
         public MovementPattern pattern;
 
+        // The algorithm by catalog id and display name. For a plugin, pattern is just what the settings held; algorithmId is the truth.
+        public string algorithmId;
+        public string algorithmName;
+
         // Graded average against the target (see ExternalModelData.CoveragePercent).
         public float coveragePercent;
 
@@ -97,6 +101,14 @@ namespace RobotVacuum.Sim
         public int loopLinks;
         public int poseGraphSolves;
         public float msLoopClosurePerSimSecond;
+
+        // Real ms per simulated second on the algorithm, path planning and driving.
+        public float msControlPerSimSecond;
+
+        // Parts of it: the algorithm's NextGoal, and the path planner (whoever asked: the driver or the algorithm,
+        // so the two can overlap when an algorithm plans paths itself).
+        public float msAlgorithmPerSimSecond;
+        public float msPlanningPerSimSecond;
 
         // The longest single physics step the controller took (sense + pose + map + loop closure), real milliseconds.
         public float msLongestStep;

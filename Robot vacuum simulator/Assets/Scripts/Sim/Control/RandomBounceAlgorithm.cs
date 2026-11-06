@@ -1,4 +1,5 @@
-using UnityEngine;
+using System;
+using RobotVacuum.AlgorithmApi;
 
 namespace RobotVacuum.Sim.Control
 {
@@ -12,6 +13,8 @@ namespace RobotVacuum.Sim.Control
     /// or the whisker touches something (Blocked). Reached, Blocked or Unreachable: a new random direction.
     ///
     /// Supports SLAM: it needs no map at the start, and a wrong map only costs it a wasted leg.
+    ///
+    /// Written against the algorithm API only (no Unity), exactly as a plugin in the Algorithms folder would be.
     /// </summary>
     public sealed class RandomBounceAlgorithm : ICleaningAlgorithm
     {
@@ -30,7 +33,7 @@ namespace RobotVacuum.Sim.Control
         AlgorithmContext context;
         bool hasDirection;
         float direction; // heading, degrees
-        Vector2? goal;
+        Vec2? goal;
 
         public string Name => "Random";
         public bool SupportsSlam => true;
@@ -45,7 +48,7 @@ namespace RobotVacuum.Sim.Control
             goal = null;
         }
 
-        public Vector2? NextGoal(InternalModelView view, RobotPose believedPose, GoalStatus lastStatus)
+        public Vec2? NextGoal(IBeliefMap view, Pose2 believedPose, GoalStatus lastStatus)
         {
             bool keepLeg = hasDirection && goal.HasValue && lastStatus == GoalStatus.InProgress;
 
@@ -61,16 +64,16 @@ namespace RobotVacuum.Sim.Control
             return goal;
         }
 
-        void PickDirection(InternalModelView view, Vector2 from)
+        void PickDirection(IBeliefMap view, Vec2 from)
         {
             float bestLength = -1f;
             float bestDirection = 0f;
-            Vector2 bestGoal = from;
+            Vec2 bestGoal = from;
 
             for (int draw = 0; draw < MaxDraws; draw++)
             {
-                float candidate = context.random.NextFloat(RandomProvider.Subsystem.RandomBounceAlgorithm, 0f, 360f);
-                Vector2 target = Project(view, from, candidate, out float length);
+                float candidate = context.random.NextFloat(0f, 360f);
+                Vec2 target = Project(view, from, candidate, out float length);
 
                 if (length > bestLength)
                 {
@@ -93,32 +96,41 @@ namespace RobotVacuum.Sim.Control
         /// enough: heading into a wall at a shallow angle, a point 0.19 m back along the line can be a few
         /// centimetres from the wall.)
         /// </summary>
-        Vector2 Project(InternalModelView view, Vector2 from, float heading, out float length)
+        Vec2 Project(IBeliefMap view, Vec2 from, float heading, out float length)
         {
-            Vector2 forward = RobotPose.DirectionOf(heading);
+            Vec2 forward = Pose2.DirectionOf(heading);
             float free = view.FreeDistance(from, forward, MaxLegMeters);
             float clearance = context.robotRadius + WallMarginMeters;
 
-            length = free >= MaxLegMeters ? MaxLegMeters : Mathf.Max(0f, free - clearance);
+            length = free >= MaxLegMeters ? MaxLegMeters : Math.Max(0f, free - clearance);
 
-            float step = Mathf.Max(0.001f, context.cellSizeMeters);
+            float step = Math.Max(0.001f, context.cellSizeMeters);
             while (length > 0f && !BodyFits(view, from + forward * length, clearance))
-                length = Mathf.Max(0f, length - step);
+                length = Math.Max(0f, length - step);
 
             return from + forward * length;
         }
 
-        /// <summary>True if no cell believed impassable has its centre within <paramref name="clearance"/> of <paramref name="point"/>.</summary>
-        static bool BodyFits(InternalModelView view, Vector2 point, float clearance)
+        /// <summary>
+        /// True if no cell believed impassable comes within <paramref name="clearance"/> of <paramref name="point"/>,
+        /// measured to the cell's edge (a mapped wall may fill its cell), the same rule the path planner uses.
+        /// </summary>
+        static bool BodyFits(IBeliefMap view, Vec2 point, float clearance)
         {
-            Vector2 reach = new Vector2(clearance, clearance);
+            Vec2 reach = new Vec2(clearance, clearance);
             if (!view.TryWorldToCell(point - reach, out var low) || !view.TryWorldToCell(point + reach, out var high)) return false;
 
             float clearanceSq = clearance * clearance;
-            for (int row = low.row; row <= high.row; row++)
-                for (int col = low.col; col <= high.col; col++)
-                    if (view.IsBlocked(row, col) && (view.CellCenter(row, col) - point).sqrMagnitude <= clearanceSq)
-                        return false;
+            float half = view.CellSizeMeters * 0.5f;
+            for (int row = low.row - 1; row <= high.row + 1; row++)
+                for (int col = low.col - 1; col <= high.col + 1; col++)
+                {
+                    if (!view.IsBlocked(row, col)) continue;
+                    Vec2 centre = view.CellCenter(row, col);
+                    float dx = Math.Max(Math.Abs(point.x - centre.x) - half, 0f);
+                    float dy = Math.Max(Math.Abs(point.y - centre.y) - half, 0f);
+                    if (dx * dx + dy * dy < clearanceSq) return false;
+                }
             return true;
         }
     }

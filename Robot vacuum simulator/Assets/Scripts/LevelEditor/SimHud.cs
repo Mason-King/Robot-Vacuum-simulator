@@ -102,6 +102,7 @@ namespace RobotVacuum.LevelEditor
 
             var runtime = Ui.RunStat(bar, "Runtime");
             var speedStat = Ui.RunStat(bar, "Speed");
+            var rateStat = Ui.RunStat(bar, "Sim rate");
             var batteryStat = Ui.RunStat(bar, "Battery");
             var distance = Ui.RunStat(bar, "Distance");
             var surface = Ui.RunStat(bar, "Surface");
@@ -113,6 +114,8 @@ namespace RobotVacuum.LevelEditor
                 runtime.text = $"{(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}";
                 speedStat.text = new VacuumSettings().FormatSpeed(
                     robot != null ? robot.SpeedMetersPerSecond : 0f);
+                // Simulated seconds per real second: below the slider's value when the simulation can't keep up.
+                rateStat.text = isPaused ? "paused" : $"{SimulationSpeed.Actual:0.#}×";
                 batteryStat.text = battery != null
                     ? VacuumSettings.FormatBattery(battery.CurrentCharge, battery.Capacity)
                     : "—";

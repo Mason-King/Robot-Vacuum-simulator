@@ -245,6 +245,8 @@ namespace RobotVacuum.Sim
                 levelName = Level.name,
                 seed = Settings.seed,
                 pattern = Settings.pattern,
+                algorithmId = Settings.algorithmId,
+                algorithmName = Control.AlgorithmCatalog.NameOf(Settings.algorithmId),
                 targetMaxClean = Settings.targetMaxClean,
                 coveragePercent = Runner != null ? Runner.CoveragePercent : 0f,
                 blockedAreaSquareMeters = Runner != null ? Runner.BlockedArea : 0f,
@@ -262,6 +264,9 @@ namespace RobotVacuum.Sim
                 result.msPosePerSimSecond = brain.PoseMsPerSimSecond;
                 result.msMappingPerSimSecond = brain.MappingMsPerSimSecond;
                 result.msLoopClosurePerSimSecond = brain.LoopClosureMsPerSimSecond;
+                result.msControlPerSimSecond = brain.ControlMsPerSimSecond;
+                result.msAlgorithmPerSimSecond = brain.AlgorithmMsPerSimSecond;
+                result.msPlanningPerSimSecond = brain.PlanningMsPerSimSecond;
                 result.msLongestStep = brain.LongestStepMs;
 
                 var drift = brain.Drift;

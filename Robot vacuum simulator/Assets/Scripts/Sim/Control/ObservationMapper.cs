@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using RobotVacuum.Sim.Sensors;
+using RobotVacuum.AlgorithmApi;
 using UnityEngine;
 using C = RobotVacuum.Sim.Control.BeliefUpdateConstants;
 

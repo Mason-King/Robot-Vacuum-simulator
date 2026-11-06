@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using RobotVacuum.AlgorithmApi;
 using UnityEngine;
 using S = RobotVacuum.Sim.Control.LocalSlamConstants;
 

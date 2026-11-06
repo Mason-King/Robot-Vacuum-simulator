@@ -65,5 +65,62 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Heading error at which a turn-in-place counts as finished.</summary>
         public const float TurnDoneDegrees = 3f;
+
+        // ---- Path planning and re-routing ----
+
+        /// <summary>Switch for the planner: off = drive straight at the waypoint, as before the planner existed (for comparisons).</summary>
+        public static readonly bool PlanPaths = true;
+
+        /// <summary>Planned paths keep the body this far (beyond its radius) from anything believed impassable.</summary>
+        public const float ClearanceMarginMeters = 0.02f;
+
+        /// <summary>A gentle path corner counts as passed when the robot's centre is this close to it ...</summary>
+        public const float PathCornerToleranceMeters = 0.10f;
+
+        /// <summary>... gentle meaning the path bends by at most this much there; a sharper corner must be reached (arrival tolerance), so it isn't cut.</summary>
+        public const float GentleCornerDegrees = 20f;
+
+        /// <summary>How often the rest of the path is checked against the map while driving, when the map's obstacles changed.</summary>
+        public const float PathCheckPeriodSeconds = 0.25f;
+
+        /// <summary>
+        /// Re-routes after running into something (contact, a believed obstacle just ahead, or no progress) before the
+        /// goal is reported Blocked. Re-routes because the map changed further along the path are not counted.
+        /// </summary>
+        public const int MaxReroutes = 3;
+
+        /// <summary>
+        /// Contact further than this from straight ahead (but within <see cref="FrontContactDegrees"/>) is a graze: the
+        /// robot turns away from it and keeps going, without stopping or using a re-route. Nearer the front, it is an
+        /// encounter.
+        /// </summary>
+        public const float GlancingContactDegrees = 45f;
+
+        /// <summary>While grazing: turn away from the contact at this rate ...</summary>
+        public const float GlanceTurnDegreesPerSecond = 90f;
+
+        /// <summary>... at this fraction of drive speed.</summary>
+        public const float GlanceSpeedFraction = 0.6f;
+
+        /// <summary>More separate grazes than this on one leg of the path count as one encounter (no endless scraping).</summary>
+        public const int MaxGlancesPerLeg = 5;
+
+        /// <summary>A re-routed path may be at most this many times the goal's first planned path ...</summary>
+        public const float DetourFactor = 2f;
+
+        /// <summary>... plus this much; a longer detour reports Blocked instead (so a goal behind a long wall doesn't send the robot round the house).</summary>
+        public const float DetourExtraMeters = 4f;
+
+        /// <summary>The planner's search area: the known map, the start and the goal, plus this much on every side.</summary>
+        public const float PlannerPadMeters = 1f;
+
+        /// <summary>A search that expands more cells than this gives up (no path).</summary>
+        public const int PlannerMaxExpansions = 400_000;
+
+        /// <summary>Cells closer to an obstacle than the clearance (only allowed leaving the start or reaching the goal) cost this many times more.</summary>
+        public const float PlannerNearWallCostFactor = 3f;
+
+        /// <summary>Traversability below this is costed as this (so a very hard floor is avoided, not treated as nearly a wall).</summary>
+        public const float PlannerMinTraversability = 0.2f;
     }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using RobotVacuumSim.EnvironmentModel;
+using RobotVacuum.AlgorithmApi;
 using UnityEngine;
 
 namespace RobotVacuum.Sim.Control

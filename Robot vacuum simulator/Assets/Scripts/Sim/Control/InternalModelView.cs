@@ -1,13 +1,11 @@
 using System;
 using System.Collections.Generic;
+using RobotVacuum.AlgorithmApi;
 using RobotVacuumSim.EnvironmentModel;
 using UnityEngine;
 
 namespace RobotVacuum.Sim.Control
 {
-    /// <summary>Which belief a batch read returns.</summary>
-    public enum BeliefField { Traversability, VacuumResistance, Dwell, Cleanliness }
-
     /// <summary>
     /// What an algorithm sees of the Internal Model: the LIVE grid, read-only, with nothing copied (design doc 4.1).
     /// It has no setters, so an algorithm cannot change a belief; the controller is the only writer.
@@ -88,11 +86,7 @@ namespace RobotVacuum.Sim.Control
         // ---- Batch reads -------------------------------------------------------
 
         /// <summary>Buffer length <see cref="ReadRegion"/> needs for a region and block size.</summary>
-        public static int RegionBufferLength(int rows, int cols, int blockSize)
-        {
-            blockSize = Mathf.Max(1, blockSize);
-            return ((rows + blockSize - 1) / blockSize) * ((cols + blockSize - 1) / blockSize);
-        }
+        public static int RegionBufferLength(int rows, int cols, int blockSize) => BeliefRegion.BufferLength(rows, cols, blockSize);
 
         /// <summary>
         /// Reads a rectangle of cells, <paramref name="blockSize"/> × <paramref name="blockSize"/> cells per
@@ -155,6 +149,9 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Goes up whenever a reported change happens. Compare with the last value seen to know if anything changed.</summary>
         public int ChangeCounter => writer.ChangeCounter;
+
+        /// <summary>Goes up whenever a cell flips between impassable and passable (what a planner's cache depends on).</summary>
+        public int TopologyVersion => writer.TopologyVersion;
 
         /// <summary>
         /// Fills <paramref name="into"/> (cleared first) with the cells whose traversability or vacuum resistance
@@ -306,35 +303,5 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Called by the controller once per step, before the algorithm is asked anything.</summary>
         internal void SetBelievedPose(RobotPose pose) => robotPose = pose;
-    }
-
-    /// <summary>Grid line walking (Bresenham): every cell on the straight line between two cells, ends included.</summary>
-    public static class GridLine
-    {
-        public static IEnumerable<CellIndex> Cells(int r0, int c0, int r1, int c1)
-        {
-            int dc = Mathf.Abs(c1 - c0), sc = c0 < c1 ? 1 : -1;
-            int dr = -Mathf.Abs(r1 - r0), sr = r0 < r1 ? 1 : -1;
-            int error = dc + dr;
-
-            int r = r0, c = c0;
-            while (true)
-            {
-                yield return new CellIndex(r, c);
-                if (r == r1 && c == c1) yield break;
-
-                int twice = 2 * error;
-                if (twice >= dr)
-                {
-                    error += dr;
-                    c += sc;
-                }
-                if (twice <= dc)
-                {
-                    error += dc;
-                    r += sr;
-                }
-            }
-        }
     }
 }

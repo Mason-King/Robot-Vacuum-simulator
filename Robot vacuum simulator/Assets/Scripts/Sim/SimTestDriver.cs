@@ -38,6 +38,7 @@ namespace RobotVacuum.Sim
         LevelData handedLevel;
         SimHud hud;
         RunEndPanel endPanel;
+        bool overlayBox; // the Show Belief Overlay box as last applied, so only a change of the box is passed on
 
         void Awake()
         {
@@ -52,7 +53,11 @@ namespace RobotVacuum.Sim
             if (runLevel == null) return;
 
             // A level from the editor runs with the movement pattern chosen there.
-            if (handedLevel != null) settings.pattern = SimLauncher.MovementPattern;
+            if (handedLevel != null)
+            {
+                settings.pattern = SimLauncher.MovementPattern;
+                settings.algorithmId = Control.AlgorithmCatalog.IdOf(SimLauncher.MovementPattern);
+            }
 
             if (!SimulationSession.TryStart(runLevel, settings, headless: false, out session, out string error))
             {
@@ -62,6 +67,7 @@ namespace RobotVacuum.Sim
 
             session.Finished += OnRunFinished;
             session.Closed += OnSessionClosed;
+            overlayBox = settings.showBeliefOverlay;
             Debug.Log($"SimTestDriver: running {source}, seed {session.Settings.seed}. Run folder: {session.RunFolder}", this);
 
             FrameCamera();
@@ -72,6 +78,17 @@ namespace RobotVacuum.Sim
             hud.RestartRequested = RunAgain;
             hud.LeaveRequested = LeaveToEditor;
             hud.Show(runLevel); // the HUD destroys runLevel when it goes away
+        }
+
+        // Ticking Show Belief Overlay mid-run switches the overlay. (Its own Show box on the overlay object still
+        // works too; this only passes on changes of the box here.)
+        void Update()
+        {
+            if (settings.showBeliefOverlay == overlayBox) return;
+            overlayBox = settings.showBeliefOverlay;
+
+            var overlay = session != null && session.Runner != null ? session.Runner.BeliefOverlay : null;
+            if (overlay != null) overlay.Show = overlayBox;
         }
 
         void OnDestroy()

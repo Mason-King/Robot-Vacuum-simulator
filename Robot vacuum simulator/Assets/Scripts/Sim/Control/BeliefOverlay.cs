@@ -55,6 +55,7 @@ namespace RobotVacuum.Sim.Control
 
         Transform poseMarker;
         Transform waypointMarker;
+        LineRenderer pathLine;
         Material markerMaterial;
 
         /// <summary>The overlay's one on/off switch.</summary>
@@ -95,6 +96,7 @@ namespace RobotVacuum.Sim.Control
 
             poseMarker = BuildMarker("Believed Pose", BuildRing(0.17f, 0.025f, 40), PoseColour);
             waypointMarker = BuildMarker("Waypoint", BuildDisc(0.05f, 20), WaypointColour);
+            pathLine = BuildPathLine();
 
             transform.position = new Vector3(0f, 0f, depth);
             transform.rotation = Quaternion.identity;
@@ -143,6 +145,19 @@ namespace RobotVacuum.Sim.Control
             waypointMarker.gameObject.SetActive(waypoint.HasValue);
             if (waypoint.HasValue) waypointMarker.position = new Vector3(waypoint.Value.x, waypoint.Value.y, markerZ);
 
+            // The planned path, from where the robot believes it is through the corners still ahead.
+            var path = brain.CurrentPath;
+            int corner = brain.CurrentPathCorner;
+            int points = waypoint.HasValue && path.Count >= 2 && corner < path.Count ? path.Count - corner + 1 : 0;
+            pathLine.enabled = points >= 2;
+            pathLine.positionCount = points;
+            if (points >= 2)
+            {
+                pathLine.SetPosition(0, new Vector3(pose.position.x, pose.position.y, markerZ));
+                for (int i = corner; i < path.Count; i++)
+                    pathLine.SetPosition(i - corner + 1, new Vector3(path[i].x, path[i].y, markerZ));
+            }
+
             if (texture == null) return;
             var block = new MaterialPropertyBlock();
             block.SetTexture("_BaseMap", texture);
@@ -165,6 +180,7 @@ namespace RobotVacuum.Sim.Control
             if (renderer != null) renderer.enabled = show;
             if (poseMarker != null) poseMarker.gameObject.SetActive(show && ready);
             if (waypointMarker != null && !(show && ready)) waypointMarker.gameObject.SetActive(false);
+            if (pathLine != null && !(show && ready)) pathLine.enabled = false;
         }
 
         // ---- Map layer -----------------------------------------------------------------------------------
@@ -250,6 +266,29 @@ namespace RobotVacuum.Sim.Control
         }
 
         // ---- Markers -------------------------------------------------------------------------------------
+
+        LineRenderer BuildPathLine()
+        {
+            var go = new GameObject("Planned Path");
+            go.transform.SetParent(transform, false);
+            var line = go.AddComponent<LineRenderer>();
+            line.sharedMaterial = markerMaterial;
+            line.useWorldSpace = true;
+            line.widthMultiplier = 0.02f;
+            line.numCapVertices = 2;
+            line.numCornerVertices = 2;
+            line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            line.receiveShadows = false;
+            line.startColor = line.endColor = WaypointColour;
+            line.positionCount = 0;
+            line.enabled = false;
+
+            var block = new MaterialPropertyBlock();
+            block.SetColor("_BaseColor", WaypointColour);
+            block.SetColor("_Color", WaypointColour);
+            line.SetPropertyBlock(block);
+            return line;
+        }
 
         Transform BuildMarker(string name, Mesh mesh, Color colour)
         {

@@ -49,9 +49,14 @@ namespace RobotVacuum.Sim
         [Tooltip("Small random heading drift so the robot does not retrace identical paths.")]
         [SerializeField] float wanderDegreesPerSecond = 12f;
 
-        [Header("Movement")]
-        [Tooltip("The algorithm. The controller (MovementBrain) picks up a change at its next step.")]
+        // The built-in, for older code. Hidden in the Inspector: the Algorithm dropdown below sets it for a built-in.
+        [HideInInspector]
         [SerializeField] MovementPattern movementPattern = MovementPattern.RandomBounce;
+
+        [Header("Movement")]
+        [Tooltip("The algorithm: a built-in, or one from the Algorithms folder. The controller (MovementBrain) picks up a change at its next step.")]
+        [AlgorithmId(nameof(movementPattern))]
+        [SerializeField] string algorithmId = "";
 
         [Tooltip("Seeds every random choice the vacuum makes. The same seed drives the same route each run.")]
         [SerializeField] int seed;
@@ -112,11 +117,33 @@ namespace RobotVacuum.Sim
         public FloorType CurrentFloor =>
             levelRenderer != null ? levelRenderer.FloorTypeAtWorld(WorldPosition) : null;
 
-        /// <summary>The movement algorithm. Switching mid-run: the controller carries on from where the robot is.</summary>
+        /// <summary>
+        /// The movement algorithm, as one of the built-in patterns. Setting it selects that built-in (and clears any
+        /// <see cref="AlgorithmId"/>). Switching mid-run: the controller carries on from where the robot is.
+        /// </summary>
         public MovementPattern Pattern
         {
             get => movementPattern;
-            set => movementPattern = value;
+            set
+            {
+                movementPattern = value;
+                algorithmId = "";
+            }
+        }
+
+        /// <summary>
+        /// The movement algorithm, by catalog id (<see cref="Control.AlgorithmCatalog"/>): a built-in, or a plugin from the
+        /// Algorithms folder. Reads the pattern's id when no id was set. Setting a built-in's id also sets <see cref="Pattern"/>.
+        /// </summary>
+        public string AlgorithmId
+        {
+            get => string.IsNullOrEmpty(algorithmId) ? Control.AlgorithmCatalog.IdOf(movementPattern) : algorithmId;
+            set
+            {
+                var pattern = Control.AlgorithmCatalog.PatternOf(value);
+                if (pattern.HasValue) movementPattern = pattern.Value;
+                algorithmId = pattern.HasValue ? "" : value ?? "";
+            }
         }
 
         /// <summary>Seeds the vacuum's random choices. Takes effect at the next <see cref="ResetToSpawn"/>.</summary>

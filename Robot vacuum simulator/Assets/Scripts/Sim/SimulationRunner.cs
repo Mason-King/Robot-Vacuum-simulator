@@ -20,6 +20,12 @@ namespace RobotVacuum.Sim
 
             public MovementPattern pattern;
 
+            /// <summary>The algorithm by catalog id; null or empty = the built-in that <see cref="pattern"/> names.</summary>
+            public string algorithmId;
+
+            /// <summary>The algorithm this run uses, by id.</summary>
+            public string AlgorithmId => string.IsNullOrEmpty(algorithmId) ? AlgorithmCatalog.IdOf(pattern) : algorithmId;
+
             /// <summary>
             /// Seeds every random choice the vacuum makes. The same level, pattern and seed give the same
             /// run whether it is watched or headless, so results can be reproduced and compared.
@@ -52,6 +58,7 @@ namespace RobotVacuum.Sim
             {
                 visuals = !headless,
                 pattern = settings.pattern,
+                algorithmId = settings.algorithmId,
                 seed = settings.seed,
                 targetMaxClean = settings.targetMaxClean,
                 heatmapMode = settings.heatmapMode,
@@ -117,12 +124,9 @@ namespace RobotVacuum.Sim
         {
             var controllerSettings = options.controller ?? ControllerSettings.Default;
 
-            // Refused before anything is built: a SLAM run needs an algorithm that declares SLAM support.
-            if (controllerSettings.slam)
-            {
-                string refusal = AlgorithmCatalog.SlamRefusal(options.pattern);
-                if (refusal != null) throw new System.InvalidOperationException(refusal);
-            }
+            // Refused before anything is built: the algorithm must exist, and a SLAM run needs one that declares SLAM support.
+            string refusal = AlgorithmCatalog.Refusal(options.AlgorithmId, controllerSettings.slam);
+            if (refusal != null) throw new System.InvalidOperationException(refusal);
 
             var root = new GameObject("Simulation");
 
@@ -137,6 +141,7 @@ namespace RobotVacuum.Sim
             robotObject.transform.SetParent(root.transform, false);
             var robot = robotObject.AddComponent<VacuumRobot>();
             robot.Pattern = options.pattern;
+            robot.AlgorithmId = options.AlgorithmId;
             robot.Seed = options.seed;
 
             // ONE shared instance for the whole run -- see VacuumRobot.RandomSource's doc comment for why
@@ -173,7 +178,11 @@ namespace RobotVacuum.Sim
             }
 
             robot.ResetToSpawn();
-            return new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, beliefOverlay, options.seed);
+            var runner = new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, beliefOverlay, options.seed);
+
+            // The algorithm list is fixed until this run is stopped (or its objects are destroyed).
+            AlgorithmCatalog.BeginRun(runner, () => root != null);
+            return runner;
         }
 
         /// <summary>Puts the vacuum back at its start point and forgets all coverage.</summary>
@@ -191,6 +200,7 @@ namespace RobotVacuum.Sim
         /// </summary>
         public void Stop(bool immediate = false)
         {
+            AlgorithmCatalog.EndRun(this);
             if (Root == null) return;
 
             if (Application.isPlaying && !immediate) Object.Destroy(Root);

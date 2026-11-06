@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using RobotVacuum.AlgorithmApi;
 using RobotVacuum.Level;
 using RobotVacuum.Sim.Control;
 using RobotVacuum.Sim.Sensors;
@@ -61,11 +62,14 @@ namespace RobotVacuum.Sim
 
         // Timing (real milliseconds spent, for result.json; reporting only, never read by the simulation).
         readonly System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
-        double msSensing, msPose, msMapping, msLoopClosure;
+        double msSensing, msPose, msMapping, msLoopClosure, msControl, msAlgorithm;
         float msLongestStep;
 
-        MovementPattern activePattern;
+        string activeAlgorithmId;
+        AlgorithmEntry activeEntry;
         ICleaningAlgorithm algorithm;
+        BeliefMapAdapter map; // the view, behind the algorithm API
+        PathPlanner planner;  // the controller's, also offered to the algorithm through the map
         LegacyPatternDriver legacy;
         readonly WaypointDriver driver = new WaypointDriver();
 
@@ -101,11 +105,25 @@ namespace RobotVacuum.Sim
         /// <summary>The waypoint being driven to, or null (also null for the legacy patterns, which have none).</summary>
         public Vector2? CurrentWaypoint => legacy == null ? driver.Goal : null;
 
+        /// <summary>The planned path to the waypoint (start, corners, waypoint); empty when there is none (no planner, a legacy pattern, no goal).</summary>
+        public IReadOnlyList<Vector2> CurrentPath => legacy == null ? driver.Path : (IReadOnlyList<Vector2>)System.Array.Empty<Vector2>();
+
+        /// <summary>Re-routes used on the current waypoint, and re-plans of any kind this run (reporting).</summary>
+        public int CurrentPathCorner => driver.PathCorner;
+        public int CurrentReroutes => driver.Reroutes;
+        public int Replans => driver.Replans;
+
+        /// <summary>The body planner (clearance = radius + margin), or null before the run starts.</summary>
+        public PathPlanner Planner => planner;
+
         /// <summary>How the current waypoint is going.</summary>
         public GoalStatus CurrentGoalStatus => driver.Status;
 
         /// <summary>The algorithm in use, or null when a legacy pattern is running.</summary>
         public ICleaningAlgorithm Algorithm => algorithm;
+
+        /// <summary>The catalog entry of the algorithm in use (null before the run starts, or if its id was not found).</summary>
+        public AlgorithmEntry AlgorithmEntry => activeEntry;
 
         /// <summary>
         /// Distance between the believed and the true position, metres, both taken at the same physics step (odometry
@@ -131,6 +149,15 @@ namespace RobotVacuum.Sim
         public float PoseMsPerSimSecond => simTime > 0f ? (float)(msPose / simTime) : 0f;
         public float MappingMsPerSimSecond => simTime > 0f ? (float)(msMapping / simTime) : 0f;
         public float LoopClosureMsPerSimSecond => simTime > 0f ? (float)(msLoopClosure / simTime) : 0f;
+
+        /// <summary>Real milliseconds per simulated second on the goal and driving: the algorithm, path planning and re-routing.</summary>
+        public float ControlMsPerSimSecond => simTime > 0f ? (float)(msControl / simTime) : 0f;
+
+        /// <summary>The part of <see cref="ControlMsPerSimSecond"/> spent inside the algorithm's NextGoal (including any paths it asks for).</summary>
+        public float AlgorithmMsPerSimSecond => simTime > 0f ? (float)(msAlgorithm / simTime) : 0f;
+
+        /// <summary>Real milliseconds per simulated second in the path planner: plans and leg checks, whoever asked (the driver or the algorithm).</summary>
+        public float PlanningMsPerSimSecond => simTime > 0f && planner != null ? (float)(planner.Milliseconds / simTime) : 0f;
 
         /// <summary>The longest single physics step so far (sense + pose + map + loop closure), real milliseconds.</summary>
         public float LongestStepMs => msLongestStep;
@@ -198,11 +225,14 @@ namespace RobotVacuum.Sim
 
             writer = new InternalModelWriter(new InternalModelGrid(anchor, cellSize));
             view = new InternalModelView(writer);
+            planner = new PathPlanner(view, robot.Radius + ControllerConstants.ClearanceMarginMeters);
+            driver.Planner = ControllerConstants.PlanPaths ? planner : null;
+            map = new BeliefMapAdapter(view, planner);
 
             localSlam = settings.slam ? new LocalSlam(anchor, cellSize, settings.correctionQuality, settings.noiseScale) : null;
             globalSlam = settings.slam && settings.loopClosure ? new GlobalSlam(localSlam) : null;
             observations = new ObservationMapper(writer, settings.slam, localSlam, globalSlam);
-            msSensing = msPose = msMapping = msLoopClosure = 0;
+            msSensing = msPose = msMapping = msLoopClosure = msControl = msAlgorithm = 0;
             msLongestStep = 0f;
             drift.Clear();
 
@@ -228,36 +258,38 @@ namespace RobotVacuum.Sim
             slamLocalPose = believedPose;
             startSpinRemaining = settings.slam ? LocalSlamConstants.StartSpinDegrees : 0f;
 
-            activePattern = robot.Pattern;
-            BuildAlgorithm(activePattern);
+            activeAlgorithmId = robot.AlgorithmId;
+            BuildAlgorithm(activeAlgorithmId);
 
             ready = true;
         }
 
-        void BuildAlgorithm(MovementPattern pattern)
+        void BuildAlgorithm(string id)
         {
             algorithm = null;
             legacy = null;
             driver.Reset();
             nextGoalTime = simTime;
 
-            if (settings.slam && !AlgorithmCatalog.SupportsSlam(pattern))
+            activeEntry = AlgorithmCatalog.Find(id);
+            string refusal = AlgorithmCatalog.Refusal(id, settings.slam);
+            if (refusal != null)
             {
-                Fail(AlgorithmCatalog.SlamRefusal(pattern));
+                Fail(refusal);
                 return;
             }
 
-            if (AlgorithmCatalog.IsLegacyPattern(pattern))
+            if (activeEntry.IsLegacy)
             {
-                legacy = new LegacyPatternDriver(LegacyPatternBrain.Create(pattern, random), robot);
+                legacy = new LegacyPatternDriver(LegacyPatternBrain.Create(activeEntry.LegacyPattern.Value, random), robot);
                 if (legacy.Failed) Fail(legacy.Failure);
                 return;
             }
 
-            algorithm = AlgorithmCatalog.CreateGoalAlgorithm(pattern);
             try
             {
-                algorithm.Initialize(new AlgorithmContext(random, robot.Radius, robot.CleaningWidth,
+                algorithm = activeEntry.Create();
+                algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
                     writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f));
             }
             catch (System.Exception exception)
@@ -286,7 +318,7 @@ namespace RobotVacuum.Sim
             float dt = Time.fixedDeltaTime;
             simTime += dt;
 
-            if (robot.Pattern != activePattern) SwitchPattern(robot.Pattern);
+            if (robot.AlgorithmId != activeAlgorithmId) SwitchAlgorithm(robot.AlgorithmId);
             if (Failed) return;
 
             // 1. Sense, from the true pose.
@@ -362,6 +394,7 @@ namespace RobotVacuum.Sim
             }
             else
             {
+                stopwatch.Restart();
                 AskForGoalIfDue();
                 if (Failed) return;
 
@@ -369,6 +402,7 @@ namespace RobotVacuum.Sim
                 var input = new DriveInput(believedPose, simTime, dt, frame.bumped, frame.bumpBearing, view,
                     robot.Radius, robot.DriveSpeedMetersPerSecond, robot.ReverseSpeedMetersPerSecond, robot.TurnSpeedDegreesPerSecond);
                 driver.Step(input, out forward, out turn);
+                msControl += stopwatch.Elapsed.TotalMilliseconds;
             }
 
             robot.Command(forward, turn);
@@ -386,7 +420,17 @@ namespace RobotVacuum.Sim
             Vector2? next;
             try
             {
-                next = algorithm.NextGoal(view, believedPose, status);
+                long started = System.Diagnostics.Stopwatch.GetTimestamp();
+                Vec2? picked;
+                try
+                {
+                    picked = algorithm.NextGoal(map, believedPose.ToApi(), status);
+                }
+                finally
+                {
+                    msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                }
+                next = picked.HasValue ? picked.Value.ToUnity() : (Vector2?)null;
             }
             catch (System.Exception exception)
             {
@@ -410,18 +454,19 @@ namespace RobotVacuum.Sim
             // Same waypoint after Reached / Unreachable: leave it finished; the algorithm is asked again next period.
         }
 
-        void SwitchPattern(MovementPattern pattern)
+        void SwitchAlgorithm(string id)
         {
-            if (settings.slam && !AlgorithmCatalog.SupportsSlam(pattern))
+            string refusal = AlgorithmCatalog.Refusal(id, settings.slam);
+            if (refusal != null)
             {
                 // Refuse the switch rather than end the run: put the selection back.
-                Debug.LogWarning(AlgorithmCatalog.SlamRefusal(pattern) + " Keeping the current algorithm.", this);
-                robot.Pattern = activePattern;
+                Debug.LogWarning(refusal + " Keeping the current algorithm.", this);
+                robot.AlgorithmId = activeAlgorithmId;
                 return;
             }
 
-            activePattern = pattern;
-            BuildAlgorithm(pattern);
+            activeAlgorithmId = id;
+            BuildAlgorithm(id);
         }
 
         void Fail(string failure)
@@ -431,7 +476,7 @@ namespace RobotVacuum.Sim
             Failed = true;
             Failure = failure;
             if (robot != null) robot.Command(0f, 0f);
-            Debug.LogError($"Movement algorithm '{AlgorithmCatalog.NameOf(activePattern)}' stopped: {failure}", this);
+            Debug.LogError($"Movement algorithm '{AlgorithmCatalog.NameOf(activeAlgorithmId)}' stopped: {failure}", this);
         }
 
         /// <summary>SLAM only: <paramref name="from"/> moved by this step's (noisy) odometry, integrated along the mid-turn heading.</summary>
