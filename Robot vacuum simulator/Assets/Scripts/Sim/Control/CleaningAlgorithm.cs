@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using RobotVacuum.AlgorithmApi;
+using RobotVacuum.Algorithms;
 
 namespace RobotVacuum.Sim.Control
 {
@@ -69,6 +70,7 @@ namespace RobotVacuum.Sim.Control
         static readonly AlgorithmEntry[] builtIns =
         {
             new AlgorithmEntry(RandomBounceId, "Random", true, BuiltInOrigin, null, () => new RandomBounceAlgorithm()),
+            new AlgorithmEntry("Boustrophedon", "Boustrophedon", true, BuiltInOrigin, null, () => new BoustrophedonAlgorithm()),
             new AlgorithmEntry("Legacy.Spiral", "Spiral", false, BuiltInOrigin, MovementPattern.Spiral, null),
             new AlgorithmEntry("Legacy.WallFollow", "Wall follow", false, BuiltInOrigin, MovementPattern.WallFollow, null),
             new AlgorithmEntry("Legacy.Lawnmower", "Lawnmower", false, BuiltInOrigin, MovementPattern.Lawnmower, null),

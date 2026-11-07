@@ -27,6 +27,9 @@ namespace RobotVacuum.Sim.Control
         /// <summary>SLAM loop closure on/off (on by default). Not used in a Normal run.</summary>
         public bool loopClosure;
 
+        /// <summary>What the cleaning puts first: fast whole-floor passes, or each room to the target.</summary>
+        public RobotVacuum.AlgorithmApi.CleaningPriority cleaningPriority;
+
         /// <summary>The noise scale a Normal run carries: a constant, never the user's setting.</summary>
         public const float NormalNoiseScale = 0f;
 
@@ -59,6 +62,7 @@ namespace RobotVacuum.Sim.Control
                 floorSensorEnabled = resolved.floorSensorEnabled,
                 correctionQuality = resolved.slamCorrectionQuality,
                 loopClosure = resolved.slamLoopClosure,
+                cleaningPriority = resolved.cleaningPriority,
             };
         }
     }

@@ -5,7 +5,8 @@
         "RobotVacuum",
         "RobotVacuum.AlgorithmApi",
         "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
+        "UnityEditor.TestRunner",
+        "RobotVacuum.Algorithms"
     ],
     "includePlatforms": [
         "Editor"

@@ -76,6 +76,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Draws what the robot believes (its Internal Model, believed position and current waypoint) over the floor. Graphics runs only. Can also be switched during a run on the 'Belief Overlay (debug)' object.")]
         public bool showBeliefOverlay;
 
+        [Tooltip("Coverage: full speed, a whole pass over the floor at a time, repeated until it reaches the target (stop it whenever one is enough). Cleanliness: each room cleaned to the target before the next, sweeping no slower than 0.3 m/s. Algorithms that don't plan coverage (Random) ignore it.")]
+        public RobotVacuum.AlgorithmApi.CleaningPriority cleaningPriority = RobotVacuum.AlgorithmApi.CleaningPriority.Coverage;
+
         [Header("Advanced")]
         [Tooltip("SLAM only: how many lidar returns each scan match uses. Performance = every 3rd, least CPU; Balanced = every 2nd, the default; Reliable = every return, most CPU.")]
         public Control.PoseCorrectionQuality slamCorrectionQuality = Control.PoseCorrectionQuality.Balanced;

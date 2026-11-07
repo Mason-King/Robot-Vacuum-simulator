@@ -52,6 +52,13 @@ namespace RobotVacuum.AlgorithmApi
         /// <summary>Cleanliness the robot believes it has achieved in the cell.</summary>
         float Cleanliness(int row, int col);
 
+        /// <summary>
+        /// True if the robot has sensed this cell, free or blocked. In a SLAM run, unexplored cells still READ as open
+        /// floor (traversability 1), so use this to tell "known free" from "unknown". In a Normal run (the map is
+        /// given) every cell counts as explored.
+        /// </summary>
+        bool IsExplored(int row, int col);
+
         /// <summary>True if the cell is believed impassable (traversability 0).</summary>
         bool IsBlocked(int row, int col);
 

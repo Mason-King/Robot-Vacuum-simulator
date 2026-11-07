@@ -98,8 +98,9 @@ namespace RobotVacuum.Sim.Control
             Searches++;
             EnsureField(start, goal);
 
-            // In plain view (the usual case for a goal picked along a free line): one straight leg, no search.
-            if ((start.row == goal.row && start.col == goal.col) || Clear(from, to))
+            // In plain view (the usual case for a goal picked along a free line): one straight leg, no search. Not across
+            // unexplored floor, though: that would be a guess, and a known way round is preferred (below).
+            if ((start.row == goal.row && start.col == goal.col) || (Clear(from, to) && Known(start, goal)))
             {
                 into.Add(from);
                 into.Add(to);
@@ -285,6 +286,27 @@ namespace RobotVacuum.Sim.Control
             return true;
         }
 
+        /// <summary>A shortening leg: clear for the body, and not cutting across unexplored floor the search went round.</summary>
+        bool ClearAndKnown(Vector2 a, Vector2 b) =>
+            Clear(a, b) && view.TryWorldToCell(a, out var ca) && view.TryWorldToCell(b, out var cb) &&
+            (Known(ca, cb) || !AnyKnown(ca, cb));
+
+        /// <summary>True if any cell on the line has been sensed (a leg wholly in unknown floor is as the search found it).</summary>
+        bool AnyKnown(CellIndex a, CellIndex b)
+        {
+            foreach (var cell in GridLine.Cells(a.row, a.col, b.row, b.col))
+                if (view.IsExplored(cell.row, cell.col)) return true;
+            return false;
+        }
+
+        /// <summary>True if every cell on the straight line between two cells has been sensed (always, in a Normal run).</summary>
+        bool Known(CellIndex a, CellIndex b)
+        {
+            foreach (var cell in GridLine.Cells(a.row, a.col, b.row, b.col))
+                if (!view.IsExplored(cell.row, cell.col)) return false;
+            return true;
+        }
+
         /// <summary>The distance from the cell's centre to the nearest believed-impassable cell's edge (0 for such a cell), capped just above the clearance.</summary>
         public float ClearanceOf(int row, int col)
         {
@@ -460,6 +482,7 @@ namespace RobotVacuum.Sim.Control
                         float traversability = Mathf.Clamp(view.Traversability(rr + fieldMinRow, cc + fieldMinCol), K.PlannerMinTraversability, 1f);
                         float weight = 1f / traversability;
                         if (!Free(next)) weight *= K.PlannerNearWallCostFactor;
+                        if (!view.IsExplored(rr + fieldMinRow, cc + fieldMinCol)) weight *= K.PlannerUnknownCostFactor;
 
                         float candidate = cost[index] + step * weight;
                         if (seen[next] == search && candidate >= cost[next]) continue;
@@ -537,13 +560,13 @@ namespace RobotVacuum.Sim.Control
                 // Gallop ahead in doubling steps while the leg stays clear, then narrow down.
                 int next = anchor + 1;
                 int step = 1;
-                while (next + step < points.Count && Clear(points[anchor], points[next + step]))
+                while (next + step < points.Count && ClearAndKnown(points[anchor], points[next + step]))
                 {
                     next += step;
                     step *= 2;
                 }
                 for (step /= 2; step >= 1; step /= 2)
-                    if (next + step < points.Count && Clear(points[anchor], points[next + step])) next += step;
+                    if (next + step < points.Count && ClearAndKnown(points[anchor], points[next + step])) next += step;
 
                 into.Add(points[next]);
                 anchor = next;

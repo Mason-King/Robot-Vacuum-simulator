@@ -30,6 +30,12 @@ namespace RobotVacuum
         }
 
         public float CurrentCharge { get; private set; }
+
+        /// <summary>Charge used per metre driven (before the floor's multiplier).</summary>
+        public float DistanceEnergyPerMeter => distanceEnergyPerMeter;
+
+        /// <summary>Charge used per degree turned (before the floor's multiplier).</summary>
+        public float TurnEnergyPerDegree => turnEnergyPerDegree;
         public float ChargePercentage => capacity > 0f ? CurrentCharge / capacity * 100f : 0f;
         public bool CanOperate => CurrentCharge > 0f;
 

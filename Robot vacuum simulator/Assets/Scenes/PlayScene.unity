@@ -280,7 +280,7 @@ MonoBehaviour:
   palette: {fileID: 0}
   settings:
     pattern: 0
-    algorithmId: RandomBounce
+    algorithmId: Boustrophedon
     randomSeed: 1
     seed: 100
     targetMaxClean: 2
@@ -288,8 +288,8 @@ MonoBehaviour:
     driveSpeed: 0
     reverseSpeed: 0
     turnSpeed: 0
-    batteryCapacity: 300
-    slam: 0
+    batteryCapacity: 3600
+    slam: 1
     noiseScale: 1
     lidarEnabled: 1
     lidarRangeMeters: 0
@@ -297,6 +297,7 @@ MonoBehaviour:
     lidarRayCount: 360
     floorSensorEnabled: 1
     showBeliefOverlay: 1
+    cleaningPriority: 1
     slamCorrectionQuality: 0
     slamLoopClosure: 1
     cellSizeMeters: 0

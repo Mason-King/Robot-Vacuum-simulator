@@ -36,6 +36,14 @@ namespace RobotVacuum.Sim.Control
 
         RobotPose robotPose;
 
+        Func<int, int, bool> explored; // null = everything explored (a Normal run)
+
+        /// <summary>Where "explored" comes from: SLAM passes the observation mapper's drawn cells; null = everything is explored.</summary>
+        public void SetExploredSource(Func<int, int, bool> source) => explored = source;
+
+        /// <summary>True if the robot has sensed the cell (always, in a Normal run).</summary>
+        public bool IsExplored(int row, int col) => explored == null || explored(row, col);
+
         public InternalModelView(InternalModelWriter writer)
         {
             this.writer = writer ?? throw new ArgumentNullException(nameof(writer));
@@ -127,6 +135,7 @@ namespace RobotVacuum.Sim.Control
                             var cell = grid.GetCell(r, c);
                             float value = field switch
                             {
+                                BeliefField.Explored => IsExplored(r, c) ? 1f : 0f,
                                 BeliefField.Traversability => cell.traversabilityBelief,
                                 BeliefField.VacuumResistance => cell.vacuumResistanceBelief,
                                 BeliefField.Dwell => cell.dwellBelief,

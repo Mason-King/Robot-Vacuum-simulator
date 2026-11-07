@@ -50,6 +50,9 @@ namespace RobotVacuum.Sim.Control
         }
 
         /// <summary>Applies everything in <paramref name="frame"/>, seen from <paramref name="pose"/>.</summary>
+        /// <summary>SLAM: true if the cell is drawn from the submaps, i.e. the lidar has sensed it (free or blocked).</summary>
+        public bool IsDrawn(int row, int col) => drawn.Contains(CellIndex.Pack(row, col));
+
         public void Apply(SensorFrame frame, RobotPose pose)
         {
             if (frame.hasLidarScan) ApplyLidar(frame, pose);

@@ -245,7 +245,8 @@ namespace RobotVacuum.Sim
                 case RunEndReason.TimeCap: return "time limit reached";
                 case RunEndReason.StoppedByUser: return "stopped";
                 case RunEndReason.Error: return "error";
-                case RunEndReason.Degenerate: return "no progress";
+                case RunEndReason.Degenerate: return "could not complete";
+                case RunEndReason.ReturnedLowBattery: return "returned to dock (battery low)";
                 default: return "unknown";
             }
         }

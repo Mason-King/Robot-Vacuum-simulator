@@ -217,8 +217,16 @@ namespace RobotVacuum.Sim
 
             SimulatedSeconds += dt;
 
+            var outcome = Runner.Robot != null ? Runner.Robot.Outcome : Control.RunOutcome.None;
+
             if (Runner.Robot != null && Runner.Robot.AlgorithmFailed)
                 EndRun(RunEndReason.Error, "The movement algorithm failed. See the Console for details.", raiseFinished: true);
+            else if (outcome == Control.RunOutcome.Completed)
+                EndRun(RunEndReason.Completed, null, raiseFinished: true);
+            else if (outcome == Control.RunOutcome.DockedLowBattery)
+                EndRun(RunEndReason.ReturnedLowBattery, null, raiseFinished: true);
+            else if (outcome == Control.RunOutcome.DockUnreachable)
+                EndRun(RunEndReason.Degenerate, Runner.Robot.OutcomeMessage, raiseFinished: true);
             else if (Runner.Battery != null && !Runner.Battery.CanOperate)
                 EndRun(RunEndReason.BatteryDepleted, null, raiseFinished: true);
             else if (SimulatedSeconds >= SimDefaults.MaxSimulatedSeconds)

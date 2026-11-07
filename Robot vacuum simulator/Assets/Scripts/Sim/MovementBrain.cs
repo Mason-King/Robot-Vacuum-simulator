@@ -70,6 +70,23 @@ namespace RobotVacuum.Sim
         ICleaningAlgorithm algorithm;
         BeliefMapAdapter map; // the view, behind the algorithm API
         PathPlanner planner;  // the controller's, also offered to the algorithm through the map
+
+        // What the algorithm asks of the driving (speed mode, pass-through goals, finished), and what the current
+        // goal was given with.
+        DriveRequests drive = new DriveRequests();
+        DriveMode goalMode = DriveMode.Travel;
+        float goalExposure;
+        float targetCleanliness = 2f;
+
+        // The dock: where the run started (the one pose known exactly), and the trip back to it.
+        enum Homing { None, Finished, LowBattery }
+        Homing homing;
+        bool parked;
+        int homeAttempts;
+        Vector2 dockPosition;
+        float nextBatteryCheckTime;
+        Battery battery;
+        readonly List<Vector2> homePath = new List<Vector2>();
         LegacyPatternDriver legacy;
         readonly WaypointDriver driver = new WaypointDriver();
 
@@ -112,6 +129,15 @@ namespace RobotVacuum.Sim
         public int CurrentPathCorner => driver.PathCorner;
         public int CurrentReroutes => driver.Reroutes;
         public int Replans => driver.Replans;
+
+        /// <summary>How the job ended, once it has: finished and docked, docked on low battery, or the dock unreachable.</summary>
+        public RunOutcome Outcome { get; private set; }
+
+        /// <summary>The reason, for an outcome that is a problem.</summary>
+        public string OutcomeMessage { get; private set; }
+
+        /// <summary>True while the robot is driving back to the dock (finished, or battery low).</summary>
+        public bool ReturningToDock => homing != Homing.None && !parked;
 
         /// <summary>The body planner (clearance = radius + margin), or null before the run starts.</summary>
         public PathPlanner Planner => planner;
@@ -217,6 +243,13 @@ namespace RobotVacuum.Sim
             // The Internal Model shares the External Model's lattice: same cell size, same anchor (the spawn).
             float cellSize = cleaning != null && cleaning.Grid != null ? cleaning.Grid.CellSizeMeters : SimDefaults.CellSizeMeters;
             vacuumPower = cleaning != null ? cleaning.VacuumPower : HeatmapDefaults.BaseVacuumPower;
+            targetCleanliness = cleaning != null && cleaning.Grid != null ? cleaning.Grid.TargetMaxClean : HeatmapDefaults.TargetMaxClean;
+            battery = GetComponent<Battery>();
+            homing = Homing.None;
+            parked = false;
+            Outcome = RunOutcome.None;
+            OutcomeMessage = null;
+            nextBatteryCheckTime = 0f;
 
             var level = robot.Level;
             Vector2 anchor = levelRenderer != null && level != null
@@ -232,6 +265,7 @@ namespace RobotVacuum.Sim
             localSlam = settings.slam ? new LocalSlam(anchor, cellSize, settings.correctionQuality, settings.noiseScale) : null;
             globalSlam = settings.slam && settings.loopClosure ? new GlobalSlam(localSlam) : null;
             observations = new ObservationMapper(writer, settings.slam, localSlam, globalSlam);
+            view.SetExploredSource(settings.slam ? observations.IsDrawn : (System.Func<int, int, bool>)null);
             msSensing = msPose = msMapping = msLoopClosure = msControl = msAlgorithm = 0;
             msLongestStep = 0f;
             drift.Clear();
@@ -249,6 +283,7 @@ namespace RobotVacuum.Sim
             // The robot knows where it starts (its dock / spawn): the believed pose begins exactly at the true pose.
             believedPose = TruePose();
             trueAtBelief = believedPose;
+            dockPosition = believedPose.position;
             odometry.Reset(believedPose.position, believedPose.heading);
             view.SetBelievedPose(believedPose);
 
@@ -289,8 +324,11 @@ namespace RobotVacuum.Sim
             try
             {
                 algorithm = activeEntry.Create();
+                drive = new DriveRequests();
+                goalMode = DriveMode.Travel;
                 algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
-                    writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f));
+                    writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
+                    targetCleanliness, vacuumPower, drive, settings.cleaningPriority));
             }
             catch (System.Exception exception)
             {
@@ -392,16 +430,31 @@ namespace RobotVacuum.Sim
                     return;
                 }
             }
+            else if (parked)
+            {
+                forward = turn = 0f;
+            }
             else
             {
                 stopwatch.Restart();
-                AskForGoalIfDue();
-                if (Failed) return;
+                if (homing == Homing.None)
+                {
+                    AskForGoalIfDue();
+                    if (Failed) return;
+                    if (drive.Finished) StartHoming(Homing.Finished);
+                    else CheckBattery();
+                }
 
-                // The full drive speed is commanded; the body caps it for the floor it is really on.
+                // Travel: the full drive speed is commanded; the body caps it for the floor it is really on.
+                // Sweep: slow enough for the floor under the brush to reach the target in one pass.
+                float speed = robot.DriveSpeedMetersPerSecond;
+                if (homing == Homing.None && goalMode == DriveMode.Sweep) speed = Mathf.Min(speed, SweepSpeedHere());
+
                 var input = new DriveInput(believedPose, simTime, dt, frame.bumped, frame.bumpBearing, view,
-                    robot.Radius, robot.DriveSpeedMetersPerSecond, robot.ReverseSpeedMetersPerSecond, robot.TurnSpeedDegreesPerSecond);
+                    robot.Radius, speed, robot.ReverseSpeedMetersPerSecond, robot.TurnSpeedDegreesPerSecond);
                 driver.Step(input, out forward, out turn);
+                if (homing != Homing.None) CheckHomeArrival();
+                if (parked) forward = turn = 0f;
                 msControl += stopwatch.Elapsed.TotalMilliseconds;
             }
 
@@ -449,9 +502,96 @@ namespace RobotVacuum.Sim
             var current = driver.Goal;
             bool same = next.HasValue && current.HasValue && (next.Value - current.Value).sqrMagnitude < 1e-8f;
 
+            if (drive.Finished) return; // done: the trip home starts this step
+
+            goalMode = drive.Mode;
+            goalExposure = drive.SweepExposureMeters;
             if (same && status == GoalStatus.Blocked) driver.RetryAfterBlocked(believedPose, simTime, view);
-            else if (!same || status == GoalStatus.InProgress) driver.SetGoal(next, believedPose, simTime, view);
+            else if (!same || status == GoalStatus.InProgress) driver.SetGoal(next, believedPose, simTime, view, drive.PassThrough);
             // Same waypoint after Reached / Unreachable: leave it finished; the algorithm is asked again next period.
+        }
+
+        // ---- Sweep speed --------------------------------------------------------------------------------------
+
+        /// <summary>
+        /// The sweep speed for the floor under the brush now: v = exposure × power / (resistance × target), with the
+        /// HIGHEST believed vacuum resistance under the brush (so a tough patch at its edge still gets clean), slowed
+        /// a little more for safety (drift between lanes). The floor sensor keeps the resistance belief current as the
+        /// robot rolls onto new floor.
+        /// </summary>
+        float SweepSpeedHere()
+        {
+            float resistance = 1f;
+            float radius = robot.Radius;
+            Vector2 p = believedPose.position;
+            if (view.TryWorldToCell(p - new Vector2(radius, radius), out var low) && view.TryWorldToCell(p + new Vector2(radius, radius), out var high))
+            {
+                for (int row = low.row; row <= high.row; row++)
+                    for (int col = low.col; col <= high.col; col++)
+                        if ((view.CellCenter(row, col) - p).sqrMagnitude <= radius * radius)
+                            resistance = Mathf.Max(resistance, view.GetCell(row, col).vacuumResistanceBelief);
+            }
+            float speed = CoverageMath.SweepSpeed(goalExposure, vacuumPower, resistance, targetCleanliness) / ControllerConstants.SweepSpeedSafety;
+            return Mathf.Max(ControllerConstants.SweepSpeedFloor, speed);
+        }
+
+        // ---- The dock ------------------------------------------------------------------------------------------
+
+        /// <summary>Low battery: if the charge is down to what the trip home would cost (plus a margin), head home now.</summary>
+        void CheckBattery()
+        {
+            if (battery == null || simTime < nextBatteryCheckTime) return;
+            nextBatteryCheckTime = simTime + ControllerConstants.BatteryCheckSeconds;
+
+            if (!planner.FindPath(believedPose.position, dockPosition, homePath, out float length)) return; // no way home anyway
+            float turning = 180f + 90f * Mathf.Max(0, homePath.Count - 2); // turning to set off, and at each corner
+            float cost = (length * battery.DistanceEnergyPerMeter + turning * battery.TurnEnergyPerDegree) * ControllerConstants.HomeFloorMargin;
+            float reserve = cost * ControllerConstants.HomeReserveFactor + ControllerConstants.HomeReserveExtra;
+            if (battery.CurrentCharge <= reserve) StartHoming(Homing.LowBattery);
+        }
+
+        void StartHoming(Homing why)
+        {
+            homing = why;
+            homeAttempts = 0;
+            goalMode = DriveMode.Travel;
+            driver.Reset();
+            driver.SetGoal(dockPosition, believedPose, simTime, view);
+            Debug.Log(why == Homing.Finished
+                ? $"{AlgorithmCatalog.NameOf(activeAlgorithmId)} finished at {simTime:F0} s: returning to the dock."
+                : $"Battery low at {simTime:F0} s ({battery.CurrentCharge:F0} left): returning to the dock.", this);
+        }
+
+        /// <summary>On the way home: arrived, retry after Blocked (a few times), or give up and park where it is.</summary>
+        void CheckHomeArrival()
+        {
+            switch (driver.Status)
+            {
+                case GoalStatus.Reached:
+                    Park(homing == Homing.Finished ? RunOutcome.Completed : RunOutcome.DockedLowBattery, null);
+                    break;
+
+                case GoalStatus.Blocked when homeAttempts < ControllerConstants.HomeAttempts:
+                    homeAttempts++;
+                    driver.RetryAfterBlocked(believedPose, simTime, view);
+                    break;
+
+                case GoalStatus.Blocked:
+                case GoalStatus.Unreachable:
+                    var at = believedPose.position;
+                    Park(RunOutcome.DockUnreachable,
+                        $"The dock could not be reached ({(homing == Homing.Finished ? "job finished" : "battery low")}): " +
+                        $"{(driver.Status == GoalStatus.Unreachable ? "no path" : "blocked")} from ({at.x:F2}, {at.y:F2}) to ({dockPosition.x:F2}, {dockPosition.y:F2}).");
+                    break;
+            }
+        }
+
+        void Park(RunOutcome outcome, string message)
+        {
+            parked = true;
+            Outcome = outcome;
+            OutcomeMessage = message;
+            if (message != null) Debug.LogWarning(message, this);
         }
 
         void SwitchAlgorithm(string id)

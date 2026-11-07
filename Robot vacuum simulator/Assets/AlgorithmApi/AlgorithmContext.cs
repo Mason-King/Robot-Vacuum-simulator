@@ -21,15 +21,41 @@ namespace RobotVacuum.AlgorithmApi
         /// <summary>The lidar's maximum range, metres; 0 when the lidar is off.</summary>
         public readonly float lidarRangeMeters;
 
+        /// <summary>The cleanliness the run aims for in every cell (the run's target max clean). Compare with the map's Cleanliness.</summary>
+        public readonly float targetCleanliness;
+
+        /// <summary>The vacuum's power: cleanliness per second under the brush on floor of resistance 1.</summary>
+        public readonly float vacuumPower;
+
+        /// <summary>Requests to the controller: speed mode, pass-through goals, and "finished". Never null.</summary>
+        public readonly DriveRequests drive;
+
+        /// <summary>What the run puts first: covering everything fast, or cleaning each room to the target.</summary>
+        public readonly CleaningPriority priority;
+
+        /// <summary>The brush's radius (the brush covers the robot's footprint).</summary>
+        public float BrushRadius => cleaningWidth * 0.5f;
+
         public AlgorithmContext(IRandom random, float robotRadius, float cleaningWidth, float cellSizeMeters,
             bool slam, float lidarRangeMeters)
+            : this(random, robotRadius, cleaningWidth, cellSizeMeters, slam, lidarRangeMeters, 2f, 1f, new DriveRequests())
         {
+        }
+
+        public AlgorithmContext(IRandom random, float robotRadius, float cleaningWidth, float cellSizeMeters,
+            bool slam, float lidarRangeMeters, float targetCleanliness, float vacuumPower, DriveRequests drive,
+            CleaningPriority priority = CleaningPriority.Coverage)
+        {
+            this.priority = priority;
             this.random = random;
             this.robotRadius = robotRadius;
             this.cleaningWidth = cleaningWidth;
             this.cellSizeMeters = cellSizeMeters;
             this.slam = slam;
             this.lidarRangeMeters = lidarRangeMeters;
+            this.targetCleanliness = targetCleanliness;
+            this.vacuumPower = vacuumPower;
+            this.drive = drive ?? new DriveRequests();
         }
     }
 }

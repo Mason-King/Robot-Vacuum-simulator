@@ -30,7 +30,16 @@ namespace RobotVacuum.AlgorithmApi
     }
 
     /// <summary>Which belief a batch read (<see cref="IBeliefMap.ReadRegion"/>) returns.</summary>
-    public enum BeliefField { Traversability, VacuumResistance, Dwell, Cleanliness }
+    public enum BeliefField
+    {
+        Traversability,
+        VacuumResistance,
+        Dwell,
+        Cleanliness,
+
+        /// <summary>1 where the robot has sensed the cell (free or blocked), 0 where it never has. Blocks give the explored fraction.</summary>
+        Explored,
+    }
 
     /// <summary>Helpers for <see cref="IBeliefMap.ReadRegion"/>.</summary>
     public static class BeliefRegion

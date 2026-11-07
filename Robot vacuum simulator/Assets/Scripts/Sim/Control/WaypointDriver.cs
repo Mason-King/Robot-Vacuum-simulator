@@ -86,6 +86,7 @@ namespace RobotVacuum.Sim.Control
         bool nextPlanIsFirst;
         bool rerouteAfterBackOff;
         int glances;             // separate grazes on the current leg
+        bool passThrough;        // the goal is a point on the way: no slowing for it, Reached early
         bool wasTouching;
 
         public Phase CurrentPhase { get; private set; } = Phase.Idle;
@@ -93,6 +94,9 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Plans the paths. Null = drive straight at the goal (the behaviour before the planner).</summary>
         public PathPlanner Planner { get; set; }
+
+        /// <summary>True when the current goal is a point on the way (see <see cref="SetGoal"/>).</summary>
+        public bool PassThrough => passThrough;
 
         /// <summary>The goal being driven to, or null.</summary>
         public Vector2? Goal => hasGoal ? goal : (Vector2?)null;
@@ -130,6 +134,7 @@ namespace RobotVacuum.Sim.Control
             replanWhenDriving = false;
             path.Clear();
             reroutes = 0;
+            passThrough = false;
         }
 
         /// <summary>
@@ -137,8 +142,14 @@ namespace RobotVacuum.Sim.Control
         /// <see cref="K.SameGoalMeters"/> of the current one is treated as the same goal, nudged: progress timing and
         /// re-routes carry on, so an algorithm can't keep a stuck robot "busy" by moving its goal a hair each time.
         /// </summary>
-        public void SetGoal(Vector2? waypoint, RobotPose pose, float simTime, InternalModelView view)
+        /// <param name="passThrough">
+        /// The goal is a point on the way, not a destination: no slowing down for it, and it is reported Reached as soon
+        /// as the robot is within <see cref="DriveRequests.PassThroughMeters"/>, while the robot keeps moving, so the
+        /// next goal carries the motion on without a stop.
+        /// </param>
+        public void SetGoal(Vector2? waypoint, RobotPose pose, float simTime, InternalModelView view, bool passThrough = false)
         {
+            this.passThrough = passThrough && waypoint.HasValue;
             if (!waypoint.HasValue)
             {
                 hasGoal = false;
@@ -306,7 +317,19 @@ namespace RobotVacuum.Sim.Control
                 }
             }
 
-            if (Vector2.Distance(pose.position, goal) <= K.ArrivalToleranceMeters)
+            float toGoal = Vector2.Distance(pose.position, goal);
+            if (passThrough && toGoal <= DriveRequests.PassThroughMeters)
+            {
+                // Passed: report it, and keep rolling toward it until the next goal arrives (asked for at once).
+                Status = GoalStatus.Reached;
+                StatusReported = false;
+                float passError = pose.BearingTo(goal);
+                turn = Mathf.Clamp(passError * K.SteeringGain, -input.turnSpeed, input.turnSpeed);
+                forward = Mathf.Abs(passError) > K.TurnInPlaceDegrees ? 0f : input.driveSpeed * Mathf.Cos(passError * Mathf.Deg2Rad);
+                return;
+            }
+
+            if (toGoal <= K.ArrivalToleranceMeters)
             {
                 Finish(GoalStatus.Reached);
                 return;
@@ -337,8 +360,8 @@ namespace RobotVacuum.Sim.Control
 
             if (Mathf.Abs(error) > K.TurnInPlaceDegrees) return; // face it first
 
-            // Slow down for the goal, and for a sharp corner (it must be reached, not cut).
-            float slowFor = remaining;
+            // Slow down for the goal (not for a point on the way), and for a sharp corner (it must be reached, not cut).
+            float slowFor = passThrough ? float.PositiveInfinity : remaining;
             if (Planning && corner < path.Count - 1 && CornerTolerance(corner) <= K.ArrivalToleranceMeters)
                 slowFor = Mathf.Min(slowFor, Vector2.Distance(pose.position, path[corner]));
             float approach = Mathf.Clamp(slowFor / K.SlowdownRadiusMeters, K.MinApproachFraction, 1f);

@@ -77,6 +77,7 @@ namespace RobotVacuum.Sim.Control
         public float VacuumResistance(int row, int col) => view.GetCell(row, col).vacuumResistanceBelief;
         public float Dwell(int row, int col) => view.GetCell(row, col).dwellBelief;
         public float Cleanliness(int row, int col) => view.GetCell(row, col).cleanlinessBelief;
+        public bool IsExplored(int row, int col) => view.IsExplored(row, col);
         public bool IsBlocked(int row, int col) => view.IsBlocked(row, col);
         public bool IsBlockedAt(Vec2 world) => view.IsBlockedAt(world.ToUnity());
 

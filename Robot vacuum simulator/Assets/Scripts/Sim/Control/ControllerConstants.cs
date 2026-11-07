@@ -66,6 +66,32 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Heading error at which a turn-in-place counts as finished.</summary>
         public const float TurnDoneDegrees = 3f;
 
+        // ---- Sweeping and the dock ----
+
+        /// <summary>Sweep speed is the one-pass speed divided by this, for drift between lanes and floor the sensor hasn't reported yet.</summary>
+        public const float SweepSpeedSafety = 1.1f;
+
+        /// <summary>
+        /// The slowest sweep. Slower would reach the target in fewer passes, but it is too slow to watch: where one pass
+        /// at this speed isn't enough, the algorithm makes more passes instead.
+        /// </summary>
+        public const float SweepSpeedFloor = 0.3f;
+
+        /// <summary>How often the trip home is costed against the battery, simulated seconds.</summary>
+        public const float BatteryCheckSeconds = 1f;
+
+        /// <summary>The trip home is costed on normal floor times this (the robot doesn't know every floor's energy cost).</summary>
+        public const float HomeFloorMargin = 1.5f;
+
+        /// <summary>Head home when the charge is down to this many times the trip's cost ...</summary>
+        public const float HomeReserveFactor = 1.25f;
+
+        /// <summary>... plus this much charge (detours, re-routes).</summary>
+        public const float HomeReserveExtra = 2f;
+
+        /// <summary>Blocked on the way home: retries (turn away, sidestep, try again) before giving up.</summary>
+        public const int HomeAttempts = 3;
+
         // ---- Path planning and re-routing ----
 
         /// <summary>Switch for the planner: off = drive straight at the waypoint, as before the planner existed (for comparisons).</summary>
@@ -119,6 +145,12 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Cells closer to an obstacle than the clearance (only allowed leaving the start or reaching the goal) cost this many times more.</summary>
         public const float PlannerNearWallCostFactor = 3f;
+
+        /// <summary>
+        /// Unexplored cells (SLAM) read as open floor, but a path across them is a guess: they cost this many times
+        /// more, so a known way round is taken when there is one, and unknown floor only when it is much shorter.
+        /// </summary>
+        public const float PlannerUnknownCostFactor = 4f;
 
         /// <summary>Traversability below this is costed as this (so a very hard floor is avoided, not treated as nearly a wall).</summary>
         public const float PlannerMinTraversability = 0.2f;

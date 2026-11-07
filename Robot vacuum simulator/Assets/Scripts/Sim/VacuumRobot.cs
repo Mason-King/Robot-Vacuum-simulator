@@ -93,6 +93,12 @@ namespace RobotVacuum.Sim
         /// <summary>True when the controller stopped because its algorithm failed (the run then ends with an error).</summary>
         public bool AlgorithmFailed => Brain != null && Brain.Failed;
 
+        /// <summary>How the robot's job ended, if it has (finished and docked, docked on low battery, or the dock unreachable).</summary>
+        public Control.RunOutcome Outcome => Brain != null ? Brain.Outcome : Control.RunOutcome.None;
+
+        /// <summary>Why, for an outcome that is a problem (e.g. the dock unreachable).</summary>
+        public string OutcomeMessage => Brain != null ? Brain.OutcomeMessage : null;
+
         public float SpeedMetersPerSecond => body != null ? body.linearVelocity.magnitude : 0f;
 
         public float DriveSpeedMetersPerSecond => driveSpeed;

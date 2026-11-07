@@ -13,7 +13,7 @@ namespace RobotVacuum.Sim
         /// <summary>Not ended (a result with this reason was never finished).</summary>
         None = 0,
 
-        /// <summary>The cleaning algorithm reported the job done. Reserved: no algorithm reports this yet.</summary>
+        /// <summary>The cleaning algorithm reported the job done and the robot drove back to the dock.</summary>
         Completed = 1,
 
         /// <summary>The battery ran out: the normal way a run ends (SDD 1.3.3).</summary>
@@ -28,8 +28,14 @@ namespace RobotVacuum.Sim
         /// <summary>Something failed. Detection is planned, not built (SDD Section 12).</summary>
         Error = 5,
 
-        /// <summary>The run stopped making progress without an error (stuck robot and similar). Planned, not built.</summary>
+        /// <summary>
+        /// The run could not complete without an error: the robot stopped making progress, or (built) it finished or ran
+        /// low but could not reach the dock. errorMessage says which.
+        /// </summary>
         Degenerate = 6,
+
+        /// <summary>The battery ran low, so the robot drove back to the dock before the job was done.</summary>
+        ReturnedLowBattery = 7,
     }
 
     /// <summary>

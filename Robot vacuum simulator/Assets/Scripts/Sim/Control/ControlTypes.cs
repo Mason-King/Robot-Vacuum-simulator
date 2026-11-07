@@ -32,4 +32,19 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Signed degrees to turn (positive = left) to face <paramref name="point"/>.</summary>
         public float BearingTo(Vector2 point) => Mathf.DeltaAngle(heading, HeadingOf(point - position));
     }
+
+    /// <summary>How the robot's job ended (see MovementBrain): the session ends the run accordingly.</summary>
+    public enum RunOutcome
+    {
+        None,
+
+        /// <summary>The algorithm finished and the robot is back at the dock.</summary>
+        Completed,
+
+        /// <summary>The battery ran low and the robot is back at the dock.</summary>
+        DockedLowBattery,
+
+        /// <summary>The robot finished or ran low but could not reach the dock; it parked where it was.</summary>
+        DockUnreachable,
+    }
 }
