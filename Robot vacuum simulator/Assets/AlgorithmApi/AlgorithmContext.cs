@@ -1,3 +1,5 @@
+using System;
+
 namespace RobotVacuum.AlgorithmApi
 {
     /// <summary>What an algorithm is told once, when a run starts (or restarts).</summary>
@@ -30,11 +32,20 @@ namespace RobotVacuum.AlgorithmApi
         /// <summary>Requests to the controller: speed mode, pass-through goals, and "finished". Never null.</summary>
         public readonly DriveRequests drive;
 
-        /// <summary>What the run puts first: covering everything fast, or cleaning each room to the target.</summary>
-        public readonly CleaningPriority priority;
+        /// <summary>
+        /// The controller's analysis of the map: where the body fits, reach over known floor, rooms and doorways. Shared
+        /// by every algorithm; call its Update when deciding. Null only in a context built without one.
+        /// </summary>
+        public readonly IMapAnalysis analysis;
+
+        /// <summary>Where <see cref="Log"/> goes (the Console, when the run logs algorithm decisions). May be null.</summary>
+        public readonly Action<string> log;
 
         /// <summary>The brush's radius (the brush covers the robot's footprint).</summary>
         public float BrushRadius => cleaningWidth * 0.5f;
+
+        /// <summary>Writes a line to the run's log (the Console) when the run logs algorithm decisions; otherwise nothing.</summary>
+        public void Log(string message) => log?.Invoke(message);
 
         public AlgorithmContext(IRandom random, float robotRadius, float cleaningWidth, float cellSizeMeters,
             bool slam, float lidarRangeMeters)
@@ -44,9 +55,10 @@ namespace RobotVacuum.AlgorithmApi
 
         public AlgorithmContext(IRandom random, float robotRadius, float cleaningWidth, float cellSizeMeters,
             bool slam, float lidarRangeMeters, float targetCleanliness, float vacuumPower, DriveRequests drive,
-            CleaningPriority priority = CleaningPriority.Coverage)
+            IMapAnalysis analysis = null, Action<string> log = null)
         {
-            this.priority = priority;
+            this.analysis = analysis;
+            this.log = log;
             this.random = random;
             this.robotRadius = robotRadius;
             this.cleaningWidth = cleaningWidth;

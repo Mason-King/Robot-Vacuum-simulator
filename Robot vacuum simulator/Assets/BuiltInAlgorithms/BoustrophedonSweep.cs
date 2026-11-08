@@ -5,44 +5,39 @@ using RobotVacuum.AlgorithmApi;
 namespace RobotVacuum.Algorithms
 {
     /// <summary>
-    /// Boustrophedon ("ox-turning") coverage: parallel lanes driven back and forth, room by room, in PASSES.
+    /// Boustrophedon Sweep: cover all the floor as fast as possible, then go round again until it is clean.
     ///
-    /// The run's <see cref="CleaningPriority"/> decides the order and the speed:
-    ///   * Coverage: full speed. One whole pass over every room, then another pass (lanes turned 90°, crossing the
-    ///     last), each pass complete before the next, until the floor reaches the target.
-    ///   * Cleanliness: sweep speed (no slower than the controller's floor, ~0.3 m/s). Each room gets pass after pass
-    ///     until it is at the target, then the next room.
-    /// Done when everything reachable is at the target (or after <see cref="MaxPasses"/>): drive.Finish(), and the
-    /// controller drives home to the dock.
+    /// Parallel lanes driven back and forth at FULL speed, room by room, in PASSES. Lanes just overlap (10%), so one
+    /// pass leaves no gaps with the fewest lanes. A pass covers every room before the next pass begins; each new pass
+    /// turns the lanes 90° (crossing the last), and passes repeat until everything reachable is at the target (or after
+    /// <see cref="MaxPasses"/>). A user who finds one pass enough can stop it. Then drive.Finish(), and the controller
+    /// drives home to the dock. (Boustrophedon Crawl is the slow, thorough one.)
     ///
-    /// Each decision starts from a fresh look at the map:
-    ///   * REACH (<see cref="ReachField"/>): path distance from the robot to every cell over KNOWN floor. Reachable and
-    ///     nearest mean this; nothing is chosen by straight-line distance, and floor glimpsed through a gap in a
-    ///     half-drawn wall is not reachable.
-    ///   * ROOMS (<see cref="RoomUnits"/>): the floor cut at doorways, found as gaps between wall ends.
+    /// Each decision starts from the controller's map analysis (<see cref="IMapAnalysis"/>):
+    ///   * REACH: path distance from the robot over KNOWN floor. Reachable and nearest mean this.
+    ///   * ROOMS: the floor cut at doorways.
     ///   * LANES per room, along that room's own walls (an angled room gets angled lanes).
     ///
-    /// A PASS over a room:
-    ///   1. EDGES: run along the clearance line (19 cm from a wall face) where the strip by the wall is still below
-    ///      the target. Traced as a chain of cells, bridged over small gaps, straightened (Ramer–Douglas–Peucker); a
-    ///      straight leg that grazes the wall's staircase of cells is slid off it a centimetre at a time.
-    ///   2. LANES: a "cell" is swept monotonically, lane after lane in one direction, joined by semicircular U-turns
-    ///      driven without stopping, from the room's end lane nearest the robot. The pass keeps its own record of the
-    ///      lane stretches it has swept: driving across the room on the way somewhere does NOT count, so it can't cut
-    ///      the lanes in two.
+    /// A pass over a room:
+    ///   1. EDGES: along the walls where the strip by the wall is below the target, as close as the edge margin lets
+    ///      the body go (<see cref="EdgeMarginMeters"/> from the wall as mapped). Traced as a chain of cells, bridged
+    ///      over small gaps, straightened (Ramer–Douglas–Peucker), each corner moved onto the line that distance from
+    ///      the wall; a leg that still grazes the wall's staircase of cells is slid off it a centimetre at a time.
+    ///   2. LANES: a "cell" is swept monotonically, lane after lane in one direction, joined by U-turns driven without
+    ///      stopping, from the room's end lane nearest the robot. The pass keeps its own record of the lane stretches it
+    ///      has swept: driving across the room on the way somewhere does NOT count.
     ///   3. PATCHES: what the lanes missed (dirty, and not under the brush at all this pass), as connected clusters,
-    ///      nearest first, each cleaned completely (nearest cell next) before the next.
+    ///      nearest first.
     /// SLAM: when no room has work in this pass but the map has a frontier, explore the nearest.
     /// </summary>
-    public sealed class BoustrophedonAlgorithm : ICleaningAlgorithm
+    public sealed class BoustrophedonSweep : ICleaningAlgorithm
     {
+        public const string Id = "BoustrophedonSweep";
+
         // ---- Tuning ----
 
-        /// <summary>Cleanliness priority: lane spacing as a fraction of the brush width (0.765 → 26 cm for a 34 cm brush), the spacing that cleans fastest per pass.</summary>
-        public const float LaneSpacingFraction = 0.765f;
-
-        /// <summary>Coverage priority: lanes just overlapping (10%), so one pass leaves no gaps with the fewest lanes.</summary>
-        public const float CoverageSpacingFraction = 0.9f;
+        /// <summary>Lanes just overlapping (10%): one pass leaves no gaps with the fewest lanes.</summary>
+        public const float SpacingFraction = 0.9f;
 
         /// <summary>A cell counts as clean at this fraction of the target.</summary>
         public const float CleanEnough = 0.95f;
@@ -53,11 +48,30 @@ namespace RobotVacuum.Algorithms
         /// <summary>Shorter to-do stretches are not worth a lane (patches pick them up).</summary>
         public const float MinRunMeters = 0.15f;
 
-        /// <summary>Points along a U-turn arc (a semicircle), not counting its ends.</summary>
-        public const int ArcPoints = 5;
+        /// <summary>At most this many points along a U-turn's semicircle (not counting its ends), and at least this far apart.</summary>
+        public const int MaxArcPoints = 5;
+        public const float ArcPointSpacingMeters = 0.08f;
 
-        /// <summary>The edge pass cleans the strip up to this far short of the brush's reach.</summary>
+        /// <summary>The edge run keeps the body this far (beyond its radius) from the wall as mapped. Paths elsewhere keep the planner's margin.</summary>
+        public const float EdgeMarginMeters = 0.02f;
+
+        /// <summary>The same, in a SLAM run: walls drawn from the lidar are less exact, and every bump disturbs the pose.</summary>
+        public const float SlamEdgeMarginMeters = 0.03f;
+
+        /// <summary>Extra margin at an edge run's corners and ends, where two walls' errors (and door jambs) add up.</summary>
+        public const float CornerExtraMeters = 0.02f;
+
+        /// <summary>The extra margin is eased in and out over this distance either side of a corner, so the walls between keep the edge line.</summary>
+        public const float CornerEaseMeters = 0.1f;
+
+        /// <summary>A lane carries straight on over floor already clean for up to this far, rather than splitting there.</summary>
+        public const float BridgeMeters = 0.6f;
+
+        /// <summary>The edge pass is for the strip up to this far short of the brush's reach.</summary>
         public const float EdgeInsetMeters = 0.03f;
+
+        /// <summary>An edge waypoint is pass-through only where the run bends less than this.</summary>
+        public const float GentleTurnDegrees = 20f;
 
         /// <summary>A stretch of edge shorter than this many cells is not worth a trip.</summary>
         public const int MinEdgeCells = 8;
@@ -68,7 +82,7 @@ namespace RobotVacuum.Algorithms
         /// <summary>Edge straightening tolerance (Ramer–Douglas–Peucker), metres.</summary>
         public const float EdgeTolerance = 0.02f;
 
-        /// <summary>A straightened edge leg that grazes the wall's cells is slid off it up to this far, a centimetre at a time.</summary>
+        /// <summary>An edge leg that grazes the wall's cells is slid off it up to this far, a centimetre at a time.</summary>
         public const float EdgeSlideMeters = 0.04f;
 
         /// <summary>A patch cell visited this many times without getting clean is given up on.</summary>
@@ -80,15 +94,13 @@ namespace RobotVacuum.Algorithms
         /// <summary>A target that failed is skipped until the map has changed this many times, or this many questions have passed.</summary>
         public const int SkipForChanges = 40, SkipForQuestions = 120;
 
-        public string Name => "Boustrophedon";
+        public string Name => "Boustrophedon Sweep";
         public bool SupportsSlam => true;
 
         // ---- State ----
 
         AlgorithmContext context;
-        readonly MapSnapshot snapshot = new MapSnapshot();
-        readonly ReachField reach = new ReachField();
-        readonly RoomUnits rooms = new RoomUnits();
+        IMapAnalysis analysis;
         readonly List<Step> plan = new List<Step>();
         int planIndex;
         readonly Dictionary<long, (int change, int question)> skipped = new Dictionary<long, (int, int)>();
@@ -97,9 +109,8 @@ namespace RobotVacuum.Algorithms
         int questions;
 
         float spacing;
-        float laneExposure;
-        int pass;                                                            // 0 = the first pass
-        readonly Dictionary<long, float> passStart = new Dictionary<long, float>();              // dwell when the pass began
+        int pass;                                                                                   // 0 = the first pass
+        readonly Dictionary<long, float> passStart = new Dictionary<long, float>();                // dwell when the pass began
         readonly Dictionary<long, List<(float s0, float s1)>> swept = new Dictionary<long, List<(float, float)>>(); // this pass
 
         // Per decision.
@@ -116,11 +127,10 @@ namespace RobotVacuum.Algorithms
         struct Step
         {
             public Vec2 point;
-            public DriveMode mode;
             public bool passThrough;
-            public float exposure;
             public long skipKey;
             public long sweptKey;   // != 0: reaching this point sweeps lane stretch sFrom..sTo
+            public bool edge;       // part of an edge run: if it can't be reached, go on to the next one
             public float sFrom, sTo;
         }
 
@@ -133,17 +143,16 @@ namespace RobotVacuum.Algorithms
         // For tests and the overlay.
         public float LaneSpacing => spacing;
         public Vec2 LaneDirection => along;
-        public int RoomCount => rooms.Count;
-        public IReadOnlyList<(Vec2 a, Vec2 b)> Doorways => rooms.Doorways;
+        public int RoomCount => analysis != null ? analysis.RoomCount : 0;
+        public IReadOnlyList<(Vec2 a, Vec2 b)> Doorways => analysis != null ? analysis.Doorways : Array.Empty<(Vec2, Vec2)>();
         public int Pass => pass;
         public string Activity => activity;
 
         public void Initialize(AlgorithmContext context)
         {
             this.context = context;
-            spacing = context.cleaningWidth *
-                      (context.priority == CleaningPriority.Coverage ? CoverageSpacingFraction : LaneSpacingFraction);
-            laneExposure = CoverageMath.LaneExposure(spacing, context.BrushRadius);
+            analysis = context.analysis ?? throw new InvalidOperationException("Boustrophedon Sweep needs the controller's map analysis (AlgorithmContext.analysis).");
+            spacing = context.cleaningWidth * SpacingFraction;
             pass = 0;
             passStart.Clear();
             swept.Clear();
@@ -174,6 +183,15 @@ namespace RobotVacuum.Algorithms
                 }
                 else if (lastStatus == GoalStatus.Blocked || lastStatus == GoalStatus.Unreachable)
                 {
+                    var failed = plan[planIndex].point;
+                    if (plan[planIndex].edge && planIndex + 1 < plan.Count)
+                    {
+                        // One point of an edge run (a corner the body can't quite get into): carry on along the run.
+                        context.Log($"edge: waypoint ({failed.x:F2}, {failed.y:F2}) {lastStatus}; going on to the next");
+                        planIndex++;
+                        return Issue(plan[planIndex]);
+                    }
+                    context.Log($"{activity}: goal ({failed.x:F2}, {failed.y:F2}) {lastStatus}; skipping that piece of work");
                     Skip(map, plan[planIndex].skipKey);
                     planIndex = plan.Count; // abandon the rest of this piece of work
                 }
@@ -187,32 +205,21 @@ namespace RobotVacuum.Algorithms
 
         Vec2 Issue(Step step)
         {
-            context.drive.Mode = step.mode;
-            context.drive.SweepExposureMeters = step.exposure;
+            context.drive.Mode = DriveMode.Travel; // Sweep always drives at full speed
             context.drive.PassThrough = step.passThrough;
             return step.point;
         }
 
-        /// <summary>A cleaning step: full speed (Coverage) or sweep speed (Cleanliness).</summary>
-        Step Clean(Vec2 point, bool passThrough, long skipKey) => new Step
-        {
-            point = point,
-            mode = context.priority == CleaningPriority.Coverage ? DriveMode.Travel : DriveMode.Sweep,
-            exposure = laneExposure,
-            passThrough = passThrough,
-            skipKey = skipKey,
-        };
+        Step Clean(Vec2 point, bool passThrough, long skipKey) => new Step { point = point, passThrough = passThrough, skipKey = skipKey };
 
         // ---- Choosing ----------------------------------------------------------------------------------
 
         bool Choose(IBeliefMap map, Pose2 pose)
         {
-            snapshot.Take(map);
-            if (snapshot.IsEmpty) return Finish();
-
             Vec2 here = pose.position;
-            reach.Build(snapshot, map, here);
-            rooms.Build(snapshot, map, reach);
+            analysis.Update(here);
+            if (analysis.IsEmpty) return Finish();
+
             laneAnchor = map.AnchorWorld;
             roomWalls.Clear();
             roomRuns.Clear();
@@ -221,20 +228,20 @@ namespace RobotVacuum.Algorithms
             // At most one new pass per decision: if a fresh pass still finds nothing to do, nothing can be done.
             for (int attempt = 0; attempt < 2; attempt++)
             {
-                int room = PickRoom(map, out bool work, here);
-                if (room >= 0 && work)
+                // The room we are in first, while it has work in this pass; then the others, nearest first. A room whose
+                // work can't be planned (edge stubs, everything skipped) doesn't stop the others being tried.
+                foreach (int room in RoomsInOrder(map, here))
                 {
-                    if (PlanEdge(map, room, here)) return Begin("edge", room);
-                    if (PlanSweep(map, room, here)) return Begin("lanes", room);
+                    if (!HasPassWork(room)) continue;
+                    if (PlanEdge(map, room)) return Begin("edge", room);
+                    if (PlanSweep(map, room)) return Begin("lanes", room);
                     if (PlanPatch(map, room, here)) return Begin("patch", room);
                 }
 
                 // Nothing left in this pass where it applies. SLAM: explore before starting another pass.
                 if (context.slam && PlanFrontier(map, here)) return Begin("exploring", -1);
 
-                bool coverage = context.priority == CleaningPriority.Coverage;
-                bool dirty = coverage ? AnyDirty(-1) : room >= 0 && AnyDirty(room);
-                if (!dirty || pass + 1 >= MaxPasses * (coverage ? 1 : Math.Max(1, rooms.Count))) break;
+                if (!AnyDirty() || pass + 1 >= MaxPasses) break;
                 StartPass();
             }
             return Finish();
@@ -243,47 +250,33 @@ namespace RobotVacuum.Algorithms
         bool Begin(string what, int room)
         {
             activity = what;
+            Vec2 first = plan[0].point;
             if (room >= 0) roomAt = plan[plan.Count - 1].point;
+            float distance = PathNear(first);
+            string where = room >= 0 ? " in room " + room + " of " + analysis.RoomCount : "";
+            string how = float.IsPositiveInfinity(distance) ? "not on known floor" : distance.ToString("F1") + " m by known floor";
+            context.Log($"pass {pass + 1}, {what}{where}: to ({first.x:F2}, {first.y:F2}), {how}, {plan.Count} waypoints");
             return true;
         }
 
         bool Finish()
         {
             activity = "done";
+            string passes = pass == 0 ? "1 pass" : (pass + 1) + " passes";
+            context.Log($"done after {passes}. {Leftovers()}");
             context.drive.Finish();
             return false;
         }
 
-        /// <summary>
-        /// Coverage: the room we are in while it has work in this pass, else the nearest (by path) that has. Cleanliness:
-        /// the room we are in while it is dirty (another pass comes before leaving it), else the nearest dirty room.
-        /// <paramref name="work"/> says whether that room has work left in THIS pass (if not, a new pass is due).
-        /// </summary>
-        int PickRoom(IBeliefMap map, out bool work, Vec2 here)
+        /// <summary>The rooms the robot can reach: the one it is in first, then the others nearest (by path) first.</summary>
+        List<int> RoomsInOrder(IBeliefMap map, Vec2 here)
         {
-            bool coverage = context.priority == CleaningPriority.Coverage;
-            bool Wants(int r) => coverage ? HasPassWork(r) : HasPassWork(r) || AnyDirty(r);
-
+            var order = new List<int>();
+            for (int r = 0; r < analysis.RoomCount; r++) if (!float.IsPositiveInfinity(roomDistance[r])) order.Add(r);
+            order.Sort((a, b) => roomDistance[a].CompareTo(roomDistance[b]));
             int current = RoomOf(map, roomAt ?? here);
-            int chosen = -1;
-            if (current >= 0 && Wants(current))
-            {
-                chosen = current;
-            }
-            else
-            {
-                var order = new List<int>();
-                for (int r = 0; r < rooms.Count; r++) if (!float.IsPositiveInfinity(roomDistance[r])) order.Add(r);
-                order.Sort((a, b) => roomDistance[a].CompareTo(roomDistance[b]));
-                foreach (int r in order)
-                {
-                    if (!Wants(r)) continue;
-                    chosen = r;
-                    break;
-                }
-            }
-            work = chosen >= 0 && HasPassWork(chosen);
-            return chosen;
+            if (current >= 0 && order.Remove(current)) order.Insert(0, current);
+            return order;
         }
 
         /// <summary>A new pass: lanes turn 90°; swept lanes, edges and patches start over; "missed" counts from now.</summary>
@@ -291,10 +284,10 @@ namespace RobotVacuum.Algorithms
         {
             pass++;
             passStart.Clear();
-            for (int row = snapshot.MinRow; row < snapshot.MinRow + snapshot.Rows; row++)
-                for (int col = snapshot.MinCol; col < snapshot.MinCol + snapshot.Cols; col++)
+            for (int row = analysis.MinRow; row < analysis.MinRow + analysis.Rows; row++)
+                for (int col = analysis.MinCol; col < analysis.MinCol + analysis.Cols; col++)
                 {
-                    float dwell = snapshot.Dwell(row, col);
+                    float dwell = analysis.Dwell(row, col);
                     if (dwell > 0f) passStart[CellKey(row, col)] = dwell;
                 }
             swept.Clear();
@@ -302,7 +295,7 @@ namespace RobotVacuum.Algorithms
             patchVisits.Clear();
             skipped.Clear();
             roomRuns.Clear();
-            activity = $"pass {pass + 1}";
+            context.Log($"pass {pass + 1} begins (lanes turned 90°)");
         }
 
         int RoomOf(IBeliefMap map, Vec2 point)
@@ -312,7 +305,7 @@ namespace RobotVacuum.Algorithms
                 for (int r = centre.row - radius; r <= centre.row + radius; r++)
                     for (int c = centre.col - radius; c <= centre.col + radius; c++)
                     {
-                        int label = rooms.LabelOf(snapshot, r, c);
+                        int label = analysis.RoomOf(r, c);
                         if (label >= 0) return label;
                     }
             return -1;
@@ -321,29 +314,75 @@ namespace RobotVacuum.Algorithms
         /// <summary>Each room's path distance from the robot: to its nearest dirty cell (or nearest cell, if all clean).</summary>
         void MeasureRoomDistances()
         {
-            if (roomDistance.Length < rooms.Count) roomDistance = new float[rooms.Count];
-            var anyCell = new float[rooms.Count];
-            for (int r = 0; r < rooms.Count; r++) roomDistance[r] = anyCell[r] = float.PositiveInfinity;
+            int count = analysis.RoomCount;
+            if (roomDistance.Length < count) roomDistance = new float[count];
+            var anyCell = new float[count];
+            for (int r = 0; r < count; r++) roomDistance[r] = anyCell[r] = float.PositiveInfinity;
             ForCells((row, col, label) =>
             {
-                float d = reach.Distance(row, col);
+                float d = analysis.ReachDistance(row, col);
                 if (d < anyCell[label]) anyCell[label] = d;
                 if (Dirty(row, col) && d < roomDistance[label]) roomDistance[label] = d;
             });
-            for (int r = 0; r < rooms.Count; r++)
+            for (int r = 0; r < count; r++)
                 if (float.IsPositiveInfinity(roomDistance[r])) roomDistance[r] = anyCell[r];
+        }
+
+        /// <summary>For the log: what is still below the target, by room, and in the strips by the walls.</summary>
+        string Leftovers()
+        {
+            int count = analysis.RoomCount;
+            var below = new int[count];
+            var cells = new int[count];
+            int strip = 0, stripBelow = 0;
+            for (int row = analysis.MinRow; row < analysis.MinRow + analysis.Rows; row++)
+                for (int col = analysis.MinCol; col < analysis.MinCol + analysis.Cols; col++)
+                {
+                    int label = analysis.RoomOf(row, col);
+                    if (label >= 0)
+                    {
+                        cells[label]++;
+                        if (Dirty(row, col)) below[label]++;
+                    }
+                    else if (analysis.IsExplored(row, col) && !analysis.IsBlocked(row, col) && NextToRoom(row, col))
+                    {
+                        strip++;
+                        if (Dirty(row, col)) stripBelow++;
+                    }
+                }
+            float area = analysis.CellSize * analysis.CellSize;
+            var parts = new List<string>();
+            int total = 0, totalBelow = 0;
+            for (int r = 0; r < count; r++)
+            {
+                total += cells[r];
+                totalBelow += below[r];
+                parts.Add($"room {r}: {below[r]}/{cells[r]}");
+            }
+            return $"Below target: {totalBelow} of {total} room cells ({totalBelow * area:F2} m²) [{string.Join(", ", parts)}]; " +
+                   $"wall strips {stripBelow} of {strip} ({stripBelow * area:F2} m²).";
+        }
+
+        /// <summary>A cell within the brush's reach of a room cell (the strip by a wall the body can't stand on).</summary>
+        bool NextToRoom(int row, int col)
+        {
+            int cells = (int)Math.Ceiling(context.BrushRadius / analysis.CellSize);
+            for (int dr = -cells; dr <= cells; dr++)
+                for (int dc = -cells; dc <= cells; dc++)
+                    if (analysis.RoomOf(row + dr, col + dc) >= 0) return true;
+            return false;
         }
 
         // ---- What is left to do -----------------------------------------------------------------------------
 
         /// <summary>Below the target.</summary>
-        bool Dirty(int row, int col) => snapshot.Cleanliness(row, col) < CleanEnough * context.targetCleanliness;
+        bool Dirty(int row, int col) => analysis.Cleanliness(row, col) < CleanEnough * context.targetCleanliness;
 
         /// <summary>Not under the brush at all since this pass began (its dwell hasn't grown).</summary>
         bool UntouchedThisPass(int row, int col)
         {
             float before = passStart.TryGetValue(CellKey(row, col), out float d) ? d : 0f;
-            return snapshot.Dwell(row, col) <= before + 1e-4f;
+            return analysis.Dwell(row, col) <= before + 1e-4f;
         }
 
         /// <summary>A cell patches go for: dirty, missed by this pass, not given up on.</summary>
@@ -363,13 +402,13 @@ namespace RobotVacuum.Algorithms
             return found;
         }
 
-        /// <summary>Anything below the target in the room (-1 = in any room).</summary>
-        bool AnyDirty(int room)
+        /// <summary>Anything below the target in any room.</summary>
+        bool AnyDirty()
         {
             bool found = false;
             ForCells((row, col, label) =>
             {
-                if (!found && (room < 0 || label == room) && Dirty(row, col)) found = true;
+                if (!found && Dirty(row, col)) found = true;
             });
             return found;
         }
@@ -387,13 +426,13 @@ namespace RobotVacuum.Algorithms
             if (roomWalls.TryGetValue(room, out var cached)) return cached;
 
             double sumCos = 0, sumSin = 0;
-            float low = snapshot.Clearance, high = snapshot.Clearance + 3f * snapshot.CellSize;
+            float low = analysis.BodyClearance, high = analysis.BodyClearance + 3f * analysis.CellSize;
             ForRoomCells(room, (row, col) =>
             {
-                float d = snapshot.ObstacleDistance(row, col);
+                float d = analysis.ObstacleDistance(row, col);
                 if (d < low || d > high) return;
-                float right = snapshot.ObstacleDistance(row, col + 1), left = snapshot.ObstacleDistance(row, col - 1);
-                float up = snapshot.ObstacleDistance(row + 1, col), down = snapshot.ObstacleDistance(row - 1, col);
+                float right = analysis.ObstacleDistance(row, col + 1), left = analysis.ObstacleDistance(row, col - 1);
+                float up = analysis.ObstacleDistance(row + 1, col), down = analysis.ObstacleDistance(row - 1, col);
                 if (float.IsInfinity(right) || float.IsInfinity(left) || float.IsInfinity(up) || float.IsInfinity(down)) return;
                 float gx = right - left, gy = up - down;
                 if (gx * gx + gy * gy < 1e-8f) return;
@@ -447,7 +486,7 @@ namespace RobotVacuum.Algorithms
         bool IsSwept(int lane, float s)
         {
             if (!swept.TryGetValue(SweptKey(lane), out var list)) return false;
-            float tolerance = snapshot.CellSize;
+            float tolerance = analysis.CellSize;
             foreach (var (s0, s1) in list)
                 if (s >= s0 - tolerance && s <= s1 + tolerance) return true;
             return false;
@@ -474,7 +513,7 @@ namespace RobotVacuum.Algorithms
             });
             if (float.IsPositiveInfinity(sMin)) return runs;
 
-            float step = snapshot.CellSize;
+            float step = analysis.CellSize;
             int firstLane = (int)Math.Ceiling(tMin / spacing), lastLane = (int)Math.Floor(tMax / spacing);
             for (int lane = firstLane; lane <= lastLane; lane++)
             {
@@ -482,8 +521,9 @@ namespace RobotVacuum.Algorithms
                 float runStart = 0f, lastTodo = 0f;
                 for (float s = sMin; s <= sMax + step * 0.5f; s += step)
                 {
-                    bool todo = TryCell(PointOn(lane, s), out int row, out int col) &&
-                                rooms.LabelOf(snapshot, row, col) == room && Dirty(row, col) && !IsSwept(lane, s);
+                    bool inRoom = TryCell(PointOn(lane, s), out int row, out int col) && analysis.RoomOf(row, col) == room;
+                    bool sweptHere = IsSwept(lane, s);
+                    bool todo = inRoom && !sweptHere && Dirty(row, col);
                     if (todo)
                     {
                         if (!inRun)
@@ -493,8 +533,10 @@ namespace RobotVacuum.Algorithms
                         }
                         lastTodo = s;
                     }
-                    else if (inRun)
+                    else if (inRun && !(inRoom && !sweptHere && s - lastTodo <= BridgeMeters))
                     {
+                        // Not floor of this room, already swept, or clean for too long: the run ends at its last dirty sample.
+                        // (A short clean stretch, like the spot where the robot turned on the dock, is carried over.)
                         if (lastTodo - runStart >= MinRunMeters) runs.Add(new Run { lane = lane, s0 = runStart, s1 = lastTodo });
                         inRun = false;
                     }
@@ -519,31 +561,31 @@ namespace RobotVacuum.Algorithms
             ForRoomCells(room, (row, col) =>
             {
                 if (edged.Contains(CellKey(row, col))) return;
-                bool edge = !snapshot.BodyFits(row + 1, col) || !snapshot.BodyFits(row - 1, col) ||
-                            !snapshot.BodyFits(row, col + 1) || !snapshot.BodyFits(row, col - 1);
+                bool edge = !analysis.BodyFits(row + 1, col) || !analysis.BodyFits(row - 1, col) ||
+                            !analysis.BodyFits(row, col + 1) || !analysis.BodyFits(row, col - 1);
                 if (edge && StripDirty(row, col)) cells.Add((row, col));
             });
             return cells;
         }
 
-        /// <summary>Is any of the strip the body can't reach (explored, not blocked, the body doesn't fit) dirty, within the brush's reach of this edge cell?</summary>
+        /// <summary>Is any of the strip the body can't stand on (explored, not blocked, the body doesn't fit) dirty, within the brush's reach of this edge cell?</summary>
         bool StripDirty(int row, int col)
         {
             float reachMeters = context.BrushRadius - EdgeInsetMeters;
-            int cells = (int)Math.Ceiling(reachMeters / snapshot.CellSize);
-            float reachSq = reachMeters * reachMeters, size = snapshot.CellSize;
+            int cells = (int)Math.Ceiling(reachMeters / analysis.CellSize);
+            float reachSq = reachMeters * reachMeters, size = analysis.CellSize;
             for (int dr = -cells; dr <= cells; dr++)
                 for (int dc = -cells; dc <= cells; dc++)
                 {
                     if ((dr * dr + dc * dc) * size * size > reachSq) continue;
                     int r = row + dr, c = col + dc;
-                    if (snapshot.BodyFits(r, c) || snapshot.IsBlocked(r, c) || !snapshot.IsExplored(r, c)) continue;
+                    if (analysis.BodyFits(r, c) || analysis.IsBlocked(r, c) || !analysis.IsExplored(r, c)) continue;
                     if (Dirty(r, c)) return true;
                 }
             return false;
         }
 
-        bool PlanEdge(IBeliefMap map, int room, Vec2 here)
+        bool PlanEdge(IBeliefMap map, int room)
         {
             // Stubs of edge (a few cells at a door jamb or a corner) are not worth a trip: mark them and look again.
             for (int attempt = 0; attempt < 50; attempt++)
@@ -557,13 +599,41 @@ namespace RobotVacuum.Algorithms
 
         /// <summary>
         /// One run along the edge, from the edge cell nearest by path: follow the chain of edge cells (keeping straight,
-        /// bridging gaps up to <see cref="EdgeGapCells"/>), straighten it, and drive it as pass-through waypoints.
-        /// Returns 1 = planned; 0 = only a stub (marked done); -1 = no edge left.
+        /// bridging gaps up to <see cref="EdgeGapCells"/>), straighten it, move its corners onto the edge line, and drive
+        /// it as pass-through waypoints. Returns 1 = planned; 0 = only a stub (marked done); -1 = no edge left.
         /// </summary>
         int TryPlanEdge(IBeliefMap map, int room)
         {
+            var points = EdgeChain(map, room, out int status);
+            if (points == null) return status;
+
+            var run = EdgeRun(map, points);
+            int firstStep = plan.Count;
+            plan.Add(new Step { point = run[0], skipKey = PointKey(run[0]) }); // getting there: a stop, not pass-through
+            for (int i = 1; i < run.Count; i++)
+            {
+                bool through = i < run.Count - 1 && Gentle(run[i - 1], run[i], run[i + 1]);
+                plan.Add(Clean(run[i], through, PointKey(run[i])));
+            }
+            EndWithStop();
+            for (int i = firstStep; i < plan.Count; i++)
+            {
+                var step = plan[i];
+                step.edge = true;
+                plan[i] = step;
+            }
+            return 1;
+        }
+
+        /// <summary>
+        /// The chain of edge cell centres from the nearest edge cell, or null with <paramref name="status"/> 0 (a stub,
+        /// marked done) or -1 (no edge left). The chain's cells and their neighbours are marked done for this pass.
+        /// </summary>
+        List<Vec2> EdgeChain(IBeliefMap map, int room, out int status)
+        {
+            status = -1;
             var cells = EdgeCells(room);
-            if (cells.Count == 0) return -1;
+            if (cells.Count == 0) return null;
 
             var open = new HashSet<long>();
             foreach (var c in cells) open.Add(CellKey(c.row, c.col));
@@ -572,14 +642,14 @@ namespace RobotVacuum.Algorithms
             float best = float.PositiveInfinity;
             foreach (var c in cells)
             {
-                float d = reach.Distance(c.row, c.col);
+                float d = analysis.ReachDistance(c.row, c.col);
                 if (d < best && !IsSkipped(map, PointKey(CellCentre(c.row, c.col))))
                 {
                     best = d;
                     start = c;
                 }
             }
-            if (float.IsPositiveInfinity(best)) return -1;
+            if (float.IsPositiveInfinity(best)) return null;
 
             var chain = new List<(int row, int col)> { start };
             open.Remove(CellKey(start.row, start.col));
@@ -617,35 +687,157 @@ namespace RobotVacuum.Algorithms
                 for (int r = row - 1; r <= row + 1; r++)
                     for (int c = col - 1; c <= col + 1; c++)
                         edged.Add(CellKey(r, c));
-            if (chain.Count < MinEdgeCells) return 0;
+            if (chain.Count < MinEdgeCells)
+            {
+                status = 0;
+                return null;
+            }
 
             var points = new List<Vec2>(chain.Count);
             foreach (var (row, col) in chain) points.Add(CellCentre(row, col));
+            status = 1;
+            return points;
+        }
+
+        /// <summary>
+        /// The waypoints of an edge run along a chain of edge cell centres: straightened, each kept corner moved onto the
+        /// edge line (<see cref="EdgeClearance"/> from the wall), legs that still graze slid off, stretches that won't
+        /// straighten driven cell by cell (every 3rd).
+        /// </summary>
+        List<Vec2> EdgeRun(IBeliefMap map, List<Vec2> points)
+        {
             var keep = new List<int>();
             Simplify(points, 0, points.Count - 1, keep);
             keep.Add(points.Count - 1);
             keep.Sort();
 
-            plan.Add(new Step { point = points[0], mode = DriveMode.Travel, skipKey = PointKey(points[0]) });
-            Vec2 previous = points[0];
+            var moved = new List<Vec2>(keep.Count);
+            for (int k = 0; k < keep.Count; k++)
+            {
+                Vec2 before = points[keep[Math.Max(0, k - 1)]], here = points[keep[k]], after = points[keep[Math.Min(keep.Count - 1, k + 1)]];
+                moved.Add(OntoEdgeLine(map, here, Unit(here - before) + Unit(after - here), EdgeClearance));
+            }
+
+            var run = new List<Vec2> { moved[0] };
+            Vec2 previous = moved[0];
             for (int k = 1; k < keep.Count; k++)
             {
-                Vec2 target = points[keep[k]];
+                Vec2 target = moved[k];
                 if (!map.BodyFitsLeg(previous, target) && !TrySlide(map, previous, ref target))
                 {
-                    // Still grazing: drive this stretch cell by cell (every 3rd).
+                    // Still grazing: drive this stretch cell by cell (every 3rd), on the cells' own centres.
                     for (int i = keep[k - 1] + 3; i < keep[k]; i += 3)
                     {
-                        plan.Add(Clean(points[i], true, PointKey(points[i])));
+                        run.Add(points[i]);
                         previous = points[i];
                     }
-                    target = points[keep[k]];
+                    target = map.BodyFitsLeg(previous, moved[k]) ? moved[k] : points[keep[k]];
                 }
-                plan.Add(Clean(target, true, PointKey(target)));
+                run.Add(target);
                 previous = target;
             }
-            EndWithStop();
-            return 1;
+            return EaseCorners(map, run);
+        }
+
+        /// <summary>
+        /// True when the run bends less than <see cref="GentleTurnDegrees"/> at <paramref name="b"/>. Only such points are
+        /// pass-through: a pass-through goal counts as reached 5 cm early, so at a real corner the robot would start the
+        /// next stretch 5 cm off the line (and miss the strip by the wall for much of it).
+        /// </summary>
+        static bool Gentle(Vec2 a, Vec2 b, Vec2 c)
+        {
+            Vec2 u = b - a, v = c - b;
+            float lu = u.Length, lv = v.Length;
+            if (lu < 1e-4f || lv < 1e-4f) return true;
+            return Vec2.Dot(u, v) / (lu * lv) >= (float)Math.Cos(GentleTurnDegrees * Math.PI / 180.0);
+        }
+
+        /// <summary>
+        /// At each sharp corner of an edge run, and at its two ends, the robot has to stop on the point, and there the
+        /// errors of two walls (or a door jamb) add up: so that point is moved <see cref="CornerExtraMeters"/> further out,
+        /// with a point on the edge line <see cref="CornerEaseMeters"/> before and after it, so the stretches of wall
+        /// between corners still run on the edge line.
+        /// </summary>
+        List<Vec2> EaseCorners(IBeliefMap map, List<Vec2> run)
+        {
+            if (run.Count < 2) return run;
+            var eased = new List<Vec2>(run.Count * 3);
+            for (int i = 0; i < run.Count; i++)
+            {
+                Vec2 here = run[i];
+                bool first = i == 0, last = i == run.Count - 1;
+                if (!first && !last && Gentle(run[i - 1], here, run[i + 1]))
+                {
+                    eased.Add(here);
+                    continue;
+                }
+
+                Vec2 before = first ? here : run[i - 1], after = last ? here : run[i + 1];
+                Vec2 tangent = Unit(here - before) + Unit(after - here); // a corner moves along its bisector, toward both walls
+                Vec2 corner = OntoEdgeLine(map, here, tangent, EdgeClearance + CornerExtraMeters);
+
+                if (!first)
+                {
+                    Vec2 incoming = here - before;
+                    float length = incoming.Length;
+                    float ease = Math.Min(CornerEaseMeters, length * 0.4f);
+                    if (ease > 0.02f) eased.Add(here - incoming * (ease / length));
+                }
+                eased.Add(map.BodyFitsLeg(eased.Count > 0 ? eased[eased.Count - 1] : corner, corner) ? corner : here);
+                if (!last)
+                {
+                    Vec2 outgoing = after - here;
+                    float length = outgoing.Length;
+                    float ease = Math.Min(CornerEaseMeters, length * 0.4f);
+                    if (ease > 0.02f) eased.Add(here + outgoing * (ease / length));
+                }
+            }
+            return eased;
+        }
+
+        /// <summary>The unit vector along <paramref name="v"/>, or zero.</summary>
+        static Vec2 Unit(Vec2 v)
+        {
+            float length = v.Length;
+            return length > 1e-6f ? v * (1f / length) : Vec2.Zero;
+        }
+
+        /// <summary>How far from the wall (as mapped) the edge run keeps the robot's centre: its radius plus the edge margin.</summary>
+        float EdgeClearance => context.robotRadius + (context.slam ? SlamEdgeMarginMeters : EdgeMarginMeters);
+
+        /// <summary>
+        /// Moves a point of an edge run straight toward the wall, along the normal to <paramref name="tangent"/>, until it
+        /// is <paramref name="clearance"/> from the nearest blocked cell. Measured, not assumed: a few steps of "move by the
+        /// difference", then backed off if a corner of the wall came closer than that.
+        /// </summary>
+        Vec2 OntoEdgeLine(IBeliefMap map, Vec2 point, Vec2 tangent, float clearance)
+        {
+            float length = tangent.Length;
+            if (length < 1e-4f) return point;
+            Vec2 normal = new Vec2(-tangent.y / length, tangent.x / length);
+            float plus = map.ObstacleDistance(point + normal * 0.03f), minus = map.ObstacleDistance(point - normal * 0.03f);
+            if (Math.Abs(plus - minus) < 1e-4f) return point; // no wall near enough to tell which side it is on
+            if (plus < minus) normal = -normal;                // the normal points away from the wall
+
+            float edge = clearance;
+            Vec2 q = point;
+            for (int i = 0; i < 4; i++)
+            {
+                float move = map.ObstacleDistance(q) - edge;
+                if (Math.Abs(move) < 0.002f) break;
+                q = q - normal * move;
+            }
+            if (map.ObstacleDistance(q) >= edge - 0.003f) return q;
+
+            // A corner of the wall is closer than the line: go back toward where we started until it isn't.
+            Vec2 good = point, bad = q;
+            for (int i = 0; i < 8; i++)
+            {
+                Vec2 middle = (good + bad) * 0.5f;
+                if (map.ObstacleDistance(middle) >= edge - 0.003f) good = middle;
+                else bad = middle;
+            }
+            return good;
         }
 
         /// <summary>
@@ -705,31 +897,36 @@ namespace RobotVacuum.Algorithms
         /// spacing, pulled back so its apex stays on the floor. All pass-through, so the robot never stops between lanes.
         /// Each lane stretch is recorded as swept when it is driven.
         /// </summary>
-        bool PlanSweep(IBeliefMap map, int room, Vec2 here)
+        bool PlanSweep(IBeliefMap map, int room)
         {
             var mine = Runs(room).FindAll(r => !IsSkipped(map, RunKey(r)));
             if (mine.Count == 0) return false;
 
-            int minLane = int.MaxValue, maxLane = int.MinValue;
+            // Start from the nearest END of a block of runs: a run with no overlapping run in the lane on one side. For a whole
+            // room that is its first or last lane; for leftover fragments, the nearest fragment, swept on through its
+            // neighbours, instead of jumping between the room's far sides.
+            Run current = mine[0];
+            int direction = 1;
+            float nearest = float.PositiveInfinity;
             foreach (var r in mine)
             {
-                minLane = Math.Min(minLane, r.lane);
-                maxLane = Math.Max(maxLane, r.lane);
+                bool below = HasNeighbour(mine, r, -1), above = HasNeighbour(mine, r, 1);
+                if (below && above) continue;
+                float d = Math.Min(PathTo(PointOn(r.lane, r.s0)), PathTo(PointOn(r.lane, r.s1)));
+                if (d >= nearest) continue;
+                nearest = d;
+                current = r;
+                direction = below ? -1 : 1; // sweep away from the open side
             }
-
-            Run? fromLow = NearestRunIn(mine, minLane, out float dLow), fromHigh = NearestRunIn(mine, maxLane, out float dHigh);
-            if (fromLow == null && fromHigh == null) return false;
-            bool low = fromHigh == null || (fromLow != null && dLow <= dHigh);
-            Run current = low ? fromLow.Value : fromHigh.Value;
-            int direction = low ? 1 : -1;
 
             // Get to the first run's nearer end (by path).
             bool startAtS0 = PathTo(PointOn(current.lane, current.s0)) <= PathTo(PointOn(current.lane, current.s1));
             float sNow = startAtS0 ? current.s0 : current.s1;
             int sign = startAtS0 ? 1 : -1;
-            plan.Add(new Step { point = PointOn(current.lane, sNow), mode = DriveMode.Travel, skipKey = RunKey(current) });
+            plan.Add(new Step { point = PointOn(current.lane, sNow), skipKey = RunKey(current) });
 
             float radius = spacing * 0.5f;
+            int arcPoints = Math.Max(1, Math.Min(MaxArcPoints, (int)(Math.PI * radius / ArcPointSpacingMeters) - 1));
             for (int lanes = 0; lanes < 200; lanes++)
             {
                 float exitS = sign > 0 ? current.s1 : current.s0;
@@ -745,9 +942,9 @@ namespace RobotVacuum.Algorithms
                     var arc = new List<Vec2> { a };
                     Vec2 centre = (a + b) * 0.5f;
                     Vec2 outward = along * sign, sideways = across * direction;
-                    for (int i = 1; i <= ArcPoints; i++)
+                    for (int i = 1; i <= arcPoints; i++)
                     {
-                        double theta = Math.PI * i / (ArcPoints + 1);
+                        double theta = Math.PI * i / (arcPoints + 1);
                         arc.Add(centre - sideways * (radius * (float)Math.Cos(theta)) + outward * (radius * (float)Math.Sin(theta)));
                     }
                     arc.Add(b);
@@ -780,23 +977,28 @@ namespace RobotVacuum.Algorithms
             return true;
         }
 
-        float PathTo(Vec2 point) => TryCell(point, out int row, out int col) ? reach.Distance(row, col) : float.PositiveInfinity;
+        float PathTo(Vec2 point) => TryCell(point, out int row, out int col) ? analysis.ReachDistance(row, col) : float.PositiveInfinity;
 
-        Run? NearestRunIn(List<Run> list, int lane, out float distance)
+        /// <summary>For the log: the path distance to the point, or to the nearest reachable cell within 4 cells of it (edge points lie closer to the wall than the planner's clearance).</summary>
+        float PathNear(Vec2 point)
         {
-            Run? best = null;
-            distance = float.PositiveInfinity;
+            if (!TryCell(point, out int row, out int col)) return float.PositiveInfinity;
+            float best = float.PositiveInfinity;
+            for (int dr = -4; dr <= 4; dr++)
+                for (int dc = -4; dc <= 4; dc++)
+                    best = Math.Min(best, analysis.ReachDistance(row + dr, col + dc));
+            return best;
+        }
+
+        /// <summary>Is there a run in the lane on that side (<paramref name="side"/> ±1) overlapping this one along the lanes?</summary>
+        bool HasNeighbour(List<Run> list, Run run, int side)
+        {
             foreach (var r in list)
             {
-                if (r.lane != lane) continue;
-                float d = Math.Min(PathTo(PointOn(r.lane, r.s0)), PathTo(PointOn(r.lane, r.s1)));
-                if (d < distance)
-                {
-                    distance = d;
-                    best = r;
-                }
+                if (r.lane != run.lane + side) continue;
+                if (Math.Min(r.s1, run.s1) - Math.Max(r.s0, run.s0) >= spacing) return true;
             }
-            return best;
+            return false;
         }
 
         /// <summary>The run in the next lane that overlaps this one along the lanes, nearest the exit.</summary>
@@ -839,7 +1041,7 @@ namespace RobotVacuum.Algorithms
             float best = float.PositiveInfinity;
             foreach (long key in wanted)
             {
-                float d = reach.Distance((int)(key >> 32), (int)key);
+                float d = analysis.ReachDistance((int)(key >> 32), (int)key);
                 if (d < best)
                 {
                     best = d;
@@ -899,17 +1101,17 @@ namespace RobotVacuum.Algorithms
             Vec2 target = here;
             ForCells((row, col, label) =>
             {
-                bool frontier = !snapshot.IsExplored(row + 1, col) || !snapshot.IsExplored(row - 1, col) ||
-                                !snapshot.IsExplored(row, col + 1) || !snapshot.IsExplored(row, col - 1);
+                bool frontier = !analysis.IsExplored(row + 1, col) || !analysis.IsExplored(row - 1, col) ||
+                                !analysis.IsExplored(row, col + 1) || !analysis.IsExplored(row, col - 1);
                 if (!frontier) return;
-                float d = reach.Distance(row, col);
+                float d = analysis.ReachDistance(row, col);
                 Vec2 p = CellCentre(row, col);
                 if (d >= best || IsSkipped(map, PointKey(p))) return;
                 best = d;
                 target = p;
             });
             if (float.IsPositiveInfinity(best)) return false;
-            plan.Add(new Step { point = target, mode = DriveMode.Travel, skipKey = PointKey(target) });
+            plan.Add(new Step { point = target, skipKey = PointKey(target) });
             return true;
         }
 
@@ -917,22 +1119,22 @@ namespace RobotVacuum.Algorithms
 
         /// <summary>A cell's centre: the map's anchor (a cell corner) plus (col + ½, row + ½) cells.</summary>
         Vec2 CellCentre(int row, int col) =>
-            laneAnchor + new Vec2((col + 0.5f) * snapshot.CellSize, (row + 0.5f) * snapshot.CellSize);
+            laneAnchor + new Vec2((col + 0.5f) * analysis.CellSize, (row + 0.5f) * analysis.CellSize);
 
         bool TryCell(Vec2 point, out int row, out int col)
         {
-            col = (int)Math.Floor((point.x - laneAnchor.x) / snapshot.CellSize);
-            row = (int)Math.Floor((point.y - laneAnchor.y) / snapshot.CellSize);
-            return snapshot.Contains(row, col);
+            col = (int)Math.Floor((point.x - laneAnchor.x) / analysis.CellSize);
+            row = (int)Math.Floor((point.y - laneAnchor.y) / analysis.CellSize);
+            return analysis.Contains(row, col);
         }
 
         /// <summary>Every cell that belongs to a room, with its room.</summary>
         void ForCells(Action<int, int, int> visit)
         {
-            for (int row = snapshot.MinRow; row < snapshot.MinRow + snapshot.Rows; row++)
-                for (int col = snapshot.MinCol; col < snapshot.MinCol + snapshot.Cols; col++)
+            for (int row = analysis.MinRow; row < analysis.MinRow + analysis.Rows; row++)
+                for (int col = analysis.MinCol; col < analysis.MinCol + analysis.Cols; col++)
                 {
-                    int label = rooms.LabelOf(snapshot, row, col);
+                    int label = analysis.RoomOf(row, col);
                     if (label >= 0) visit(row, col, label);
                 }
         }

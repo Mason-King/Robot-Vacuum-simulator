@@ -2,22 +2,6 @@ using System;
 
 namespace RobotVacuum.AlgorithmApi
 {
-    /// <summary>What a run asks the cleaning to put first (a run setting).</summary>
-    public enum CleaningPriority
-    {
-        /// <summary>
-        /// Cover all the floor as fast as possible: full speed. One whole pass over every room first; then further
-        /// passes, each complete before the next, until the floor reaches the target (the user can stop it sooner).
-        /// </summary>
-        Coverage,
-
-        /// <summary>
-        /// Clean each room to the target before moving on: sweeps no slower than the controller's floor speed, with
-        /// further passes over the room (crossing the last) until it is clean.
-        /// </summary>
-        Cleanliness,
-    }
-
     /// <summary>How the controller drives to the goals an algorithm returns.</summary>
     public enum DriveMode
     {
@@ -27,7 +11,8 @@ namespace RobotVacuum.AlgorithmApi
         /// <summary>
         /// Cleaning speed: slow enough that every point the brush passes reaches the cleanliness target in one pass.
         /// The controller works the speed out continuously from the floor under the brush (see <see cref="CoverageMath"/>),
-    /// but never goes below its floor speed (about 0.3 m/s): where that is too fast for one pass, more passes are needed.
+        /// but never goes below its floor speed (0.2 m/s): where that is too fast for one pass, closer lanes or more
+        /// passes are needed.
         /// </summary>
         Sweep,
     }
@@ -58,6 +43,12 @@ namespace RobotVacuum.AlgorithmApi
 
         /// <summary>How close counts as "passed" for a pass-through goal.</summary>
         public const float PassThroughMeters = 0.05f;
+
+        /// <summary>The controller never sweeps slower than this, m/s, whatever the floor and exposure ask for.</summary>
+        public const float SweepSpeedFloor = 0.2f;
+
+        /// <summary>The controller sweeps this many times slower than <see cref="CoverageMath.SweepSpeed"/> (for drift between lanes).</summary>
+        public const float SweepSpeedSafety = 1.1f;
 
         /// <summary>True once the algorithm has said its job is done.</summary>
         public bool Finished { get; private set; }

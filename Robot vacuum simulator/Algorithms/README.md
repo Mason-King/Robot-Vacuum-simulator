@@ -51,3 +51,17 @@ else (UnityEngine, the simulator) is refused.
   takes a few milliseconds, and an unchanged file is not compiled again.
 - .NET cannot unload code, so each changed version of a file stays in memory until the simulator closes. Harmless
   for normal use; restart after many edit-and-rescan cycles.
+
+## Map analysis
+
+`context.analysis` (`IMapAnalysis`) is the controller's analysis of the robot's map, the same one the built-in
+Boustrophedon algorithms use. Call `context.analysis.Update(pose.position)` when you make a decision, then read:
+
+- `BodyFits(row, col)`, `ObstacleDistance(row, col)`: where the robot's body fits, and how far each cell is from the
+  nearest wall.
+- `ReachDistance(row, col)`, `Reachable(row, col)`: how far the robot would drive to a cell over floor it has
+  actually sensed (unknown floor never connects anything).
+- `RoomCount`, `RoomOf(row, col)`, `Doorways`: the floor split into rooms at its doorways.
+- Copies of `IsExplored`, `IsBlocked`, `Dwell`, `Cleanliness` and `VacuumResistance`, consistent with the above.
+
+`context.Log("...")` writes a line to the Console when the run's "Log Algorithm Decisions" setting is on.

@@ -1,21 +1,25 @@
 using System;
 using RobotVacuum.AlgorithmApi;
 
-namespace RobotVacuum.Algorithms
+namespace RobotVacuum.Sim.Control
 {
     /// <summary>
-    /// A copy of the belief map's written rectangle, taken in three batch reads, plus what the coverage algorithms
-    /// need from it: where the robot's BODY fits (a Euclidean distance transform of the blocked cells), what has been
-    /// explored, and what has been visited. Taken when an algorithm re-plans (every few seconds), not every step.
+    /// A copy of the belief map's written rectangle, taken in batch reads, plus where the robot's BODY fits (a
+    /// Euclidean distance transform of the blocked cells). Part of <see cref="MapAnalysis"/>. The distance transform is
+    /// only redone when the blocked cells or the explored area changed since the last copy.
     ///
     /// Indexing: cell (row, col) of the map is element (row - MinRow) * Cols + (col - MinCol).
     /// </summary>
     public sealed class MapSnapshot
     {
-        float[] traversability = new float[0];
+        bool[] blocked = new bool[0];        // map.IsBlocked: traversability 0, or a shaded SLAM wall
         float[] explored = new float[0];
         float[] dwell = new float[0];
         float[] cleanliness = new float[0];
+        float[] resistance = new float[0];
+        bool[] wasBlocked = new bool[0];      // the last copy's blocked and explored cells, to tell when they change
+        bool[] wasExplored = new bool[0];
+        int lastMinRow, lastMinCol, lastRows = -1, lastCols = -1;
         float[] distance = new float[0];   // metres from the cell's centre to the nearest blocked cell's edge (conservative)
         float[] scratchF = new float[0];
         int[] scratchV = new int[0];
@@ -35,7 +39,11 @@ namespace RobotVacuum.Algorithms
 
         public bool IsEmpty => Rows == 0 || Cols == 0;
 
-        public void Take(IBeliefMap map)
+        /// <summary>
+        /// Copies the map. Returns true when the extent, the blocked cells or the explored cells differ from the last
+        /// copy (and the distance transform was redone); false when only dwell, cleanliness or resistance may differ.
+        /// </summary>
+        public bool Take(IBeliefMap map)
         {
             TakenAtChange = map.ChangeCounter;
             CellSize = map.CellSizeMeters;
@@ -43,8 +51,10 @@ namespace RobotVacuum.Algorithms
 
             if (map.IsEmpty)
             {
+                bool wasEmpty = lastRows == 0;
                 Rows = Cols = 0;
-                return;
+                lastRows = lastCols = 0;
+                return !wasEmpty;
             }
             MinRow = map.MinRow;
             MinCol = map.MinCol;
@@ -52,16 +62,40 @@ namespace RobotVacuum.Algorithms
             Cols = map.Cols;
 
             int n = Rows * Cols;
-            Ensure(ref traversability, n);
             Ensure(ref explored, n);
             Ensure(ref dwell, n);
             Ensure(ref cleanliness, n);
+            Ensure(ref resistance, n);
             Ensure(ref distance, n);
-            map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Traversability, traversability);
             map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Explored, explored);
             map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Dwell, dwell);
             map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Cleanliness, cleanliness);
-            DistanceTransform();
+            map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.VacuumResistance, resistance);
+
+            if (blocked.Length < n) blocked = new bool[n];
+            for (int i = 0; i < n; i++) blocked[i] = map.IsBlocked(MinRow + i / Cols, MinCol + i % Cols);
+
+            bool changed = MinRow != lastMinRow || MinCol != lastMinCol || Rows != lastRows || Cols != lastCols;
+            if (wasBlocked.Length < n)
+            {
+                wasBlocked = new bool[n];
+                wasExplored = new bool[n];
+                changed = true;
+            }
+            for (int i = 0; i < n; i++)
+            {
+                bool wall = blocked[i], known = explored[i] > 0.5f;
+                if (wall != wasBlocked[i] || known != wasExplored[i]) changed = true;
+                wasBlocked[i] = wall;
+                wasExplored[i] = known;
+            }
+            lastMinRow = MinRow;
+            lastMinCol = MinCol;
+            lastRows = Rows;
+            lastCols = Cols;
+
+            if (changed) DistanceTransform();
+            return changed;
         }
 
         // ---- Per-cell queries (false / 0 outside the snapshot) --------------------------------------------
@@ -70,7 +104,7 @@ namespace RobotVacuum.Algorithms
 
         int Index(int row, int col) => (row - MinRow) * Cols + (col - MinCol);
 
-        public bool IsBlocked(int row, int col) => Contains(row, col) && traversability[Index(row, col)] <= 0f;
+        public bool IsBlocked(int row, int col) => Contains(row, col) && blocked[Index(row, col)];
 
         public bool IsExplored(int row, int col) => Contains(row, col) && explored[Index(row, col)] > 0.5f;
 
@@ -81,6 +115,9 @@ namespace RobotVacuum.Algorithms
 
         /// <summary>The believed cleanliness (0 outside the snapshot).</summary>
         public float Cleanliness(int row, int col) => Contains(row, col) ? cleanliness[Index(row, col)] : 0f;
+
+        /// <summary>The believed vacuum resistance (1 outside the snapshot).</summary>
+        public float VacuumResistance(int row, int col) => Contains(row, col) ? resistance[Index(row, col)] : 1f;
 
         /// <summary>Element index of a cell, for per-cell arrays sized <see cref="Rows"/> × <see cref="Cols"/>; -1 outside.</summary>
         public int IndexOf(int row, int col) => Contains(row, col) ? Index(row, col) : -1;
@@ -104,7 +141,7 @@ namespace RobotVacuum.Algorithms
         {
             const float Infinity = 1e20f;
             int n = Rows * Cols;
-            for (int i = 0; i < n; i++) distance[i] = traversability[i] <= 0f ? 0f : Infinity;
+            for (int i = 0; i < n; i++) distance[i] = blocked[i] ? 0f : Infinity;
 
             int longest = Math.Max(Rows, Cols);
             Ensure(ref scratchF, longest);

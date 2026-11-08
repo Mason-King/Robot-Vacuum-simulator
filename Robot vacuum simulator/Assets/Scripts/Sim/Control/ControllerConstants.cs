@@ -69,13 +69,13 @@ namespace RobotVacuum.Sim.Control
         // ---- Sweeping and the dock ----
 
         /// <summary>Sweep speed is the one-pass speed divided by this, for drift between lanes and floor the sensor hasn't reported yet.</summary>
-        public const float SweepSpeedSafety = 1.1f;
+        public const float SweepSpeedSafety = RobotVacuum.AlgorithmApi.DriveRequests.SweepSpeedSafety;
 
         /// <summary>
         /// The slowest sweep. Slower would reach the target in fewer passes, but it is too slow to watch: where one pass
-        /// at this speed isn't enough, the algorithm makes more passes instead.
+        /// at this speed isn't enough, the algorithm lays its lanes closer or makes more passes instead.
         /// </summary>
-        public const float SweepSpeedFloor = 0.3f;
+        public const float SweepSpeedFloor = RobotVacuum.AlgorithmApi.DriveRequests.SweepSpeedFloor;
 
         /// <summary>How often the trip home is costed against the battery, simulated seconds.</summary>
         public const float BatteryCheckSeconds = 1f;
@@ -151,6 +151,20 @@ namespace RobotVacuum.Sim.Control
         /// more, so a known way round is taken when there is one, and unknown floor only when it is much shorter.
         /// </summary>
         public const float PlannerUnknownCostFactor = 4f;
+
+        /// <summary>
+        /// Diagnostics: a cell with traversability above 0 but below this is a SHADED wall (SLAM draws a wall it is not
+        /// yet sure of as low traversability rather than impassable). A planned path that crosses one is reported when
+        /// the run logs algorithm decisions.
+        /// </summary>
+        public const float ShadedTraversability = 0.5f;
+
+        /// <summary>
+        /// A cell is a wall to the planner and the map analysis when its traversability is below this fraction of its
+        /// floor's ease: SLAM shades a wall it isn't sure of from the ease (wall probability 0.5) down to 0 (0.75), so
+        /// this is "more likely wall than not, by a margin" (about 0.625). Normal runs have no shaded cells.
+        /// </summary>
+        public const float WallEaseFraction = 0.5f;
 
         /// <summary>Traversability below this is costed as this (so a very hard floor is avoided, not treated as nearly a wall).</summary>
         public const float PlannerMinTraversability = 0.2f;

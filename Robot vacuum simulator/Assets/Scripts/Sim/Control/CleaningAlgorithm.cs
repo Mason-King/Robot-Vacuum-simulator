@@ -70,7 +70,8 @@ namespace RobotVacuum.Sim.Control
         static readonly AlgorithmEntry[] builtIns =
         {
             new AlgorithmEntry(RandomBounceId, "Random", true, BuiltInOrigin, null, () => new RandomBounceAlgorithm()),
-            new AlgorithmEntry("Boustrophedon", "Boustrophedon", true, BuiltInOrigin, null, () => new BoustrophedonAlgorithm()),
+            new AlgorithmEntry(BoustrophedonSweep.Id, "Boustrophedon Sweep", true, BuiltInOrigin, null, () => new BoustrophedonSweep()),
+            new AlgorithmEntry(BoustrophedonCrawl.Id, "Boustrophedon Crawl", true, BuiltInOrigin, null, () => new BoustrophedonCrawl()),
             new AlgorithmEntry("Legacy.Spiral", "Spiral", false, BuiltInOrigin, MovementPattern.Spiral, null),
             new AlgorithmEntry("Legacy.WallFollow", "Wall follow", false, BuiltInOrigin, MovementPattern.WallFollow, null),
             new AlgorithmEntry("Legacy.Lawnmower", "Lawnmower", false, BuiltInOrigin, MovementPattern.Lawnmower, null),

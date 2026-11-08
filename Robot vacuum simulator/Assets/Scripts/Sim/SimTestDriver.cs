@@ -39,6 +39,7 @@ namespace RobotVacuum.Sim
         SimHud hud;
         RunEndPanel endPanel;
         bool overlayBox; // the Show Belief Overlay box as last applied, so only a change of the box is passed on
+        HeatmapMode heatmapBox; // the Heatmap Mode as last applied, likewise
 
         void Awake()
         {
@@ -68,6 +69,7 @@ namespace RobotVacuum.Sim
             session.Finished += OnRunFinished;
             session.Closed += OnSessionClosed;
             overlayBox = settings.showBeliefOverlay;
+            heatmapBox = settings.heatmapMode;
             Debug.Log($"SimTestDriver: running {source}, seed {session.Settings.seed}. Run folder: {session.RunFolder}", this);
 
             FrameCamera();
@@ -82,13 +84,22 @@ namespace RobotVacuum.Sim
 
         // Ticking Show Belief Overlay mid-run switches the overlay. (Its own Show box on the overlay object still
         // works too; this only passes on changes of the box here.)
+        // Heatmap Mode likewise switches the heatmap mid-run.
         void Update()
         {
-            if (settings.showBeliefOverlay == overlayBox) return;
-            overlayBox = settings.showBeliefOverlay;
+            var runner = session != null ? session.Runner : null;
 
-            var overlay = session != null && session.Runner != null ? session.Runner.BeliefOverlay : null;
-            if (overlay != null) overlay.Show = overlayBox;
+            if (settings.heatmapMode != heatmapBox)
+            {
+                heatmapBox = settings.heatmapMode;
+                if (runner != null && runner.Heatmap != null) runner.Heatmap.Mode = heatmapBox;
+            }
+
+            if (settings.showBeliefOverlay != overlayBox)
+            {
+                overlayBox = settings.showBeliefOverlay;
+                if (runner != null && runner.BeliefOverlay != null) runner.BeliefOverlay.Show = overlayBox;
+            }
         }
 
         void OnDestroy()

@@ -304,6 +304,9 @@ namespace RobotVacuum.Sim
             algorithm = null;
             legacy = null;
             driver.Reset();
+            driver.PathNotice = settings.logAlgorithmDecisions
+                ? message => Debug.LogWarning($"[Planner {simTime:F1} s] {message}", this)
+                : (System.Action<string>)null;
             nextGoalTime = simTime;
 
             activeEntry = AlgorithmCatalog.Find(id);
@@ -326,9 +329,15 @@ namespace RobotVacuum.Sim
                 algorithm = activeEntry.Create();
                 drive = new DriveRequests();
                 goalMode = DriveMode.Travel;
+                System.Action<string> log = null;
+                if (settings.logAlgorithmDecisions)
+                {
+                    string name = AlgorithmCatalog.NameOf(id);
+                    log = message => Debug.Log($"[{name} {simTime:F1} s] {message}", this);
+                }
                 algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
                     writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
-                    targetCleanliness, vacuumPower, drive, settings.cleaningPriority));
+                    targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log));
             }
             catch (System.Exception exception)
             {

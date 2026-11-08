@@ -95,6 +95,13 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Plans the paths. Null = drive straight at the goal (the behaviour before the planner).</summary>
         public PathPlanner Planner { get; set; }
 
+        /// <summary>
+        /// Diagnostics: when set, told whenever a planned path crosses SHADED wall cells (traversability above 0 but
+        /// below <see cref="K.ShadedTraversability"/>: a wall SLAM has drawn but isn't sure of) that are still faint
+        /// enough to count as passable.
+        /// </summary>
+        public System.Action<string> PathNotice { get; set; }
+
         /// <summary>True when the current goal is a point on the way (see <see cref="SetGoal"/>).</summary>
         public bool PassThrough => passThrough;
 
@@ -431,6 +438,7 @@ namespace RobotVacuum.Sim.Control
                 Finish(GoalStatus.Unreachable);
                 return false;
             }
+            if (PathNotice != null) ReportShadedCells(view, length);
 
             if (first || firstPlanLength <= 0f)
             {
@@ -442,6 +450,29 @@ namespace RobotVacuum.Sim.Control
                 return false;
             }
             return true;
+        }
+
+        /// <summary>Diagnostics: tells <see cref="PathNotice"/> if the path's legs run through shaded wall cells.</summary>
+        void ReportShadedCells(InternalModelView view, float length)
+        {
+            int shaded = 0;
+            float lowest = 1f;
+            Vector2 first = Vector2.zero;
+            for (int i = 1; i < path.Count; i++)
+            {
+                if (!view.TryWorldToCell(path[i - 1], out var a) || !view.TryWorldToCell(path[i], out var b)) continue;
+                foreach (var cell in GridLine.Cells(a.row, a.col, b.row, b.col))
+                {
+                    float t = view.Traversability(cell.row, cell.col);
+                    if (t <= 0f || t >= K.ShadedTraversability || view.IsBlocked(cell.row, cell.col)) continue;
+                    if (shaded == 0) first = view.CellCenter(cell.row, cell.col);
+                    shaded++;
+                    lowest = Mathf.Min(lowest, t);
+                }
+            }
+            if (shaded > 0)
+                PathNotice($"path to ({goal.x:F2}, {goal.y:F2}), {length:F1} m, crosses {shaded} shaded wall cells " +
+                           $"(lowest traversability {lowest:F2}, first at ({first.x:F2}, {first.y:F2})).");
         }
 
         /// <summary>

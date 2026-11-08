@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using RobotVacuum.AlgorithmApi;
 
-namespace RobotVacuum.Algorithms
+namespace RobotVacuum.Sim.Control
 {
     /// <summary>
     /// How far the robot would have to drive to every cell, over floor it KNOWS (explored, and the body fits): one

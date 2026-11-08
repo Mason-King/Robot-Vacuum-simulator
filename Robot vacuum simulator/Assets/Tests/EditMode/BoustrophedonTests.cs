@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace RobotVacuum.Tests
 {
-    /// <summary>The map snapshot's distance transform, and Boustrophedon on simple rooms (no physics: an ideal follower).</summary>
+    /// <summary>The map analysis's distance transform, and Boustrophedon Sweep and Crawl on simple rooms (no physics: an ideal follower).</summary>
     public class BoustrophedonTests
     {
         const float Radius = 0.17f;
@@ -52,10 +52,11 @@ namespace RobotVacuum.Tests
         const float Target = 2f;
         DriveRequests drive;
 
-        AlgorithmContext Context(bool slam = false, CleaningPriority priority = CleaningPriority.Cleanliness)
+        AlgorithmContext Context(bool slam = false)
         {
             drive = new DriveRequests();
-            return new AlgorithmContext(new ProviderRandom(new RandomProvider(5u)), Radius, 2f * Radius, 0.05f, slam, 8f, Target, 1f, drive, priority);
+            return new AlgorithmContext(new ProviderRandom(new RandomProvider(5u)), Radius, 2f * Radius, 0.05f, slam, 8f, Target, 1f, drive,
+                new MapAnalysis(map));
         }
 
         // ---- The distance transform ----------------------------------------------------------------------
@@ -90,23 +91,48 @@ namespace RobotVacuum.Tests
 
         // ---- Lane direction ----------------------------------------------------------------------------------
 
-        [Test]
-        public void Lanes_FollowAnAngledRoom()
+        void AngledRoom()
         {
             // A 3 x 2 m room rotated 30 degrees.
             float a = 30f * Mathf.Deg2Rad;
             Vector2 u = new Vector2(Mathf.Cos(a), Mathf.Sin(a)), v = new Vector2(-u.y, u.x);
             Polygon(-1.5f * u - v, 1.5f * u - v, 1.5f * u + v, -1.5f * u + v);
+        }
 
-            var algorithm = new BoustrophedonAlgorithm();
-            algorithm.Initialize(Context());
-            algorithm.NextGoal(map, new Pose2(Vec2.Zero, 0f), GoalStatus.None);
-
-            float angle = Mathf.Atan2(algorithm.LaneDirection.y, algorithm.LaneDirection.x) * Mathf.Rad2Deg;
+        static void AssertAlong30(Vec2 direction)
+        {
+            float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
             float error = Mathf.Abs(Mathf.DeltaAngle(angle, 30f));
             error = Mathf.Min(error, Mathf.Abs(Mathf.DeltaAngle(angle, 210f)));
             Assert.Less(error, 3f, $"lanes at {angle:F1} degrees; the room's long side is at 30");
-            Assert.AreEqual(0.26f, algorithm.LaneSpacing, 1e-3f, "Cleanliness priority spacing");
+        }
+
+        [Test]
+        public void Sweep_LanesFollowAnAngledRoom_JustOverlapping()
+        {
+            AngledRoom();
+            var algorithm = new BoustrophedonSweep();
+            algorithm.Initialize(Context());
+            algorithm.NextGoal(map, new Pose2(Vec2.Zero, 0f), GoalStatus.None);
+            AssertAlong30(algorithm.LaneDirection);
+            Assert.AreEqual(0.306f, algorithm.LaneSpacing, 1e-3f, "lanes 10% overlapping");
+        }
+
+        [Test]
+        public void Crawl_LanesFollowAnAngledRoom_CloseEnoughForOnePass()
+        {
+            AngledRoom();
+            var algorithm = new BoustrophedonCrawl();
+            algorithm.Initialize(Context());
+            algorithm.NextGoal(map, new Pose2(Vec2.Zero, 0f), GoalStatus.None);
+            AssertAlong30(algorithm.LaneDirection);
+
+            // At the floor speed (0.2 m/s), the worst-covered point between lanes must still reach the target in one pass.
+            float need = Target * DriveRequests.SweepSpeedFloor * DriveRequests.SweepSpeedSafety;
+            float spacing = algorithm.LaneSpacing;
+            Debug.Log($"Crawl spacing on normal floor: {spacing * 100f:F1} cm (needs exposure {need:F3} m, gets {CoverageMath.LaneExposure(spacing, Radius):F3} m)");
+            Assert.GreaterOrEqual(CoverageMath.LaneExposure(spacing, Radius), need);
+            Assert.Less(spacing, 0.26f, "closer than the widest spacing: at 0.2 m/s that would not reach a target of 2");
         }
 
         // ---- Coverage ---------------------------------------------------------------------------------------
@@ -128,7 +154,7 @@ namespace RobotVacuum.Tests
 
         int sweptSlowly;
 
-        Follower Run(BoustrophedonAlgorithm algorithm, Vector2 start, float maxSeconds, Action<Vector2> sense = null, Func<bool> stopWhen = null)
+        Follower Run(ICleaningAlgorithm algorithm, Vector2 start, float maxSeconds, Action<Vector2> sense = null, Func<bool> stopWhen = null)
         {
             const float dt = 0.05f, full = 0.65f;
             var f = new Follower { position = start };
@@ -223,56 +249,129 @@ namespace RobotVacuum.Tests
                 {
                     if (!snapshot.BodyFits(r, c) || !map.IsReachable(r, c)) continue;
                     fit++;
-                    if (snapshot.Cleanliness(r, c) >= BoustrophedonAlgorithm.CleanEnough * Target) clean++;
+                    if (snapshot.Cleanliness(r, c) >= BoustrophedonSweep.CleanEnough * Target) clean++;
                 }
             area = fit * 0.05f * 0.05f;
             return fit > 0 ? clean / (float)fit : 0f;
         }
 
         [Test]
-        public void ARoomWithATable_IsCleanedToTheTarget_AndFinishes()
+        public void Crawl_ARoomWithATable_IsCleanedToTheTarget_WithoutOverCleaning()
         {
             Polygon(new Vector2(-2f, -1.5f), new Vector2(2f, -1.5f), new Vector2(2f, 1.5f), new Vector2(-2f, 1.5f));
             Block(-0.4f, -0.3f, 0.4f, 0.3f); // a table in the middle
             var start = new Vector2(-1.5f, -1f);
             view.SetBelievedPose(new RobotPose(start, 0f));
 
-            var algorithm = new BoustrophedonAlgorithm();
+            var algorithm = new BoustrophedonCrawl();
             algorithm.Initialize(Context());
-            var f = Run(algorithm, start, 3000f);
+            var f = Run(algorithm, start, 4000f);
 
             float coverage = Coverage(out float area);
-            Debug.Log($"Boustrophedon (cleanliness), room with a table: {coverage:P1} of {area:F2} m² at target, {algorithm.Pass + 1} passes, {f.seconds:F0} s, driven {f.driven:F1} m, goals {f.goals}, finished {f.finished}");
+            float median = MedianCleanliness();
+            Debug.Log($"Crawl, room with a table: {coverage:P1} of {area:F2} m² at target, median cleanliness {median:F2} (target {Target}), " +
+                      $"lanes {algorithm.LaneSpacing * 100f:F1} cm apart, {f.seconds:F0} s, driven {f.driven:F1} m, goals {f.goals}, finished {f.finished}");
             Assert.IsTrue(f.finished, "it should run out of work and say so");
             Assert.GreaterOrEqual(coverage, 0.95f, "the floor where the body fits reaches the target");
-            Assert.Greater(algorithm.Pass, 0, "at 0.3 m/s one pass can't reach a target of 2: it needs more than one");
+            Assert.Less(median, 2.5f * Target, "one pass, then patches: not pass after pass over the whole room");
+            Assert.Greater(sweptSlowly, 0, "Crawl cleans at sweep speed");
+        }
+
+        /// <summary>The median believed cleanliness over the floor where the body fits.</summary>
+        float MedianCleanliness()
+        {
+            var snapshot = new MapSnapshot();
+            snapshot.Take(map);
+            var values = new List<float>();
+            for (int r = snapshot.MinRow; r < snapshot.MinRow + snapshot.Rows; r++)
+                for (int c = snapshot.MinCol; c < snapshot.MinCol + snapshot.Cols; c++)
+                    if (snapshot.BodyFits(r, c) && map.IsReachable(r, c)) values.Add(snapshot.Cleanliness(r, c));
+            if (values.Count == 0) return 0f;
+            values.Sort();
+            return values[values.Count / 2];
         }
 
         [Test]
-        public void Coverage_FirstCoversEverythingAtFullSpeed_ThenPassesUntilClean()
+        public void Sweep_FirstCoversEverythingAtFullSpeed_ThenPassesUntilClean()
         {
             Polygon(new Vector2(-2f, -1.5f), new Vector2(2f, -1.5f), new Vector2(2f, 1.5f), new Vector2(-2f, 1.5f));
             Block(-0.4f, -0.3f, 0.4f, 0.3f);
             var start = new Vector2(-1.5f, -1f);
             view.SetBelievedPose(new RobotPose(start, 0f));
 
-            var algorithm = new BoustrophedonAlgorithm();
-            algorithm.Initialize(Context(priority: CleaningPriority.Coverage));
-            Assert.AreEqual(0.306f, algorithm.LaneSpacing, 1e-3f, "Coverage priority: lanes just overlapping");
+            var algorithm = new BoustrophedonSweep();
+            algorithm.Initialize(Context());
+            Assert.AreEqual(0.306f, algorithm.LaneSpacing, 1e-3f, "lanes just overlapping");
 
             // Run until the first pass ends: by then every place the body fits has been visited, at full speed.
             var f = Run(algorithm, start, 3000f, stopWhen: () => algorithm.Pass > 0);
             float visited = Visited();
-            Debug.Log($"Coverage, first pass: {visited:P1} visited in {f.seconds:F0} s, driven {f.driven:F1} m");
+            Debug.Log($"Sweep, first pass: {visited:P1} visited in {f.seconds:F0} s, driven {f.driven:F1} m");
             Assert.GreaterOrEqual(visited, 0.97f, "the first pass reaches everywhere before a second begins");
-            Assert.IsTrue(sweptSlowly == 0, "Coverage never asks for sweep speed");
+            Assert.IsTrue(sweptSlowly == 0, "Sweep never asks for sweep speed");
 
             // Then on to the target.
             var rest = Run(algorithm, f.position, 6000f);
             float coverage = Coverage(out _);
-            Debug.Log($"Coverage, to the target: {coverage:P1} at target after {algorithm.Pass + 1} passes, {f.seconds + rest.seconds:F0} s in all");
+            Debug.Log($"Sweep, to the target: {coverage:P1} at target after {algorithm.Pass + 1} passes, {f.seconds + rest.seconds:F0} s in all");
             Assert.IsTrue(rest.finished);
             Assert.GreaterOrEqual(coverage, 0.95f);
+        }
+
+        [Test]
+        public void AShadedSlamWall_CountsAsAWall_ButASlowFloorDoesNot()
+        {
+            // SLAM shades a wall it isn't sure of from the floor's ease (probability 0.5) down to 0 (0.75). Below half the
+            // ease it is more likely wall than not: the planner and the map analysis must not go through it.
+            writer.SetTraversability(0, 0, 0.3f);              // ease 1: shaded below half
+            Assert.IsTrue(view.IsBlocked(0, 0), "traversability 0.3 on ease-1 floor is a wall");
+            writer.SetTraversability(0, 1, 0.7f);
+            Assert.IsFalse(view.IsBlocked(0, 1), "0.7 on ease-1 floor is (probably) floor");
+
+            writer.SetEase(0, 2, 0.4f);                        // a slow floor, fully clear
+            writer.SetTraversability(0, 2, 0.4f);
+            Assert.IsFalse(view.IsBlocked(0, 2), "a slow floor is not a wall");
+            writer.SetTraversability(0, 2, 0.15f);             // the same floor, shaded below half its ease
+            Assert.IsTrue(view.IsBlocked(0, 2));
+            writer.SetTraversability(0, 3, 0f);
+            Assert.IsTrue(view.IsBlocked(0, 3));
+        }
+
+        [Test]
+        public void EdgePass_CleansRightUpToTheWall()
+        {
+            // The first two rows of floor along each wall (cell centres 2.5 and 7.5 cm from the wall's cells) must be
+            // under the brush after the first pass. Before, the edge run kept the body 2 cm out and drove the edge
+            // cells' centres (up to 5 cm further out again), and that strip was never touched. Corners are left out: a
+            // round robot can't reach into them.
+            Polygon(new Vector2(-2f, -1.5f), new Vector2(2f, -1.5f), new Vector2(2f, 1.5f), new Vector2(-2f, 1.5f));
+            var start = new Vector2(-1.5f, -1f);
+            view.SetBelievedPose(new RobotPose(start, 0f));
+
+            var algorithm = new BoustrophedonSweep();
+            algorithm.Initialize(Context());
+            Run(algorithm, start, 3000f, stopWhen: () => algorithm.Pass > 0);
+
+            var snapshot = new MapSnapshot();
+            snapshot.Take(map);
+            var corners = new[] { new Vector2(-2f, -1.5f), new Vector2(2f, -1.5f), new Vector2(2f, 1.5f), new Vector2(-2f, 1.5f) };
+            int strip = 0, touched = 0;
+            for (int r = snapshot.MinRow; r < snapshot.MinRow + snapshot.Rows; r++)
+                for (int c = snapshot.MinCol; c < snapshot.MinCol + snapshot.Cols; c++)
+                {
+                    if (snapshot.IsBlocked(r, c) || !map.IsReachable(r, c)) continue;
+                    if (snapshot.ObstacleDistance(r, c) > 0.07f) continue; // the first two rows by a wall
+                    Vector2 p = view.CellCenter(r, c);
+                    if (Mathf.Abs(p.x) > 2f || Mathf.Abs(p.y) > 1.5f) continue; // outside the room
+                    bool nearCorner = false;
+                    foreach (var corner in corners) nearCorner |= Vector2.Distance(p, corner) < 0.45f;
+                    if (nearCorner) continue;
+                    strip++;
+                    if (snapshot.IsVisited(r, c)) touched++;
+                }
+            float share = strip > 0 ? touched / (float)strip : 0f;
+            Debug.Log($"Edge strip: {touched} of {strip} cells touched ({share:P1}) in the first pass");
+            Assert.GreaterOrEqual(share, 0.9f, "the edge run brings the brush right up to the wall");
         }
 
         /// <summary>The share of the floor where the body fits that has been under the brush at all.</summary>
@@ -292,7 +391,7 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void TwoRooms_AreFoundAsRooms_AndCleanedOneAfterTheOther()
+        public void Crawl_TwoRooms_AreFoundAsRooms_AndCleanedOneAfterTheOther()
         {
             // Two 3 x 2 m rooms joined by a 0.8 m doorway at x = 0.
             Polygon(new Vector2(-3f, -1f), new Vector2(3f, -1f), new Vector2(3f, 1f), new Vector2(-3f, 1f));
@@ -301,9 +400,9 @@ namespace RobotVacuum.Tests
             var start = new Vector2(-2.5f, -0.5f);
             view.SetBelievedPose(new RobotPose(start, 0f));
 
-            var algorithm = new BoustrophedonAlgorithm();
+            var algorithm = new BoustrophedonCrawl();
             algorithm.Initialize(Context());
-            var f = Run(algorithm, start, 4000f);
+            var f = Run(algorithm, start, 6000f);
 
             // Which room the robot is in, with a band either side of the doorway (x = 0) so cleaning right up to the
             // doorway, which can dip a few centimetres past it, doesn't count as changing rooms.
@@ -319,7 +418,7 @@ namespace RobotVacuum.Tests
             }
 
             float coverage = Coverage(out _);
-            Debug.Log($"Two rooms: {algorithm.RoomCount} rooms, {coverage:P1} at target, {f.seconds:F0} s, room changes {crossings}, finished {f.finished}\n  " +
+            Debug.Log($"Crawl, two rooms: {algorithm.RoomCount} rooms, {coverage:P1} at target, {f.seconds:F0} s, room changes {crossings}, finished {f.finished}\n  " +
                       string.Join("\n  ", visits));
             Assert.AreEqual(2, algorithm.RoomCount, "the doorway splits the floor into two rooms");
             Assert.IsTrue(f.finished);
@@ -328,7 +427,12 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void Slam_OnlyPlansOverExploredFloor_AndExploresTheRest()
+        public void Slam_Sweep_OnlyPlansOverExploredFloor_AndExploresTheRest() => SlamExploring(new BoustrophedonSweep());
+
+        [Test]
+        public void Slam_Crawl_OnlyPlansOverExploredFloor_AndExploresTheRest() => SlamExploring(new BoustrophedonCrawl());
+
+        void SlamExploring(ICleaningAlgorithm algorithm)
         {
             // Only floor within 2 m of where the robot has been counts as explored (a stand-in for the lidar).
             Polygon(new Vector2(-3f, -1f), new Vector2(3f, -1f), new Vector2(3f, 1f), new Vector2(-3f, 1f));
@@ -345,7 +449,6 @@ namespace RobotVacuum.Tests
             view.SetBelievedPose(new RobotPose(start, 0f));
             Sense(start);
 
-            var algorithm = new BoustrophedonAlgorithm();
             algorithm.Initialize(Context(slam: true));
             var first = algorithm.NextGoal(map, new Pose2(start.ToApi(), 0f), GoalStatus.None);
             Assert.IsTrue(first.HasValue);
@@ -353,9 +456,9 @@ namespace RobotVacuum.Tests
                 "the first goal is on explored floor");
 
             algorithm.Initialize(Context(slam: true));
-            var f = Run(algorithm, start, 4000f, Sense);
+            var f = Run(algorithm, start, 6000f, Sense);
             float coverage = Coverage(out _);
-            Debug.Log($"SLAM-style: {coverage:P1} at target, {f.seconds:F0} s, finished {f.finished}");
+            Debug.Log($"{algorithm.Name}, SLAM-style: {coverage:P1} at target, {f.seconds:F0} s, finished {f.finished}");
             Assert.IsTrue(f.finished);
             Assert.GreaterOrEqual(coverage, 0.95f);
         }
@@ -399,7 +502,7 @@ namespace RobotVacuum.Tests
             var spawn = new Vector2(-0.4f, -0.2f);
             view.SetBelievedPose(new RobotPose(spawn, 0f));
 
-            var algorithm = new BoustrophedonAlgorithm();
+            var algorithm = new BoustrophedonSweep();
             algorithm.Initialize(Context());
             algorithm.NextGoal(map, new Pose2(spawn.ToApi(), 0f), GoalStatus.None);
 
@@ -429,8 +532,8 @@ namespace RobotVacuum.Tests
             var start = new Vector2(-1.5f, -1f);
             view.SetBelievedPose(new RobotPose(start, 0f));
 
-            var algorithm = new BoustrophedonAlgorithm();
-            algorithm.Initialize(Context(slam: true, priority: CleaningPriority.Coverage));
+            var algorithm = new BoustrophedonSweep();
+            algorithm.Initialize(Context(slam: true));
             var f = Run(algorithm, start, 3000f, stopWhen: () => algorithm.Pass > 0);
 
             int outside = f.targets.FindAll(p => !Inside(p)).Count;

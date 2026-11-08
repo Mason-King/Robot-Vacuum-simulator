@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using RobotVacuum.AlgorithmApi;
 
-namespace RobotVacuum.Algorithms
+namespace RobotVacuum.Sim.Control
 {
     /// <summary>
     /// Splits the floor the robot can reach into ROOMS by finding DOORWAYS as gaps between wall ends.
@@ -47,24 +47,32 @@ namespace RobotVacuum.Algorithms
             return index < 0 ? -1 : label[index];
         }
 
-        public void Build(MapSnapshot snapshot, IBeliefMap map, ReachField reach)
+        /// <param name="wallsChanged">
+        /// True when the blocked cells (or the snapshot's extent) changed since the last build: the doorways are found
+        /// again. False reuses the last build's doorways (they depend only on the walls).
+        /// </param>
+        public void Build(MapSnapshot snapshot, IBeliefMap map, ReachField reach, bool wallsChanged = true)
         {
             int rows = snapshot.Rows, cols = snapshot.Cols, n = rows * cols;
             if (label.Length < n)
             {
                 label = new int[n];
                 cut = new bool[n];
+                wallsChanged = true;
             }
             Count = 0;
-            Doorways.Clear();
             for (int i = 0; i < n; i++)
             {
                 int row = snapshot.MinRow + i / cols, col = snapshot.MinCol + i % cols;
                 label[i] = reach.Reachable(row, col) ? -2 : -1; // -2 = usable, not yet labelled
-                cut[i] = false;
             }
 
-            FindDoorways(snapshot, map);
+            if (wallsChanged)
+            {
+                Doorways.Clear();
+                for (int i = 0; i < n; i++) cut[i] = false;
+                FindDoorways(snapshot, map);
+            }
 
             // Rooms: components of usable floor not crossing a doorway cut.
             int minCells = (int)(MinRoomArea / (snapshot.CellSize * snapshot.CellSize));

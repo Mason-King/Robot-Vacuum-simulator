@@ -85,8 +85,16 @@ namespace RobotVacuum.Sim.Control
 
         public float Traversability(int row, int col) => grid.GetCell(row, col).traversabilityBelief;
 
-        /// <summary>True when the cell is believed impassable (traversability exactly 0).</summary>
-        public bool IsBlocked(int row, int col) => grid.GetCell(row, col).traversabilityBelief <= 0f;
+        /// <summary>
+        /// True when the cell is believed impassable: traversability 0, or a wall SLAM has drawn but isn't sure of,
+        /// shaded below <see cref="ControllerConstants.WallEaseFraction"/> of its floor's ease (wall probability above about 0.625). In a
+        /// Normal run nothing is shaded, so this is traversability 0 exactly.
+        /// </summary>
+        public bool IsBlocked(int row, int col) => IsWall(grid.GetCell(row, col).traversabilityBelief, row, col);
+
+        bool IsWall(float traversability, int row, int col) =>
+            traversability <= 0f ||
+            (traversability < 1f && traversability < ControllerConstants.WallEaseFraction * writer.EaseAt(row, col));
 
         public bool IsBlockedAt(Vector2 world) =>
             grid.TryWorldToGridIndex(world, out int row, out int col) && IsBlocked(row, col);
@@ -257,7 +265,8 @@ namespace RobotVacuum.Sim.Control
         void Visit(int index, int localRow, int localCol, ref int tail)
         {
             if (reached[index]) return;
-            if (grid.GetCell(localRow + reachedMinRow, localCol + reachedMinCol).traversabilityBelief <= 0f) return;
+            int row = localRow + reachedMinRow, col = localCol + reachedMinCol;
+            if (IsWall(grid.GetCell(row, col).traversabilityBelief, row, col)) return;
 
             reached[index] = true;
             floodQueue[tail++] = index;

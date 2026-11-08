@@ -59,7 +59,10 @@ namespace RobotVacuum.AlgorithmApi
         /// </summary>
         bool IsExplored(int row, int col);
 
-        /// <summary>True if the cell is believed impassable (traversability 0).</summary>
+        /// <summary>
+        /// True if the cell is believed impassable: traversability 0, or (SLAM) a wall drawn but not yet certain whose
+        /// traversability is below half its floor's ease. The planner and the map analysis use the same rule.
+        /// </summary>
         bool IsBlocked(int row, int col);
 
         /// <summary>True if the cell containing the point is believed impassable.</summary>
