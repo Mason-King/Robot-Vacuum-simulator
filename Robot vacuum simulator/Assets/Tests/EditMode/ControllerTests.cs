@@ -489,11 +489,18 @@ namespace RobotVacuum.Tests
             new ObservationMapper(normal, slam: false).Apply(frame, pose);
             Assert.AreEqual(2f, normal.Get(0, 0).vacuumResistanceBelief, 1e-6f);
 
+            // SLAM: the reading steps the belief toward it (not assigned), and over the whole footprint, not just the
+            // cell under the sensor, before that step's cleaning is credited.
             var slamWriter = new InternalModelWriter(new InternalModelGrid(Vector2.zero, 0.05f));
-            new ObservationMapper(slamWriter, slam: true).Apply(frame, pose);
+            var slamMapper = new ObservationMapper(slamWriter, slam: true);
+            slamMapper.Apply(frame, pose);
+            slamMapper.ApplyFootprint(pose, 0.17f, 0.02f, 1f);
             float once = slamWriter.Get(0, 0).vacuumResistanceBelief;
             Assert.Greater(once, 1f);
             Assert.Less(once, 2f);
+            float aside = slamWriter.Get(0, 2).vacuumResistanceBelief; // 0.1 m away, still under the body
+            Assert.AreEqual(once, aside, 1e-6f, "the whole footprint steps toward the reading");
+            Assert.AreEqual(1f, slamWriter.Get(0, 5).vacuumResistanceBelief, 1e-6f, "outside the footprint: untouched");
         }
 
         [Test]

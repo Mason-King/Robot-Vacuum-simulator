@@ -26,8 +26,15 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public const int ScansPerSubmap = 360;
 
-        /// <summary>A ray with no return is entered as free space this far (Cartographer missing_data_ray_length), never past the lidar's range or <see cref="MaxInsertRangeMeters"/>.</summary>
-        public const float MissingDataRayLengthMeters = 5f;
+        /// <summary>
+        /// A ray with no return is entered as free space this far (Cartographer missing_data_ray_length), never past the
+        /// lidar's range or <see cref="MaxInsertRangeMeters"/>. 0: such rays are not entered at all. Indoors, nearly every
+        /// missing return is a wall that didn't reflect (the lidar's dropouts), not open space; entered as free space it
+        /// cleared floor straight through the wall it hit, and the cleaning algorithms then planned out there. Ignoring
+        /// them loses mapping of genuinely open space beyond the lidar's range (none in our levels) and is the cheapest
+        /// fix; every bounded alternative costs a walk of the map per ray. (Was 5 m.)
+        /// </summary>
+        public const float MissingDataRayLengthMeters = 0f;
 
         /// <summary>
         /// Only this much of each ray goes into the submaps: returns further away aren't mapped, and free space stops

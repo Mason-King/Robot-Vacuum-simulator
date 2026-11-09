@@ -450,7 +450,9 @@ namespace RobotVacuumSim.EnvironmentModel
         // as half clean, anything at or past the target counts as fully
         // clean and no more, so overshooting one cell cannot make up for
         // missing another. Non-cleanable cells (under blocking furniture)
-        // are excluded from numerator and denominator.
+        // and cells outside every room (the grid is the level's bounding
+        // box, so ~40% of it can be outside the rooms) are excluded from
+        // numerator and denominator.
         //
         // INFERENCE, not confirmed: this exact formula is Claude's reading
         // of "coverage against the target". CalculateFullyCleanedPercent()
@@ -465,7 +467,7 @@ namespace RobotVacuumSim.EnvironmentModel
             {
                 for (int col = 0; col < cols; col++)
                 {
-                    if (cells[row, col].isNonCleanable) continue;
+                    if (cells[row, col].isNonCleanable || IsOutsideRooms(row, col)) continue;
                     cleanableCellCount++;
                     summed += ExternalModelData.CleanFraction(cells[row, col].Cleanliness, targetMaxClean);
                 }
@@ -484,13 +486,40 @@ namespace RobotVacuumSim.EnvironmentModel
             {
                 for (int col = 0; col < cols; col++)
                 {
-                    if (cells[row, col].isNonCleanable) continue;
+                    if (cells[row, col].isNonCleanable || IsOutsideRooms(row, col)) continue;
                     cleanableCellCount++;
                     if (cells[row, col].Cleanliness >= targetMaxClean) reached++;
                 }
             }
 
             return cleanableCellCount == 0 ? 0f : reached / (float)cleanableCellCount * 100f;
+        }
+
+        // ------------------------------------------------------------------
+        // Cells whose centre lies outside every room. Worked out once, the
+        // first time a percentage is asked for (the room test is too slow
+        // to run per cell every frame); without a level, nothing is outside.
+        // ------------------------------------------------------------------
+        private bool[,] outsideRooms;
+
+        private bool IsOutsideRooms(int row, int col)
+        {
+            if (level == null) return false;
+            if (outsideRooms == null)
+            {
+                outsideRooms = new bool[rows, cols];
+                for (int r = 0; r < rows; r++)
+                    for (int c = 0; c < cols; c++)
+                        outsideRooms[r, c] = OutsideRoomsAt(r, c);
+            }
+            return outsideRooms[row, col];
+        }
+
+        private bool OutsideRoomsAt(int row, int col)
+        {
+            Vector2 world = GridIndexToWorldCenter(row, col);
+            Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
+            return level.RoomIndexAt(point) < 0;
         }
 
         // ------------------------------------------------------------------
@@ -526,12 +555,7 @@ namespace RobotVacuumSim.EnvironmentModel
                     data.cleanliness[index] = cell.Cleanliness;
                     data.nonCleanable[index] = cell.isNonCleanable;
 
-                    if (level != null)
-                    {
-                        Vector2 world = GridIndexToWorldCenter(row, col);
-                        Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
-                        data.outsideRooms[index] = level.RoomIndexAt(point) < 0;
-                    }
+                    data.outsideRooms[index] = IsOutsideRooms(row, col);
                 }
             }
 

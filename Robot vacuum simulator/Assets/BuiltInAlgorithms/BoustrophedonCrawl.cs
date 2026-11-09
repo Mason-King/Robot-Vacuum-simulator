@@ -54,6 +54,9 @@ namespace RobotVacuum.Algorithms
         /// <summary>The same, in a SLAM run: walls drawn from the lidar are less exact, and every bump disturbs the pose.</summary>
         public const float SlamEdgeMarginMeters = 0.03f;
 
+        /// <summary>An edge run is abandoned after this many of its points in a row couldn't be reached (its wall has moved, or it has left the building).</summary>
+        public const int EdgeFailuresAllowed = 3;
+
         /// <summary>Extra margin at an edge run's corners and ends, where two walls' errors (and door jambs) add up.</summary>
         public const float CornerExtraMeters = 0.02f;
 
@@ -105,6 +108,7 @@ namespace RobotVacuum.Algorithms
         IMapAnalysis analysis;
         readonly List<Step> plan = new List<Step>();
         int planIndex;
+        int edgeFailures;   // edge points in a row that couldn't be reached
         readonly Dictionary<long, (int change, int question)> skipped = new Dictionary<long, (int, int)>();
         readonly HashSet<long> edged = new HashSet<long>();
         readonly Dictionary<long, int> patchVisits = new Dictionary<long, int>();
@@ -176,6 +180,7 @@ namespace RobotVacuum.Algorithms
                 if (lastStatus == GoalStatus.InProgress) return Issue(plan[planIndex]);
                 if (lastStatus == GoalStatus.Reached)
                 {
+                    edgeFailures = 0;
                     var done = plan[planIndex];
                     if (done.sweptKey != 0) MarkSwept(done.sweptKey, done.sFrom, done.sTo);
                     planIndex++;
@@ -184,7 +189,7 @@ namespace RobotVacuum.Algorithms
                 else if (lastStatus == GoalStatus.Blocked || lastStatus == GoalStatus.Unreachable)
                 {
                     var failed = plan[planIndex].point;
-                    if (plan[planIndex].edge && planIndex + 1 < plan.Count)
+                    if (plan[planIndex].edge && planIndex + 1 < plan.Count && ++edgeFailures < EdgeFailuresAllowed)
                     {
                         // One point of an edge run (a corner the body can't quite get into): carry on along the run.
                         context.Log($"edge: waypoint ({failed.x:F2}, {failed.y:F2}) {lastStatus}; going on to the next");
@@ -199,6 +204,7 @@ namespace RobotVacuum.Algorithms
 
             plan.Clear();
             planIndex = 0;
+            edgeFailures = 0;
             if (!Choose(map, pose)) return null;
             return Issue(plan[0]);
         }
@@ -589,9 +595,18 @@ namespace RobotVacuum.Algorithms
             return cells;
         }
 
-        /// <summary>Is any of the strip the body can't stand on (explored, not blocked, the body doesn't fit) dirty, within the brush's reach of this edge cell?</summary>
+        /// <summary>
+        /// Is any of the strip the body can't stand on (explored, not blocked, the body doesn't fit) dirty, within the
+        /// brush's reach of this edge cell, and close enough to the edge line for the brush to reach at all? Cells nearer
+        /// the wall than the edge margin never get cleaned by an edge run, so they must not keep calling for one: they
+        /// had the edge runs repeated every pass, in rooms long at the target.
+        /// </summary>
         bool StripDirty(int row, int col)
         {
+            float margin = context.slam ? SlamEdgeMarginMeters : EdgeMarginMeters;
+            // ObstacleDistance is measured from the cell's centre less half its diagonal; along a wall the centre is
+            // half a cell (not half a diagonal) from the wall's face, so add the difference back.
+            float toFace = 0.5f * analysis.CellSize * ((float)Math.Sqrt(2.0) - 1f);
             float reachMeters = context.BrushRadius - EdgeInsetMeters;
             int cells = (int)Math.Ceiling(reachMeters / analysis.CellSize);
             float reachSq = reachMeters * reachMeters, size = analysis.CellSize;
@@ -601,6 +616,7 @@ namespace RobotVacuum.Algorithms
                     if ((dr * dr + dc * dc) * size * size > reachSq) continue;
                     int r = row + dr, c = col + dc;
                     if (analysis.BodyFits(r, c) || analysis.IsBlocked(r, c) || !analysis.IsExplored(r, c)) continue;
+                    if (analysis.ObstacleDistance(r, c) + toFace < margin - 0.001f) continue; // out of the edge run's reach
                     if (Dirty(r, c)) return true;
                 }
             return false;
@@ -955,6 +971,10 @@ namespace RobotVacuum.Algorithms
             // Get to the first run's nearer end (by path).
             bool startAtS0 = PathTo(PointOn(current.lane, current.s0)) <= PathTo(PointOn(current.lane, current.s1));
             float sNow = startAtS0 ? current.s0 : current.s1;
+            // Where the swept record of the current lane starts. A U-turn starts one radius before the lane's end and its
+            // arc carries the brush out to the apex, so each lane is recorded as swept out to the apex at both ends:
+            // otherwise every lane would leave a 15 cm "unswept" tail at each end to go back for.
+            float recordFrom = sNow;
             int sign = startAtS0 ? 1 : -1;
             plan.Add(Travel(PointOn(current.lane, sNow), RunKey(current)));
 
@@ -988,12 +1008,13 @@ namespace RobotVacuum.Algorithms
                     {
                         var leg = Clean(a, true, RunKey(current), exposure);
                         leg.sweptKey = SweptKey(current.lane);
-                        leg.sFrom = sNow;
-                        leg.sTo = turnS;
+                        leg.sFrom = recordFrom;
+                        leg.sTo = apex;
                         plan.Add(leg);
                         for (int i = 1; i < arc.Count; i++) plan.Add(Clean(arc[i], true, RunKey(n), exposure));
                         current = n;
                         sNow = turnS;
+                        recordFrom = apex;
                         sign = -sign;
                         continue;
                     }
@@ -1002,7 +1023,7 @@ namespace RobotVacuum.Algorithms
                 // The end of this cell: sweep to the lane's end and stop.
                 var last = Clean(PointOn(current.lane, exitS), false, RunKey(current), exposure);
                 last.sweptKey = SweptKey(current.lane);
-                last.sFrom = sNow;
+                last.sFrom = recordFrom;
                 last.sTo = exitS;
                 plan.Add(last);
                 break;

@@ -15,7 +15,7 @@ namespace RobotVacuum.Sim
         /// <summary>Dwell over 0 to target_max_dwell. Cool up to 1x target_max_clean, warm beyond it.</summary>
         FloorCoverage = 1,
 
-        /// <summary>Cleanliness over the same range as Coverage. Cool up to 1x target_max_clean, warm beyond it.</summary>
+        /// <summary>Cleanliness over 0 to OverCoverageTargetScalar x target_max_clean (4x). Cool up to 1x target_max_clean, warm beyond it.</summary>
         FloorOverCoverage = 2,
     }
 
@@ -37,6 +37,12 @@ namespace RobotVacuum.Sim
 
         /// <summary>target_max_dwell = this scalar x target_max_clean. Sets the top of the Coverage range.</summary>
         public const float DwellTargetScalar = 2f;
+
+        /// <summary>
+        /// The top of the OverCoverage range, as a multiple of target_max_clean. 4: the warm half of the colours spreads
+        /// from 1x to 4x the target, so cleaning well past the target still shows contrast instead of one block of red.
+        /// </summary>
+        public const float OverCoverageTargetScalar = 4f;
 
         /// <summary>Cleanliness gained per second of dwell on a floor with a cleaning effort of 1.</summary>
         public const float BaseVacuumPower = 1f;

@@ -225,10 +225,13 @@ namespace FolderTest
             AlgorithmLoader.Load(folder, AlgorithmCatalog.BuiltIns, out var second);
             Assert.IsTrue(second.units.Single().fromCache, second.Text());
 
-            Write("Cached.cs", Algorithm("CacheTest", "Cached", "Cached one, edited"));
+            // The compile cache is keyed by content and lives until Unity reloads its scripts: an edit that repeats
+            // text compiled in an earlier test run would rightly come from the cache. Make the edit new every run.
+            string edited = "Cached one, edited " + Guid.NewGuid().ToString("N").Substring(0, 8);
+            Write("Cached.cs", Algorithm("CacheTest", "Cached", edited));
             var entries = AlgorithmLoader.Load(folder, AlgorithmCatalog.BuiltIns, out var third);
-            Assert.IsFalse(third.units.Single().fromCache);
-            Assert.AreEqual("Cached one, edited", entries.Single().Name);
+            Assert.IsFalse(third.units.Single().fromCache, third.Text());
+            Assert.AreEqual(edited, entries.Single().Name);
         }
 
         [Test]

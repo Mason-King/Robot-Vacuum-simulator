@@ -57,6 +57,7 @@ namespace RobotVacuum.Sim.Control
         {
             if (frame.hasLidarScan) ApplyLidar(frame, pose);
             ApplyDrag(frame, pose);
+            sensedResistance = frame.hasVacuumResistance ? frame.vacuumResistance : (float?)null;
             if (frame.hasVacuumResistance) ApplyVacuumResistance(frame, pose);
             if (frame.bumped) ApplyBump(frame, pose); // last, so a certain 0 is never overwritten by this step's clear views
         }
@@ -350,8 +351,14 @@ namespace RobotVacuum.Sim.Control
 
         // ---- Vacuum resistance (floor) sensor --------------------------------------------------------------
 
+        /// <summary>This step's floor-sensor reading, if any: in SLAM it is spread over the footprint (see <see cref="ApplyFootprint"/>).</summary>
+        float? sensedResistance;
+
         void ApplyVacuumResistance(SensorFrame frame, RobotPose pose)
         {
+            // SLAM: the footprint update below covers this cell along with the rest of the body.
+            if (slam) return;
+
             if (!writer.Grid.TryWorldToGridIndex(pose.position, out int row, out int col)) return;
 
             float value = slam
@@ -368,6 +375,11 @@ namespace RobotVacuum.Sim.Control
         /// Every step, for each cell well inside the believed footprint: the robot is standing there, so a cell
         /// believed blocked is corrected to its floor ease; and the robot's own dwell and cleanliness estimates grow
         /// (cleanliness at vacuum power ÷ the believed vacuum resistance).
+        ///
+        /// SLAM: the floor sensor's reading is taken as the floor under the whole body, so every footprint cell's
+        /// believed resistance steps toward it (<see cref="BeliefUpdateConstants.FloorSensorAlpha"/>) before its
+        /// cleaning is credited. Updating only the cell under the sensor left nearly every cell at the default 1.0,
+        /// so on easier floors (0.7–0.8) the robot credited itself 25–40% less cleaning than it did and cleaned on.
         /// </summary>
         public void ApplyFootprint(RobotPose pose, float radius, float dt, float vacuumPower)
         {
@@ -393,6 +405,10 @@ namespace RobotVacuum.Sim.Control
                         if (writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
                             writer.SetTraversability(row, col, writer.EaseAt(row, col));
                     }
+
+                    if (slam && sensedResistance.HasValue)
+                        writer.SetVacuumResistance(row, col, BeliefRules.Step(writer.Get(row, col).vacuumResistanceBelief,
+                            sensedResistance.Value, C.FloorSensorAlpha, 0f, 0f, snapToZero: false));
 
                     float resistance = Mathf.Max(0.01f, writer.Get(row, col).vacuumResistanceBelief);
                     writer.AddDwellAndCleanliness(row, col, dt, dt * vacuumPower / resistance);

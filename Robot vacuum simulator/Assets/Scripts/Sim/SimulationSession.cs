@@ -171,6 +171,10 @@ namespace RobotVacuum.Sim
                 SimulatedSeconds = 0f;
                 RealSeconds = 0f;
 
+                // The folder first, so the Console is captured into it from the very start (console_log.txt).
+                RunFolder = RunArtifacts.NewRunFolder();
+                log = new RunLog(RunFolder);
+
                 Runner = SimulationRunner.Start(Level, SimulationRunner.Options.From(Settings, Headless));
 
                 // Unset vacuum values keep the robot's own defaults; record what it actually ended up with.
@@ -178,7 +182,6 @@ namespace RobotVacuum.Sim
                 Settings.RecordVacuumFrom(Runner.Robot, Runner.Battery);
 
                 // The inputs are saved before the run moves, so even a run that dies part-way is reproducible.
-                RunFolder = RunArtifacts.NewRunFolder();
                 new RunConfig
                 {
                     level = LevelSnapshot.FromLevel(Level, Level.name),
@@ -205,6 +208,7 @@ namespace RobotVacuum.Sim
                 // A folder whose config.json exists but whose result.json doesn't reads as a crashed run, so
                 // record the failure there if the folder was already made.
                 if (RunFolder != null) WriteResult(RunResult.Failure(error));
+                StopLog();
                 TearDownRunner();
                 return false;
             }
@@ -327,8 +331,17 @@ namespace RobotVacuum.Sim
 
             WriteResult(result);
             Result = result;
+            StopLog();
 
             if (raiseFinished) Finished?.Invoke(this);
+        }
+
+        RunLog log;
+
+        void StopLog()
+        {
+            log?.Dispose();
+            log = null;
         }
 
         // Holds the end state on screen: nothing moves or cleans any more, but nothing is destroyed.
@@ -366,6 +379,7 @@ namespace RobotVacuum.Sim
 
         void TearDownRunner()
         {
+            StopLog();
             if (clock != null) clock.Unbind();
             clock = null;
 

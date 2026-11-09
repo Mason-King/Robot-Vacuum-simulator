@@ -60,6 +60,17 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void ANoReturnRay_IsNotEnteredAtAll_InSlam()
+        {
+            // A lidar dropout on a wall must not clear floor through that wall.
+            var grid = new ProbabilityGrid(Vector2.zero, Cell);
+            var pose = new RobotPose(new Vector2(0.025f, 0.025f), 0f);
+            grid.Insert(pose, Ray(0f, 8f, false), S.MissingDataRayLengthMeters, new List<long>());
+            Assert.IsFalse(grid.IsKnown(1, 0), "nothing along a ray with no return");
+            Assert.IsFalse(grid.IsKnown(20, 0));
+        }
+
+        [Test]
         public void OneScan_UpdatesACellOnce_AndNeverMissesACellItHit()
         {
             var grid = new ProbabilityGrid(Vector2.zero, Cell);

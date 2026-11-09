@@ -52,11 +52,11 @@ namespace RobotVacuum.Tests
         const float Target = 2f;
         DriveRequests drive;
 
-        AlgorithmContext Context(bool slam = false)
+        AlgorithmContext Context(bool slam = false, System.Action<string> log = null)
         {
             drive = new DriveRequests();
             return new AlgorithmContext(new ProviderRandom(new RandomProvider(5u)), Radius, 2f * Radius, 0.05f, slam, 8f, Target, 1f, drive,
-                new MapAnalysis(map));
+                new MapAnalysis(map), log);
         }
 
         // ---- The distance transform ----------------------------------------------------------------------
@@ -313,9 +313,12 @@ namespace RobotVacuum.Tests
             // Then on to the target.
             var rest = Run(algorithm, f.position, 6000f);
             float coverage = Coverage(out _);
-            Debug.Log($"Sweep, to the target: {coverage:P1} at target after {algorithm.Pass + 1} passes, {f.seconds + rest.seconds:F0} s in all");
+            float median = MedianCleanliness();
+            Debug.Log($"Sweep, to the target: {coverage:P1} at target after {algorithm.Pass + 1} passes, {f.seconds + rest.seconds:F0} s in all, " +
+                      $"median cleanliness {median:F2} (target {Target})");
             Assert.IsTrue(rest.finished);
             Assert.GreaterOrEqual(coverage, 0.95f);
+            Assert.Less(median, 2f * Target, "a mostly clean room gets patches, not more whole passes");
         }
 
         [Test]
@@ -335,6 +338,26 @@ namespace RobotVacuum.Tests
             Assert.IsTrue(view.IsBlocked(0, 2));
             writer.SetTraversability(0, 3, 0f);
             Assert.IsTrue(view.IsBlocked(0, 3));
+        }
+
+        [Test]
+        public void Sweep_FirstPass_DoesNotGoBackForLaneEnds()
+        {
+            // A U-turn starts a radius before the lane's end and its arc covers the rest. If the lane were recorded as
+            // swept only to where the turn starts, every lane end would be left as a 15 cm "run" to go back for, one
+            // decision at a time, all over the room.
+            Polygon(new Vector2(-2f, -1.5f), new Vector2(2f, -1.5f), new Vector2(2f, 1.5f), new Vector2(-2f, 1.5f));
+            var start = new Vector2(-1.5f, -1f);
+            view.SetBelievedPose(new RobotPose(start, 0f));
+
+            var decisions = new List<string>();
+            var algorithm = new BoustrophedonSweep();
+            algorithm.Initialize(Context(log: decisions.Add));
+            Run(algorithm, start, 3000f, stopWhen: () => algorithm.Pass > 0);
+
+            var lanes = decisions.FindAll(d => d.StartsWith("pass 1, lanes"));
+            Debug.Log($"Sweep, empty room, first pass: {lanes.Count} lane decisions:\n{string.Join("\n", lanes)}");
+            Assert.LessOrEqual(lanes.Count, 2, "one sweep over an empty room (two at most), not trips back for the lane ends");
         }
 
         [Test]
