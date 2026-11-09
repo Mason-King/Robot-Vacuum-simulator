@@ -828,8 +828,13 @@ namespace RobotVacuum.LevelEditor
                     var doorway = level.Doorways[dragDoorway];
                     if (doorway == null) break;
 
+                    Vector2 snapped = SnapToNearestWall(point, out int roomA, out int roomB);
+                    if (TryFindAnyEdge(snapped, level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
+                        level.HasDoorwayOnWall(wallRoom, wallEdge, dragDoorway))
+                        break;
+
                     Undo.RecordObject(level, "Move Doorway");
-                    doorway.center = SnapToNearestWall(point, out int roomA, out int roomB);
+                    doorway.center = snapped;
                     if (roomA >= 0) doorway.roomA = roomA;
                     if (roomB >= 0) doorway.roomB = roomB;
                     MarkLevelChanged();

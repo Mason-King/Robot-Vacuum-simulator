@@ -100,6 +100,24 @@ namespace RobotVacuum.LevelEditor
             return section;
         }
 
+        /// <summary>
+        /// A top bar with a back button and a title over a subtitle, as the start screen's pages use.
+        /// Returns the bar so the caller can append buttons after its spacer.
+        /// </summary>
+        public static VisualElement PageHeader(VisualElement parent, string title, string backTooltip, Action onBack,
+            out Label subtitle)
+        {
+            var header = Div(parent, "le-topbar");
+            IconButton(header, IconKind.Back, backTooltip, onBack, "le-btn--ghost");
+
+            var titles = Div(header, "le-library__title-block le-page__titles");
+            Text(titles, title, "le-library__title");
+            subtitle = Text(titles, string.Empty, "le-library__subtitle");
+
+            Div(header, "le-topbar__spacer");
+            return header;
+        }
+
         /// <summary>A label-over-value read-out for the run bars. Returns the value label.</summary>
         public static Label RunStat(VisualElement parent, string label)
         {
@@ -126,9 +144,58 @@ namespace RobotVacuum.LevelEditor
             return field;
         }
 
-        public static string FormatMetres(float value) => value >= 10f ? $"{value:0.0} m" : $"{value:0.00} m";
+        // Everything is stored and simulated in metres; the interface shows the units chosen in
+        // the configuration (SimConfig.UseFeet), imperial or metric, everywhere at once.
+        public const float FeetPerMetre = VacuumSettings.MetresToFeet;
 
-        public static string FormatArea(float value) => $"{value:0.0} m²";
+        static bool Feet => SimConfig.UseFeet;
+
+        /// <summary>A length in metres, in the chosen units.</summary>
+        public static string FormatLength(float metres) => Feet
+            ? $"{metres * FeetPerMetre:0.0} ft"
+            : metres >= 10f ? $"{metres:0.0} m" : $"{metres:0.00} m";
+
+        /// <summary>A short length in metres, such as a wall's thickness: inches or centimetres.</summary>
+        public static string FormatSmallLength(float metres) => Feet
+            ? $"{metres * FeetPerMetre * 12f:0.0} in"
+            : $"{metres * 100f:0} cm";
+
+        /// <summary>A width × depth in metres, in the chosen units.</summary>
+        public static string FormatSize(float widthMetres, float depthMetres) => Feet
+            ? $"{widthMetres * FeetPerMetre:0.0} × {depthMetres * FeetPerMetre:0.0} ft"
+            : $"{widthMetres:0.00} × {depthMetres:0.00} m";
+
+        /// <summary>An area in square metres, in the chosen units.</summary>
+        public static string FormatArea(float squareMetres) => Feet
+            ? $"{squareMetres * FeetPerMetre * FeetPerMetre:0} ft²"
+            : $"{squareMetres:0.0} m²";
+
+        /// <summary>A point in level metres, in the chosen units.</summary>
+        public static string FormatPoint(Vector2 metres) => Feet
+            ? $"x {metres.x * FeetPerMetre:0.0} ft   y {metres.y * FeetPerMetre:0.0} ft"
+            : $"x {metres.x:0.00} m   y {metres.y:0.00} m";
+
+        /// <summary>A grid step in metres, in the chosen units.</summary>
+        public static string FormatStep(float metres)
+        {
+            if (!Feet) return metres < 1f ? $"{metres * 100f:0} cm" : $"{metres:0} m";
+
+            float feet = metres * FeetPerMetre;
+            return feet < 0.99f ? $"{feet * 12f:0} in" : $"{feet:0} ft";
+        }
+
+        /// <summary>Snap steps offered in the editor, in metres, in round numbers of the chosen units.</summary>
+        public static float[] SnapSteps => Feet ? ImperialSnapSteps : MetricSnapSteps;
+
+        // 1 in, 3 in, 6 in, 1 ft, 2 ft — and 5, 10, 25, 50 cm, 1 m.
+        static readonly float[] ImperialSnapSteps = { 0.0254f, 0.0762f, 0.1524f, 0.3048f, 0.6096f };
+        static readonly float[] MetricSnapSteps = { 0.05f, 0.1f, 0.25f, 0.5f, 1f };
+
+        /// <summary>Grid line spacings the canvas picks from as it zooms, in metres.</summary>
+        public static float[] GridSteps => Feet ? ImperialGridSteps : MetricGridSteps;
+
+        static readonly float[] ImperialGridSteps = { 0.0254f, 0.0762f, 0.1524f, 0.3048f, 0.6096f, 1.524f, 3.048f, 7.62f, 15.24f, 30.48f };
+        static readonly float[] MetricGridSteps = { 0.05f, 0.1f, 0.25f, 0.5f, 1f, 2f, 5f, 10f, 25f, 50f };
 
         /// <summary>True when keyboard focus is inside a text field, so single-key shortcuts should stand down.</summary>
         public static bool IsTyping(IPanel panel)

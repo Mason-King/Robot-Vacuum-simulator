@@ -53,11 +53,36 @@ namespace RobotVacuum.Sim
             runLevel = ResolveLevel(out string source);
             if (runLevel == null) return;
 
-            // A level from the editor runs with the movement pattern chosen there.
             if (handedLevel != null)
             {
-                settings.pattern = SimLauncher.MovementPattern;
-                settings.algorithmId = Control.AlgorithmCatalog.IdOf(SimLauncher.MovementPattern);
+                // A batch experiment asked for from the start screen runs instead of a single run.
+                var batch = SimLauncher.TakePendingBatch();
+                if (batch != null)
+                {
+                    new GameObject("Batch Runner").AddComponent<BatchRunner>().Run(runLevel, batch);
+                    runLevel = null; // the batch runner owns it now
+                    return;
+                }
+
+                // A level from the app runs with the configuration chosen there: algorithm, seed, grid, vacuum.
+                // The app has no controls yet for the controller's settings (SLAM, sensing, the belief overlay, the
+                // decision log), so those still come from this component's Inspector.
+                var fromApp = SimConfig.ToRunSettings();
+                fromApp.heatmapMode = settings.heatmapMode;
+                fromApp.targetMaxClean = settings.targetMaxClean;
+                fromApp.slam = settings.slam;
+                fromApp.noiseScale = settings.noiseScale;
+                fromApp.lidarEnabled = settings.lidarEnabled;
+                fromApp.lidarRangeMeters = settings.lidarRangeMeters;
+                fromApp.lidarHalfAngleDegrees = settings.lidarHalfAngleDegrees;
+                fromApp.lidarRayCount = settings.lidarRayCount;
+                fromApp.floorSensorEnabled = settings.floorSensorEnabled;
+                fromApp.showBeliefOverlay = settings.showBeliefOverlay;
+                fromApp.logAlgorithmDecisions = settings.logAlgorithmDecisions;
+                fromApp.slamCorrectionQuality = settings.slamCorrectionQuality;
+                fromApp.slamLoopClosure = settings.slamLoopClosure;
+                fromApp.vacuumPower = settings.vacuumPower;
+                settings = fromApp;
             }
 
             if (!SimulationSession.TryStart(runLevel, settings, headless: false, out session, out string error))

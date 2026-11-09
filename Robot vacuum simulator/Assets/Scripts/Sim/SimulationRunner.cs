@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using RobotVacuum.Level;
 using RobotVacuum.Sim.Control;
 using UnityEngine;
@@ -79,8 +80,9 @@ namespace RobotVacuum.Sim
         }
 
         SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning,
-            CoverageHeatmapRenderer heatmap, BeliefOverlay beliefOverlay, int seed)
+            CoverageHeatmapRenderer heatmap, BeliefOverlay beliefOverlay, int seed, List<MovingCat> cats)
         {
+            this.cats = cats;
             Root = root;
             Level = level;
             Robot = robot;
@@ -91,6 +93,8 @@ namespace RobotVacuum.Sim
             Battery = robot != null ? robot.GetComponent<Battery>() : null;
             Brain = robot != null ? robot.Brain : null;
         }
+
+        readonly List<MovingCat> cats;
 
         public GameObject Root { get; }
         public LevelRenderer Level { get; }
@@ -177,18 +181,22 @@ namespace RobotVacuum.Sim
                 beliefOverlay.Show = options.showBeliefOverlay;
             }
 
+            // ResetToSpawn rebuilds robot.RandomSource from the seed, so the cats draw their seeds after it.
+            // A repeat of the run meets the same cats doing the same things.
             robot.ResetToSpawn();
-            var runner = new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, beliefOverlay, options.seed);
+            var cats = MovingCat.SpawnPlacedCats(renderer, root.transform, robot.RandomSource);
+            var runner = new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, beliefOverlay, options.seed, cats);
 
             // The algorithm list is fixed until this run is stopped (or its objects are destroyed).
             AlgorithmCatalog.BeginRun(runner, () => root != null);
             return runner;
         }
 
-        /// <summary>Puts the vacuum back at its start point and forgets all coverage.</summary>
+        /// <summary>Puts the vacuum and the cats back at their start points and forgets all coverage.</summary>
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
+            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn(Robot != null ? Robot.RandomSource : new RandomProvider((uint)Seed));
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 

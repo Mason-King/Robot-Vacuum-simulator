@@ -19,6 +19,10 @@ namespace RobotVacuum
         [Min(0f)]
         [SerializeField] float turnEnergyPerDegree = 0.01f;
 
+        [Tooltip("Battery work units used every simulated second the vacuum is switched on, moving or not.")]
+        [Min(0f)]
+        [SerializeField] float operatingEnergyPerSecond = 0.1f;
+
         [Tooltip("Battery work units used per second when the vacuum is trying to move but is stuck.")]
         [Min(0f)]
         [SerializeField] float stalledEnergyPerSecond = 0.03f;
@@ -36,6 +40,9 @@ namespace RobotVacuum
 
         /// <summary>Charge used per degree turned (before the floor's multiplier).</summary>
         public float TurnEnergyPerDegree => turnEnergyPerDegree;
+
+        /// <summary>Charge used every second the vacuum runs, moving or not.</summary>
+        public float OperatingEnergyPerSecond => operatingEnergyPerSecond;
         public float ChargePercentage => capacity > 0f ? CurrentCharge / capacity * 100f : 0f;
         public bool CanOperate => CurrentCharge > 0f;
 
@@ -47,6 +54,12 @@ namespace RobotVacuum
             float turnCost = Mathf.Abs(turnDegrees) * turnEnergyPerDegree;
             float surfaceCost = Mathf.Max(0f, surfaceMultiplier);
             CurrentCharge = Mathf.Max(0f, CurrentCharge - (distanceCost + turnCost) * surfaceCost);
+        }
+
+        /// <summary>The steady drain of simply running for <paramref name="seconds"/> of simulated time.</summary>
+        public void ConsumeOperatingTime(float seconds)
+        {
+            CurrentCharge = Mathf.Max(0f, CurrentCharge - Mathf.Max(0f, seconds) * operatingEnergyPerSecond);
         }
 
         public void ConsumeStalledTime(float seconds)

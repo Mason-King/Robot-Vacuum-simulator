@@ -8,6 +8,7 @@ namespace RobotVacuum.LevelEditor
         Select, Rect, Pen, Wall, Doorway, Spawn,
         Undo, Redo, Play, Pause, Stop, Save, Check, Plus, Minus, Fit, Grid, Magnet, Points,
         Trash, Duplicate, Back, More, Warning, Close, ChevronDown, Logo, WallsOn, WallsOff, Obstacle,
+        Chart, Sliders, Help,
     }
 
     /// <summary>
@@ -163,6 +164,28 @@ namespace RobotVacuum.LevelEditor
                     pen.Line(1.3f, 14.67f, 4f, 14.67f, 20f);
                     pen.Line(1.3f, 4f, 9.33f, 20f, 9.33f);
                     pen.Line(1.3f, 4f, 14.67f, 20f, 14.67f);
+                    break;
+
+                case IconKind.Chart:
+                    pen.Line(1.7f, 4f, 4f, 4f, 20f, 20f, 20f);
+                    pen.Line(2.4f, 9f, 16f, 9f, 12f);
+                    pen.Line(2.4f, 13.5f, 16f, 13.5f, 7.5f);
+                    pen.Line(2.4f, 18f, 16f, 18f, 10.5f);
+                    break;
+
+                case IconKind.Help:
+                    pen.Ring(12f, 12f, 8.5f, 1.7f);
+                    pen.Line(1.9f, 12f, 11f, 12f, 16.5f);
+                    pen.Dot(12f, 7.8f, 1.3f);
+                    break;
+
+                case IconKind.Sliders:
+                    pen.Line(1.6f, 4f, 7f, 20f, 7f);
+                    pen.Line(1.6f, 4f, 12f, 20f, 12f);
+                    pen.Line(1.6f, 4f, 17f, 20f, 17f);
+                    pen.Dot(9f, 7f, 2.4f);
+                    pen.Dot(15f, 12f, 2.4f);
+                    pen.Dot(7f, 17f, 2.4f);
                     break;
 
                 case IconKind.Magnet:

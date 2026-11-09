@@ -30,7 +30,8 @@ namespace RobotVacuum.LevelEditor
         public const float MaxDoorwayWidth = 3f;
         public const float DefaultDoorwayWidth = 0.9f;
 
-        public static readonly float[] SnapSteps = { 0.05f, 0.1f, 0.25f, 0.5f, 1f };
+        /// <summary>Grid steps in metres; the editor offers <see cref="Ui.SnapSteps"/> for the chosen units.</summary>
+        public static float[] SnapSteps => Ui.SnapSteps;
 
         readonly EditHistory history = new EditHistory();
         string savedState;
@@ -44,9 +45,10 @@ namespace RobotVacuum.LevelEditor
         ObstacleKind obstacleKind;
         bool snapToGrid = true;
         bool snapToVertices = true;
+        bool snapEnabled = true;
         bool showGrid = true;
         bool newRoomsHaveWalls = true;
-        float snapIncrement = 0.25f;
+        float snapIncrement = SimConfig.UseFeet ? 0.1524f : 0.25f; // 6 in, or 25 cm
 
         public EditorSession(LevelSnapshot snapshot, FloorPalette palette, string filePath)
         {
@@ -116,6 +118,7 @@ namespace RobotVacuum.LevelEditor
 
         public bool SnapToGrid { get => snapToGrid; set => SetOption(ref snapToGrid, value); }
         public bool SnapToVertices { get => snapToVertices; set => SetOption(ref snapToVertices, value); }
+        public bool SnapEnabled { get => snapEnabled; set => SetOption(ref snapEnabled, value); }
         public bool ShowGrid { get => showGrid; set => SetOption(ref showGrid, value); }
         public bool NewRoomsHaveWalls { get => newRoomsHaveWalls; set => SetOption(ref newRoomsHaveWalls, value); }
 
@@ -131,6 +134,8 @@ namespace RobotVacuum.LevelEditor
             field = value;
             OptionsChanged?.Invoke();
         }
+
+        public void ToggleSnapEnabled() => SnapEnabled = !SnapEnabled;
 
         // ---------------------------------------------------------------- selection
 
@@ -315,6 +320,18 @@ namespace RobotVacuum.LevelEditor
 
         public bool AddRoom(List<Vector2> outline)
         {
+            if (outline == null || outline.Count < 3)
+            {
+                Notice?.Invoke("A room needs at least 3 corners.");
+                return false;
+            }
+
+            if (!Poly2D.IsSimple(outline))
+            {
+                Notice?.Invoke("A room outline can't cross or double back on itself.");
+                return false;
+            }
+
             if (!CanPlaceRoom(outline))
             {
                 Notice?.Invoke("Rooms can't overlap other rooms.");
@@ -342,7 +359,7 @@ namespace RobotVacuum.LevelEditor
 
         public bool CanPlaceRoom(IList<Vector2> outline, int ignoreRoom = -1)
         {
-            if (outline == null || outline.Count < 3) return false;
+            if (!Poly2D.IsSimple(outline)) return false;
 
             for (int i = 0; i < Level.Rooms.Count; i++)
             {
@@ -352,6 +369,14 @@ namespace RobotVacuum.LevelEditor
             }
 
             return true;
+        }
+
+        public bool CanAppendRoomPoint(IList<Vector2> outline, Vector2 point)
+        {
+            if (Poly2D.CanAppendToSimplePolyline(outline, point)) return true;
+
+            Notice?.Invoke("That corner would make the room outline cross or double back on itself.");
+            return false;
         }
 
         string NextRoomName()
@@ -436,6 +461,36 @@ namespace RobotVacuum.LevelEditor
             if (room == null || room.floorIndex == floor) return;
 
             Edit("Floor Covering", () => room.floorIndex = floor);
+        }
+
+        /// <summary>Gives every room the same floor covering, as one undo step.</summary>
+        public void SetAllRoomFloors(int floor)
+        {
+            PaintFloor = floor;
+
+            bool changes = false;
+            foreach (var room in Level.Rooms)
+                if (room != null && room.floorIndex != floor) changes = true;
+            if (!changes) return;
+
+            Edit("Floor Covering for Whole House", () =>
+            {
+                foreach (var room in Level.Rooms)
+                    if (room != null) room.floorIndex = floor;
+            });
+        }
+
+        /// <summary>The covering every room shares, or -1 when rooms differ or there are none.</summary>
+        public int SharedFloor()
+        {
+            int shared = -1;
+            foreach (var room in Level.Rooms)
+            {
+                if (room == null) continue;
+                if (shared < 0) shared = room.floorIndex;
+                else if (shared != room.floorIndex) return -1;
+            }
+            return shared;
         }
 
         public void SetRoomRotationLive(int index, float degrees)
@@ -554,6 +609,13 @@ namespace RobotVacuum.LevelEditor
                 return false;
             }
 
+            if (!TryFitDoorwayToWall(roomA, snapped, DefaultDoorwayWidth, out Vector2 fittedCenter, out float fittedWidth))
+            {
+                Notice?.Invoke("This wall is too short for a doorway.");
+                return false;
+            }
+            snapped = fittedCenter;
+
             if (TryFindAnyEdge(snapped, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
                 Level.HasDoorwayOnWall(wallRoom, wallEdge))
             {
@@ -568,7 +630,7 @@ namespace RobotVacuum.LevelEditor
                     roomA = roomA,
                     roomB = roomB,
                     center = snapped,
-                    width = DefaultDoorwayWidth,
+                    width = fittedWidth,
                 });
 
                 selectedDoorway = Level.Doorways.Count - 1;
@@ -586,7 +648,18 @@ namespace RobotVacuum.LevelEditor
             var doorway = GetDoorway(index);
             if (doorway == null) return;
 
-            doorway.center = SnapToNearestWall(point, out int roomA, out int roomB);
+            Vector2 snapped = SnapToNearestWall(point, out int roomA, out int roomB);
+            if (roomA >= 0)
+            {
+                if (!TryFitDoorwayToWall(roomA, snapped, doorway.width, out Vector2 fittedCenter, out _)) return;
+                snapped = fittedCenter;
+            }
+
+            if (TryFindAnyEdge(snapped, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
+                Level.HasDoorwayOnWall(wallRoom, wallEdge, index))
+                return;
+
+            doorway.center = snapped;
             if (roomA >= 0)
             {
                 doorway.roomA = roomA;
@@ -602,6 +675,12 @@ namespace RobotVacuum.LevelEditor
             if (doorway == null) return;
 
             doorway.width = Mathf.Clamp(width, MinDoorwayWidth, MaxDoorwayWidth);
+            if (doorway.roomA >= 0 &&
+                TryFitDoorwayToWall(doorway.roomA, doorway.center, doorway.width, out Vector2 fittedCenter, out float fittedWidth))
+            {
+                doorway.center = fittedCenter;
+                doorway.width = fittedWidth;
+            }
             NotifyLiveChange();
         }
 
@@ -807,6 +886,8 @@ namespace RobotVacuum.LevelEditor
         /// </summary>
         public Vector2 Snap(Vector2 point, float zoom, int skipRoom = -1, int skipVertex = -1)
         {
+            if (!snapEnabled) return point;
+
             if (snapToVertices)
             {
                 float best = HandlePixels * 1.4f / zoom;
@@ -841,11 +922,31 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Rounds to the alignment grid when grid snapping is on, ignoring room corners.</summary>
         public Vector2 SnapToGridStep(Vector2 point)
         {
-            if (!snapToGrid || snapIncrement <= 0f) return point;
+            if (!snapEnabled || !snapToGrid || snapIncrement <= 0f) return point;
 
             return new Vector2(
                 Mathf.Round(point.x / snapIncrement) * snapIncrement,
                 Mathf.Round(point.y / snapIncrement) * snapIncrement);
+        }
+
+        bool TryFitDoorwayToWall(int roomIndex, Vector2 point, float requestedWidth, out Vector2 center, out float width)
+        {
+            center = point;
+            width = requestedWidth;
+
+            var room = Level.GetRoom(roomIndex);
+            if (room == null || !TryFindEdge(room, point, 1f, out int edge, out _)) return false;
+
+            Vector2 start = room.EdgeStart(edge);
+            Vector2 end = room.EdgeEnd(edge);
+            float length = Vector2.Distance(start, end);
+            if (length < MinDoorwayWidth) return false;
+
+            width = Mathf.Min(Mathf.Clamp(requestedWidth, MinDoorwayWidth, MaxDoorwayWidth), length);
+            Poly2D.DistanceToSegment(point, start, end, out float t);
+            float halfSpan = width * 0.5f / length;
+            center = Vector2.Lerp(start, end, Mathf.Clamp(t, halfSpan, 1f - halfSpan));
+            return true;
         }
 
         public int FindVertex(int roomIndex, Vector2 point, float tolerance)
@@ -1010,6 +1111,22 @@ namespace RobotVacuum.LevelEditor
             return bestPoint;
         }
 
+        /// <summary>A dialog message naming the rooms the vacuum can escape from, or null when there are none.</summary>
+        public static string DescribeOpenings(LevelData level)
+        {
+            var names = new List<string>();
+            foreach (var opening in LevelGeometry.FindOpenings(level))
+            {
+                var room = level.GetRoom(opening.roomIndex);
+                string name = room != null && !string.IsNullOrEmpty(room.name) ? room.name : "A room";
+                if (!names.Contains(name)) names.Add(name);
+            }
+
+            if (names.Count == 0) return null;
+            return $"{string.Join(", ", names)} {(names.Count == 1 ? "has" : "have")} a gap in the outside wall wide enough for the vacuum. " +
+                   "It will drive out of the floor plan and keep going, and the run will be meaningless. Add the missing wall to fix it.";
+        }
+
         /// <summary>Everything that would stop the level playing the way it looks.</summary>
         public List<LevelIssue> Validate()
         {
@@ -1024,6 +1141,18 @@ namespace RobotVacuum.LevelEditor
                     issues.Add(new LevelIssue { severity = IssueSeverity.Error, roomIndex = i, message = $"{room.name} has fewer than 3 corners." });
                 else if (!Poly2D.IsSimple(room.outline))
                     issues.Add(new LevelIssue { severity = IssueSeverity.Error, roomIndex = i, message = $"{room.name}'s outline crosses itself." });
+            }
+
+            var leakyRooms = new HashSet<int>();
+            foreach (var opening in LevelGeometry.FindOpenings(Level))
+            {
+                if (!leakyRooms.Add(opening.roomIndex)) continue;
+                issues.Add(new LevelIssue
+                {
+                    severity = IssueSeverity.Error,
+                    roomIndex = opening.roomIndex,
+                    message = $"{NameOfRoom(opening.roomIndex)} has an open wall to the outside. The vacuum will drive out and keep going.",
+                });
             }
 
             foreach (var doorway in Level.Doorways)

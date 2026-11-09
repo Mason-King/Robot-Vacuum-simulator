@@ -4,8 +4,8 @@ using UnityEngine;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
-    /// The vacuum's tunable drive and battery settings. The editor keeps one of these so changes
-    /// carry over from run to run, even though every run builds a fresh robot.
+    /// The vacuum's tunable drive and battery settings. <see cref="SimConfig"/> keeps one of these so
+    /// changes carry over from run to run and session to session, even though every run builds a fresh robot.
     /// </summary>
     [System.Serializable]
     public sealed class VacuumSettings
@@ -17,6 +17,16 @@ namespace RobotVacuum.LevelEditor
         public float turnSpeed;
         public float batteryCapacity;
         public bool useFeet;
+
+        /// <summary>The values a freshly built robot and battery start with.</summary>
+        public static VacuumSettings Defaults() => new VacuumSettings
+        {
+            driveSpeed = 0.65f,
+            reverseSpeed = 0.35f,
+            turnSpeed = 320f,
+            batteryCapacity = 300f,
+            useFeet = true,
+        };
 
         /// <summary>Reads the settings a robot currently has.</summary>
         public static VacuumSettings From(VacuumRobot robot, Battery battery) => new VacuumSettings

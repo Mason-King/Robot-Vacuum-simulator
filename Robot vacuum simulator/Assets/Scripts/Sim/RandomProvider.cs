@@ -20,7 +20,8 @@ public class RandomProvider
         SensorNoise = 0,
         RandomBounceAlgorithm = 1,
         DebrisAccumulation = 2,
-        Odometry = 3, // appended: each stream's seed is master + its number, so existing streams are unchanged
+        Odometry = 3, // each stream's seed is master + its number, so a stream's number must never change
+        DynamicObstacles = 4,   // seeds for cats and other moving obstacles
     }
 
     private class RandomHandle
@@ -71,6 +72,13 @@ public class RandomProvider
         // u1 is in [0,1); 1 - u1 is in (0,1], so the log is always finite.
         double magnitude = Math.Sqrt(-2.0 * Math.Log(1.0 - u1));
         return mean + standardDeviation * magnitude * Math.Cos(2.0 * Math.PI * u2);
+    }
+
+    /// <summary>Draw a uniform uint from the given subsystem's stream (used to seed per-entity generators).</summary>
+    public uint NextUInt(Subsystem subsystem)
+    {
+        var handle = _subGenerators[subsystem];
+        return handle.Rng.NextUInt(); // mutates in place, handle is a shared reference
     }
 
     // --- Snapshot / restore for replay and telemetry sampling ---

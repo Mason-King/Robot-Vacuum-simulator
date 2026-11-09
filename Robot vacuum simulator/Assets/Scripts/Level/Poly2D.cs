@@ -4,9 +4,8 @@ using UnityEngine;
 namespace RobotVacuum.Level
 {
     /// <summary>
-    /// Polygon helpers for arbitrary, non-axis-aligned room outlines: containment,
-    /// ear-clipping triangulation, and the self-intersection check the editor uses to
-    /// warn about shapes it cannot render.
+    /// Polygon helpers for arbitrary, non-axis-aligned room outlines, including containment,
+    /// triangulation, and outline validity checks.
     /// </summary>
     public static class Poly2D
     {
@@ -22,6 +21,30 @@ namespace RobotVacuum.Level
         }
 
         public static float Area(IList<Vector2> points) => Mathf.Abs(SignedArea(points));
+
+        /// <summary>True when appending a point keeps an open polyline free of crossings and backtracking.</summary>
+        public static bool CanAppendToSimplePolyline(IList<Vector2> points, Vector2 point)
+        {
+            int count = points?.Count ?? 0;
+            if (count == 0) return true;
+
+            Vector2 start = points[count - 1];
+            if ((point - start).sqrMagnitude <= 1e-12f) return false;
+
+            if (count >= 2)
+            {
+                Vector2 previous = points[count - 2] - start;
+                Vector2 next = point - start;
+                if (Mathf.Abs(Cross(previous, next)) <= 1e-6f && Vector2.Dot(previous, next) > 0f)
+                    return false;
+            }
+
+            for (int i = 0; i < count - 2; i++)
+                if (SegmentsIntersectInclusive(points[i], points[i + 1], start, point))
+                    return false;
+
+            return true;
+        }
 
         public static Vector2 Centroid(IList<Vector2> points)
         {

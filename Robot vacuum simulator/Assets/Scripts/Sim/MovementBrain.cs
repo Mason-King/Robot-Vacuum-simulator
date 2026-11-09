@@ -554,7 +554,10 @@ namespace RobotVacuum.Sim
 
             if (!planner.FindPath(believedPose.position, dockPosition, homePath, out float length)) return; // no way home anyway
             float turning = 180f + 90f * Mathf.Max(0, homePath.Count - 2); // turning to set off, and at each corner
-            float cost = (length * battery.DistanceEnergyPerMeter + turning * battery.TurnEnergyPerDegree) * ControllerConstants.HomeFloorMargin;
+            // The trip's time costs too: the battery drains every second the vacuum runs, moving or not.
+            float seconds = length / Mathf.Max(0.05f, robot.DriveSpeedMetersPerSecond) + turning / Mathf.Max(1f, robot.TurnSpeedDegreesPerSecond);
+            float cost = (length * battery.DistanceEnergyPerMeter + turning * battery.TurnEnergyPerDegree) * ControllerConstants.HomeFloorMargin
+                         + seconds * battery.OperatingEnergyPerSecond;
             float reserve = cost * ControllerConstants.HomeReserveFactor + ControllerConstants.HomeReserveExtra;
             if (battery.CurrentCharge <= reserve) StartHoming(Homing.LowBattery);
         }

@@ -228,7 +228,11 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- dialog
 
-        public void ShowDialog(string title, string message, Action onCancel, params DialogButton[] buttons)
+        public void ShowDialog(string title, string message, Action onCancel, params DialogButton[] buttons) =>
+            ShowDialog(title, message, null, onCancel, buttons);
+
+        /// <summary>A dialog with extra controls, <paramref name="body"/>, between the message and the buttons.</summary>
+        public void ShowDialog(string title, string message, VisualElement body, Action onCancel, params DialogButton[] buttons)
         {
             CloseDialog();
             CloseMenu();
@@ -245,6 +249,7 @@ namespace RobotVacuum.LevelEditor
             var card = Ui.Div(dialogBackdrop, "le-dialog");
             Ui.Text(card, title, "le-dialog__title");
             if (!string.IsNullOrEmpty(message)) Ui.Text(card, message, "le-dialog__message");
+            if (body != null) card.Add(body);
 
             var row = Ui.Div(card, "le-dialog__buttons");
             foreach (var button in buttons)

@@ -28,6 +28,10 @@ namespace RobotVacuum.Sim
         const float StalledTurnThreshold = 0.05f;
         const float CommandEpsilon = 1e-4f;
 
+        /// <summary>A run whose vacuum moves less than this in <see cref="NoProgressSeconds"/> is treated as stuck.</summary>
+        const float NoProgressDistance = 0.05f;
+        const float NoProgressSeconds = 120f;
+
         [Header("Level")]
         [Tooltip("Left empty, the robot finds the first LevelRenderer in the scene.")]
         [SerializeField] LevelRenderer levelRenderer;
@@ -76,6 +80,10 @@ namespace RobotVacuum.Sim
         float batterySampleHeading;
         bool hasBatterySample;
 
+        Vector2 progressAnchor;
+        float progressTimer;
+        string stuckReason;
+
         readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
 
         /// <summary>Raised at the end of <see cref="ResetToSpawn"/>, once the body is back on its spawn point. The controller starts its run here.</summary>
@@ -90,8 +98,14 @@ namespace RobotVacuum.Sim
         /// </summary>
         public float SimTime { get; private set; }
 
-        /// <summary>True when the controller stopped because its algorithm failed (the run then ends with an error).</summary>
-        public bool AlgorithmFailed => Brain != null && Brain.Failed;
+        /// <summary>
+        /// True when the controller stopped because its algorithm failed, or the body stopped a run that was going
+        /// nowhere (the run then ends with an error).
+        /// </summary>
+        public bool AlgorithmFailed => stuckReason != null || (Brain != null && Brain.Failed);
+
+        /// <summary>Why the algorithm was stopped, or null while it runs.</summary>
+        public string FailureReason => stuckReason ?? (Brain != null && Brain.Failed ? Brain.Failure : null);
 
         /// <summary>How the robot's job ended, if it has (finished and docked, docked on low battery, or the dock unreachable).</summary>
         public Control.RunOutcome Outcome => Brain != null ? Brain.Outcome : Control.RunOutcome.None;
@@ -337,7 +351,7 @@ namespace RobotVacuum.Sim
             commandForward = 0f;
             commandTurn = 0f;
 
-            if (!battery.CanOperate)
+            if (!battery.CanOperate || stuckReason != null)
             {
                 body.linearVelocity = Vector2.zero;
                 return;
@@ -345,6 +359,15 @@ namespace RobotVacuum.Sim
 
             float dt = Time.fixedDeltaTime;
             SimTime += dt;
+
+            // Running costs something every second, whether or not the vacuum is moving.
+            battery.ConsumeOperatingTime(dt);
+            WatchProgress(dt);
+            if (stuckReason != null)
+            {
+                body.linearVelocity = Vector2.zero;
+                return;
+            }
 
             forward = Mathf.Clamp(forward, -reverseSpeed, DriveSpeedNow);
             turn = Mathf.Clamp(turn, -turnSpeed, turnSpeed);
@@ -358,6 +381,33 @@ namespace RobotVacuum.Sim
 
         float lastForward;
         float lastTurn;
+
+        /// <summary>
+        /// Stops a run that has left the vacuum going nowhere, so a stuck run can't run forever. Only while the job
+        /// is under way: a vacuum parked on its dock at the end is meant to sit still.
+        /// </summary>
+        void WatchProgress(float dt)
+        {
+            if (Outcome != Control.RunOutcome.None || (Brain != null && Brain.Failed))
+            {
+                progressTimer = 0f;
+                return;
+            }
+
+            Vector2 position = body.position;
+            if (Vector2.Distance(position, progressAnchor) > NoProgressDistance)
+            {
+                progressAnchor = position;
+                progressTimer = 0f;
+                return;
+            }
+
+            if ((progressTimer += dt) >= NoProgressSeconds)
+            {
+                stuckReason = $"No progress for {NoProgressSeconds:0} s: the algorithm appears stuck in a loop.";
+                Debug.LogError($"Movement algorithm '{AlgorithmId}' stopped: {stuckReason}", this);
+            }
+        }
 
         void ConsumeCompletedWork()
         {
@@ -447,6 +497,8 @@ namespace RobotVacuum.Sim
             commandForward = 0f;
             commandTurn = 0f;
             collided = false;
+            stuckReason = null;
+            progressTimer = 0f;
 
             // Back to the same random sequence, so a repeat of a run matches it step for step. A fresh
             // RandomProvider from the same seed reproduces the same per-subsystem streams from the top --
@@ -458,6 +510,7 @@ namespace RobotVacuum.Sim
             {
                 transform.position = levelRenderer.LevelToWorld(
                     levelRenderer.Level.RobotSpawn, levelRenderer.WallDepth - 0.05f);
+                transform.rotation = Quaternion.identity;
 
                 DistanceTravelled = 0f;
                 battery.ResetCharge();
@@ -469,10 +522,12 @@ namespace RobotVacuum.Sim
                     body.position = transform.position;
                     body.rotation = 0f;
                     body.linearVelocity = Vector2.zero;
+                    body.angularVelocity = 0f;
                 }
                 ResetBatteryMotionSample();
             }
 
+            progressAnchor = body != null ? body.position : (Vector2)transform.position;
             Respawned?.Invoke();
         }
 

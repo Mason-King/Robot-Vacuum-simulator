@@ -40,6 +40,23 @@ namespace RobotVacuum.Sim
     }
 
     /// <summary>
+    /// The algorithms the app's pickers offer (the start screen, the configuration view, the HUD, batch
+    /// experiments), indexed by <see cref="MovementPattern"/>: the four built-in patterns. The controller
+    /// creates and runs them through <see cref="Control.AlgorithmCatalog"/>; this class only names them.
+    /// (Plugins live in the catalog too, by id, and are not yet offered by these pickers.)
+    /// </summary>
+    public static class MovementAlgorithms
+    {
+        public static int Count => MovementBrain.Labels.Length;
+
+        public static string[] Labels => MovementBrain.Labels;
+
+        public static bool IsDefined(MovementPattern pattern) => (int)pattern >= 0 && (int)pattern < Count;
+
+        public static string LabelOf(MovementPattern pattern) => IsDefined(pattern) ? Labels[(int)pattern] : $"Algorithm {(int)pattern}";
+    }
+
+    /// <summary>
     /// A legacy reactive pattern. <see cref="Control.LegacyPatternDriver"/> does the driving, backing off and
     /// turning; a brain only decides how to steer while driving freely and what to do after each bump.
     /// </summary>
@@ -87,6 +104,12 @@ namespace RobotVacuum.Sim
         /// <summary>Called when the robot bumps into something; it backs off, then performs the result.</summary>
         public abstract Manoeuvre AfterBump(VacuumRobot robot);
 
+        /// <summary>Randomness for algorithms. Always use these, never UnityEngine.Random, so runs replay from their seed.</summary>
+        protected float RandomValue => (float)RandomSource.NextDouble(RandomProvider.Subsystem.RandomBounceAlgorithm);
+
+        protected float RandomRange(float min, float max) =>
+            RandomSource.NextFloat(RandomProvider.Subsystem.RandomBounceAlgorithm, min, max);
+
         protected float RandomTurn(VacuumRobot robot)
         {
             float amount = RandomSource.NextFloat(RandomProvider.Subsystem.RandomBounceAlgorithm, robot.TurnAngleRange.x, robot.TurnAngleRange.y);
@@ -102,8 +125,15 @@ namespace RobotVacuum.Sim
             (Mathf.PerlinNoise(wanderPhase + robot.SimTime * 0.35f, 0f) - 0.5f) * 2f * robot.WanderDegreesPerSecond;
     }
 
+    /// <summary>
+    /// Calls into a legacy pattern on the controller's behalf and contains whatever goes wrong: an exception, an
+    /// invalid result, or a call that takes far too long, all become a failure message instead of taking the
+    /// session down. (A call that never returns can't be pre-empted on Unity's main thread; the robot's
+    /// no-progress watchdog catches patterns that loop without getting anywhere.)
+    /// </summary>
     public static class LegacyPatternExecution
     {
+        const double MaxCallMilliseconds = 250.0;
         const float MaxSteeringDegreesPerSecond = 360f;
         const float MaxTurnDegrees = 360f;
         const float MaxDriveDistance = 100f;
@@ -130,7 +160,9 @@ namespace RobotVacuum.Sim
 
             try
             {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 steering = brain.Steer(robot, dt);
+                if (TooSlow(clock, out failure)) return false;
                 if (IsFinite(steering) && Mathf.Abs(steering) <= MaxSteeringDegreesPerSecond) return true;
                 failure = $"Invalid steering output: {steering}.";
             }
@@ -149,7 +181,9 @@ namespace RobotVacuum.Sim
 
             try
             {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 manoeuvre = brain.AfterBump(robot);
+                if (TooSlow(clock, out failure)) return false;
                 if (IsFinite(manoeuvre.turn) && Mathf.Abs(manoeuvre.turn) <= MaxTurnDegrees &&
                     IsFinite(manoeuvre.driveAfter) && manoeuvre.driveAfter >= 0f && manoeuvre.driveAfter <= MaxDriveDistance &&
                     IsFinite(manoeuvre.turnAfter) && Mathf.Abs(manoeuvre.turnAfter) <= MaxTurnDegrees) return true;
@@ -161,6 +195,14 @@ namespace RobotVacuum.Sim
             }
 
             return false;
+        }
+
+        static bool TooSlow(System.Diagnostics.Stopwatch clock, out string failure)
+        {
+            failure = clock.Elapsed.TotalMilliseconds > MaxCallMilliseconds
+                ? $"A single call took {clock.Elapsed.TotalMilliseconds:0} ms (limit {MaxCallMilliseconds:0} ms)."
+                : null;
+            return failure != null;
         }
 
         static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);

@@ -117,16 +117,20 @@ namespace RobotVacuum.Tests
             try
             {
                 var grid = new ExternalModelGrid(apartment, null, 0.1f, 2f);
+                grid.PopulateFromLevelObject();
                 var data = grid.ToData();
                 int inside = 0;
                 for (int row = 0; row < grid.Rows; row++)
                     for (int col = 0; col < grid.Cols; col++)
-                        if (!data.outsideRooms[data.Index(row, col)])
+                        if (grid.GetCell(row, col).CountsTowardCoverage)
                         {
                             grid.Accumulate(row, col, 2f, 2f, 0f);
                             inside++;
                         }
-                Assert.Less(inside, grid.Rows * grid.Cols, "the test needs a level with cells outside the rooms");
+                Assert.Greater(grid.OffFloorCellCount, 0, "the test needs a level with cells outside the rooms");
+                for (int row = 0; row < grid.Rows; row++)
+                    for (int col = 0; col < grid.Cols; col++)
+                        Assert.AreEqual(grid.GetCell(row, col).isOffFloor, data.outsideRooms[data.Index(row, col)], "saved data and grid agree");
                 Assert.AreEqual(100f, grid.CalculateCoveragePercent(), 1e-3f);
                 Assert.AreEqual(100f, grid.CalculateFullyCleanedPercent(), 1e-3f);
                 Assert.AreEqual(100f, grid.ToData().CoveragePercent(), 1e-3f);

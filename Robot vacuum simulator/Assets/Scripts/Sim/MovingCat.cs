@@ -25,17 +25,23 @@ namespace RobotVacuum.Sim
             new Vector2(0.04f, -0.19f), new Vector2(-0.04f, -0.19f),
         };
         Rigidbody2D body;
+        Vector2 spawnPosition;
         Vector2 direction;
         Vector2 target;
         Rect bounds;
         float behaviorTimer;
         float startleTimer;
-        System.Random random;
+        // The run's shared random source. Every random choice a cat makes is drawn from its DynamicObstacles
+        // stream, so the cats' state is part of RandomProvider.SnapshotState like everything else's.
+        RandomProvider randomSource;
+        bool initialized;
+        bool herded;
         VacuumRobot vacuum;
         Mesh[] catMeshes;
         Material[] catMaterials;
 
         public Vector2 Direction => direction;
+
         public float MoveSpeed => CurrentBehavior switch
         {
             Behavior.Startled => Speed * 1.7f,
@@ -67,25 +73,46 @@ namespace RobotVacuum.Sim
             if (catMeshes == null) BuildVisual();
         }
 
-        public void Initialize(Rect movementBounds, Vector2 position, Vector2 initialDirection, int seed)
+        /// <summary>
+        /// Places the cat and points it at the run's shared random source; it draws every random choice from
+        /// that source's <see cref="RandomProvider.Subsystem.DynamicObstacles"/> stream.
+        /// </summary>
+        public void Initialize(Rect movementBounds, Vector2 position, RandomProvider randomSource)
         {
             if (body == null) Configure();
             bounds = movementBounds;
+            spawnPosition = position;
+            this.randomSource = randomSource ?? throw new System.ArgumentNullException(nameof(randomSource));
+            initialized = true;
+
             body.position = position;
+            body.linearVelocity = Vector2.zero;
             transform.position = position;
-            direction = initialDirection.sqrMagnitude > 0f ? initialDirection.normalized : Vector2.right;
-            random = new System.Random(seed);
+            direction = RandomDirection();
             CurrentBehavior = Behavior.Roaming;
+            startleTimer = 0f;
             behaviorTimer = NextRange(3f, 6f);
             target = position + direction * NextRange(0.6f, 1.2f);
             vacuum = FindAnyObjectByType<VacuumRobot>();
         }
 
+        /// <summary>
+        /// Back to the placed position, drawing from <paramref name="randomSource"/>: the run's source, which the
+        /// robot rebuilds from the seed on its own reset, so reset the robot first.
+        /// </summary>
+        public void ResetToSpawn(RandomProvider randomSource) => Initialize(bounds, spawnPosition, randomSource);
+
+        // Placed cats are stepped by their CatHerd, in level order: they share one random stream, so the order
+        // they draw in has to be the same every run. Unity doesn't promise an order between objects' FixedUpdates.
         void FixedUpdate()
         {
-            if (!Application.isPlaying || random == null) return;
+            if (!herded) Step(Time.fixedDeltaTime);
+        }
 
-            float dt = Time.fixedDeltaTime;
+        public void Step(float dt)
+        {
+            if (!Application.isPlaying || !initialized) return;
+
             if (vacuum == null) vacuum = FindAnyObjectByType<VacuumRobot>();
 
             Vector2 position = body.position;
@@ -194,7 +221,7 @@ namespace RobotVacuum.Sim
                 NextRange(Mathf.Min(minX, maxX), Mathf.Max(minX, maxX)),
                 NextRange(Mathf.Min(minY, maxY), Mathf.Max(minY, maxY)));
             if ((target - position).sqrMagnitude < 0.12f * 0.12f)
-                target = position + RandomDirection(random) * 0.5f;
+                target = position + RandomDirection() * 0.5f;
         }
 
         void BeginResting()
@@ -213,15 +240,20 @@ namespace RobotVacuum.Sim
             return Vector2.Reflect(incoming.normalized, normal).normalized;
         }
 
-        public static List<MovingCat> SpawnPlacedCats(LevelRenderer renderer, Transform parent)
+        /// <summary>
+        /// Spawns the level's placed cats, all drawing from <paramref name="randomSource"/> and stepped in
+        /// <see cref="LevelData.Obstacles"/> order by one <see cref="CatHerd"/>, so the cats are the same for the
+        /// same run seed. The cats sit under a "Cats" object (with the herd) under <paramref name="parent"/>.
+        /// </summary>
+        public static List<MovingCat> SpawnPlacedCats(LevelRenderer renderer, Transform parent, RandomProvider randomSource)
         {
             var spawned = new List<MovingCat>();
             if (renderer == null || renderer.Level == null) return spawned;
+            if (randomSource == null) throw new System.ArgumentNullException(nameof(randomSource));
 
             LevelData level = renderer.Level;
             Rect bounds = WorldBounds(renderer, level.Bounds());
-            var random = new System.Random(6321);
-
+            CatHerd herd = null;
             foreach (Obstacle obstacle in level.Obstacles)
             {
                 if (obstacle == null || obstacle.kind != ObstacleKind.Cat) continue;
@@ -230,10 +262,18 @@ namespace RobotVacuum.Sim
                 var catObject = new GameObject(string.IsNullOrWhiteSpace(obstacle.name)
                     ? Obstacle.DefaultName(ObstacleKind.Cat)
                     : obstacle.name);
-                if (parent != null) catObject.transform.SetParent(parent, true);
+                if (herd == null)
+                {
+                    var herdObject = new GameObject("Cats");
+                    if (parent != null) herdObject.transform.SetParent(parent, false);
+                    herd = herdObject.AddComponent<CatHerd>();
+                }
+                catObject.transform.SetParent(herd.transform, true);
                 catObject.transform.position = position;
                 var cat = catObject.AddComponent<MovingCat>();
-                cat.Initialize(bounds, position, RandomDirection(random), random.Next());
+                cat.herded = true;
+                cat.Initialize(bounds, position, randomSource);
+                herd.Add(cat);
                 spawned.Add(cat);
             }
 
@@ -394,14 +434,11 @@ namespace RobotVacuum.Sim
             triangles.Add(first + 3);
         }
 
-        float NextRange(float min, float max) => NextRange(random, min, max);
+        float NextRange(float min, float max) => randomSource.NextFloat(RandomProvider.Subsystem.DynamicObstacles, min, max);
 
-        static float NextRange(System.Random random, float min, float max) =>
-            min + (float)random.NextDouble() * (max - min);
-
-        static Vector2 RandomDirection(System.Random random)
+        Vector2 RandomDirection()
         {
-            float angle = NextRange(random, -180f, 180f) * Mathf.Deg2Rad;
+            float angle = NextRange(-180f, 180f) * Mathf.Deg2Rad;
             return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
         }
 

@@ -285,6 +285,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8e3b6d0f41a74c2d9f5e7a1b3c6d8e02, type: 3}
   m_Name:
   m_EditorClassIdentifier: RobotVacuum::RobotVacuum.LevelEditor.StartScreenApp
+  palette: {fileID: 11400000, guid: ecdee519d1f794e57836e1588f83e4cd, type: 2}
   uiScale: 1
 --- !u!4 &1470532103
 Transform:

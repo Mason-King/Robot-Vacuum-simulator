@@ -281,8 +281,8 @@ MonoBehaviour:
   settings:
     pattern: 0
     algorithmId: BoustrophedonSweep
-    randomSeed: 1
-    seed: 100
+    randomSeed: 0
+    seed: 1029520771
     targetMaxClean: 2
     heatmapMode: 0
     driveSpeed: 0
