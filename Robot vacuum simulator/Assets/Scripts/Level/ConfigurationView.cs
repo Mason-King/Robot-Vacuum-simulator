@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -27,6 +28,7 @@ namespace RobotVacuum.LevelEditor
             this.overlay = overlay;
             this.palette = palette;
             AddToClassList("le-screen");
+            AddToClassList("le-configuration");
 
             var header = Ui.PageHeader(this, "Configuration", "Start screen", () => BackRequested?.Invoke(), out subtitle);
             subtitle.text = "Used by every simulation and preview run";
@@ -65,11 +67,15 @@ namespace RobotVacuum.LevelEditor
         void BuildMovement(VisualElement panel)
         {
             PanelTitle(panel, IconKind.Spawn, "Movement", "How the vacuum chooses where to go next.");
+            panel.Add(new RunSettingsPanel(SimConfig.RunSettings, null, refusal => overlay.Toast(refusal),
+                SaveRunSettings));
+        }
 
-            Ui.Text(panel, "Algorithm", "le-field-label");
-            var movement = new Segmented(MovementBrain.Labels, (int)SimConfig.Pattern);
-            panel.Add(movement);
-            movement.SelectionChanged += index => SimConfig.Pattern = (MovementPattern)index;
+        void SaveRunSettings()
+        {
+            var pattern = AlgorithmCatalog.PatternOf(SimConfig.RunSettings.algorithmId);
+            if (pattern.HasValue) SimConfig.Pattern = pattern.Value;
+            else SimConfig.Save();
         }
 
         void BuildVacuum(VisualElement panel)

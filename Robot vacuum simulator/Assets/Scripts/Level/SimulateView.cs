@@ -30,6 +30,7 @@ namespace RobotVacuum.LevelEditor
         {
             this.palette = palette;
             AddToClassList("le-screen");
+            AddToClassList("le-simulate");
 
             var header = Ui.PageHeader(this, "Start simulation", "Start screen", () => BackRequested?.Invoke(), out subtitle);
             var configure = Ui.Button(header, "Configure", IconKind.Sliders, () => ConfigureRequested?.Invoke(), "le-btn--ghost");
