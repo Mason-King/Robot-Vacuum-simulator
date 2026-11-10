@@ -81,7 +81,15 @@ python -m vacuumctl --profile vacuum run examples/campaign.example.json --nodes 
 
 `run` = `up` (provision) → `submit` → `wait` (live progress) → `fetch` (download + statistics) → `down`
 (teardown, even on failure or Ctrl-C). Results land in `cloud-results/<campaignId>/campaign_results.json`;
-`--all-files` also downloads every run folder. Step by step instead:
+`--all-files` also downloads every run folder.
+
+**HTML report.** `run`, `fetch` and `local` also write `report.html` next to `campaign_results.json` and open it in
+your browser: summary tiles, a coverage chart per floor plan × configuration (mean, 95% CI and every run),
+the statistics table, each algorithm's median-run heatmap, the configurations used, problems, every run
+(sortable) and the compute nodes. It is one self-contained file (light and dark mode) you can share or print.
+Add `--no-open` to skip opening it; rebuild one any time with `python -m vacuumctl report <results folder>`.
+
+Step by step instead:
 
 ```
 python -m vacuumctl up [--on-demand] [--max-vcpus 64]

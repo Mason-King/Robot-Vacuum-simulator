@@ -32,6 +32,7 @@ def main(argv=None):
     p.add_argument("--exe", required=True, help="the simulator executable (Windows .exe or Linux build)")
     p.add_argument("--out", default="local-results")
     p.add_argument("--processes", type=int, default=1, help="parallel simulator processes")
+    p.add_argument("--no-open", action="store_true", help="don't open the HTML report in the browser")
 
     p = sub.add_parser("compare", help="check two run folders hold identical results (AT-2.17-1)")
     p.add_argument("run_folder_a")
@@ -73,6 +74,7 @@ def main(argv=None):
     p.add_argument("--keep-infra", action="store_true", help="leave the compute stack up afterwards")
     p.add_argument("--deadline-minutes", type=float, default=0, help="cancel whatever is still running after this long")
     p.add_argument("--poll", type=int, default=30)
+    p.add_argument("--no-open", action="store_true", help="don't open the HTML report in the browser")
     compute_args(p)
 
     for name, text in (("status", "progress of a campaign"), ("cancel", "stop a campaign"),
@@ -84,10 +86,15 @@ def main(argv=None):
     p.add_argument("campaign_id")
     p.add_argument("--poll", type=int, default=30)
 
-    p = sub.add_parser("fetch", help="download results and compute the batch statistics")
+    p = sub.add_parser("fetch", help="download results, compute the batch statistics, open the HTML report")
     p.add_argument("campaign_id")
     p.add_argument("--out", default="cloud-results")
     p.add_argument("--all-files", action="store_true")
+    p.add_argument("--no-open", action="store_true")
+
+    p = sub.add_parser("report", help="(re)build report.html from a campaign_results.json and open it (no AWS needed)")
+    p.add_argument("results", help="campaign_results.json, or the folder holding it")
+    p.add_argument("--no-open", action="store_true")
 
     p = sub.add_parser("logs", help="tail a node's log from CloudWatch")
     p.add_argument("campaign_id")
@@ -125,8 +132,13 @@ def dispatch(args):
 
     if args.command == "local":
         from .local import run_local
-        results = run_local(args.campaign, args.exe, args.out, args.processes)
+        results = run_local(args.campaign, args.exe, args.out, args.processes, open_report=not args.no_open)
         return 0 if not results["totals"]["missingRuns"] else 1
+
+    if args.command == "report":
+        from .report import write_report
+        write_report(args.results, open_browser=not args.no_open)
+        return 0
 
     if args.command == "compare":
         from .local import compare_runs
@@ -155,7 +167,8 @@ def dispatch(args):
         try:
             cloud.submit(job)
             cloud.wait(job["campaignId"], args.poll, args.deadline_minutes)
-            results = cloud.fetch(job["campaignId"], os.path.join(args.out, job["campaignId"]), args.all_files)
+            results = cloud.fetch(job["campaignId"], os.path.join(args.out, job["campaignId"]), args.all_files,
+                                  open_report=not args.no_open)
         finally:
             if args.keep_infra:
                 print("Leaving the compute stack up (--keep-infra). Nodes still scale to zero when idle. Tear down with: python -m vacuumctl down")
@@ -167,7 +180,7 @@ def dispatch(args):
     elif args.command == "wait":
         cloud.wait(args.campaign_id, args.poll)
     elif args.command == "fetch":
-        cloud.fetch(args.campaign_id, os.path.join(args.out, args.campaign_id), args.all_files)
+        cloud.fetch(args.campaign_id, os.path.join(args.out, args.campaign_id), args.all_files, open_report=not args.no_open)
     elif args.command == "cancel":
         cloud.cancel(args.campaign_id)
     elif args.command == "retry":

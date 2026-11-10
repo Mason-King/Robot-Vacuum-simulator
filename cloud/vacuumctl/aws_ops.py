@@ -330,7 +330,7 @@ class Cloud:
             self.batch.terminate_job(jobId=entry["jobId"], reason=reason)
             log(f"Terminated {entry['jobId']}")
 
-    def fetch(self, campaign_id, out_dir, everything=False):
+    def fetch(self, campaign_id, out_dir, everything=False, open_report=True):
         """Downloads every node's results.json, merges them, writes campaign_results.json (locally and to S3)."""
         manifest = self.manifest(campaign_id)
         bucket = manifest["bucket"]
@@ -359,7 +359,28 @@ class Cloud:
         self._put_json(bucket, self._key(campaign_id, "campaign_results.json"), results)
         log(stats.format_table(results))
         log(f"Results: {path}")
+
+        # The report shows each algorithm's median run as a heatmap: fetch just those few PNGs.
+        from . import report
+        if not everything:
+            self._fetch_report_images(bucket, campaign_id, results, manifest["shardCount"], out_dir)
+        report.write_report(path, open_browser=open_report, job=job)
         return results
+
+    def _fetch_report_images(self, bucket, campaign_id, results, shards, out_dir):
+        from botocore.exceptions import ClientError
+        from . import report
+
+        for run in report.representative_runs(results).values():
+            local = report.heatmap_path(out_dir, run, shards)
+            if not local or os.path.isfile(local):
+                continue
+            relative = os.path.relpath(local, out_dir).replace(os.sep, "/")
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+            try:
+                self.s3.download_file(bucket, self._key(campaign_id, relative), local)
+            except ClientError:
+                pass  # images are optional (saveHeatmapImages may be off)
 
     def download_prefix(self, bucket, prefix, out_dir):
         paginator = self.s3.get_paginator("list_objects_v2")

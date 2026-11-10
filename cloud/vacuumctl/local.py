@@ -19,7 +19,7 @@ from . import campaign as campaigns
 from . import stats
 
 
-def run_local(campaign_path, exe, out_dir, processes=1):
+def run_local(campaign_path, exe, out_dir, processes=1, open_report=True):
     if not os.path.isfile(exe):
         sys.exit(f"Simulator executable not found: {exe}")
     job = campaigns.prepare(campaign_path, shard_count=processes)
@@ -68,6 +68,8 @@ def run_local(campaign_path, exe, out_dir, processes=1):
     campaigns.save(results, path)
     print(stats.format_table(results))
     print(f"Wall-clock time: {results['wallClockSeconds']:.1f} s. Results: {path}")
+    from .report import write_report
+    write_report(path, open_browser=open_report, job=job)
     return results
 
 
