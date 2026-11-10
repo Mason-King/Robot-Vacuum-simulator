@@ -1,7 +1,7 @@
 /* Robot Vacuum level editor — dark, flat, 8px radius. Tokens live on .le-app so they inherit. */
 
 .le-app {
-    --bg: #0B0D11;
+    --bg: #212d31;
     --canvas: #101318;
     --surface: #161920;
     --surface-2: #1D2129;
@@ -68,17 +68,17 @@
     border-radius: 8px;
     border-width: 1px;
     border-color: rgba(0, 0, 0, 0);
-    background-color: var(--surface-2);
+    background-color: #7A7A7A;
     transition-property: background-color, border-color;
     transition-duration: 110ms;
 }
 
 .le-btn:hover {
-    background-color: var(--surface-3);
+    background-color: #858585;
 }
 
 .le-btn:active {
-    background-color: var(--border-strong);
+    background-color: #666666;
 }
 
 .le-btn:disabled {
@@ -365,7 +365,7 @@
     top: 0;
     right: 0;
     bottom: 0;
-    background-color: var(--canvas);
+    background-color: #222628;
     overflow: hidden;
 }
 
@@ -1413,6 +1413,10 @@
 
 /* ------------------------------------------------------------ library */
 
+.le-library {
+    background-color: #222628;
+}
+
 .le-library__title-block {
     flex-direction: column;
 }
@@ -1605,7 +1609,7 @@
     align-items: center;
     justify-content: center;
     padding: 32px;
-    background-color: var(--canvas);
+    background-color: #222628;
 }
 
 .le-start__hero {
@@ -1851,7 +1855,19 @@
 .le-analysis {
     flex-grow: 1;
     flex-direction: row;
-    background-color: var(--canvas);
+    background-color: #222628;
+}
+
+.le-simulate {
+    background-color: #222628;
+}
+
+.le-configuration {
+    background-color: #222628;
+}
+
+.le-configuration .le-page__content {
+    background-color: #222628;
 }
 
 .le-analysis__empty {

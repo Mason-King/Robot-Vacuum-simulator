@@ -64,23 +64,17 @@ namespace RobotVacuum.Sim
                     return;
                 }
 
-                // A level from the app runs with the configuration chosen there: algorithm, seed, grid, vacuum.
-                // The app has no controls yet for the controller's settings (SLAM, sensing, the belief overlay, the
-                // decision log), so those still come from this component's Inspector.
+                // A level from the app runs with the configuration chosen there: algorithm, display and SLAM settings,
+                // seed, grid and vacuum. Unexposed sensing and logging options still come from this component's Inspector.
                 var fromApp = SimConfig.ToRunSettings();
-                fromApp.heatmapMode = settings.heatmapMode;
                 fromApp.targetMaxClean = settings.targetMaxClean;
-                fromApp.slam = settings.slam;
                 fromApp.noiseScale = settings.noiseScale;
                 fromApp.lidarEnabled = settings.lidarEnabled;
                 fromApp.lidarRangeMeters = settings.lidarRangeMeters;
                 fromApp.lidarHalfAngleDegrees = settings.lidarHalfAngleDegrees;
                 fromApp.lidarRayCount = settings.lidarRayCount;
                 fromApp.floorSensorEnabled = settings.floorSensorEnabled;
-                fromApp.showBeliefOverlay = settings.showBeliefOverlay;
                 fromApp.logAlgorithmDecisions = settings.logAlgorithmDecisions;
-                fromApp.slamCorrectionQuality = settings.slamCorrectionQuality;
-                fromApp.slamLoopClosure = settings.slamLoopClosure;
                 fromApp.vacuumPower = settings.vacuumPower;
                 settings = fromApp;
             }

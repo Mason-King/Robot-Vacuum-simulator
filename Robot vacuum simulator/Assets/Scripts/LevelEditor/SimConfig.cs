@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 
 namespace RobotVacuum.LevelEditor
@@ -31,6 +32,7 @@ namespace RobotVacuum.LevelEditor
         {
             public MovementPattern pattern = MovementPattern.RandomBounce;
             public VacuumSettings vacuum = VacuumSettings.Defaults();
+            public RunSettings runSettings = new RunSettings();
 
             /// <summary>The seed runs use when <see cref="randomSeed"/> is off.</summary>
             public int seed = 1;
@@ -64,6 +66,11 @@ namespace RobotVacuum.LevelEditor
 
                 if (!MovementAlgorithms.IsDefined(data.pattern)) data.pattern = MovementPattern.RandomBounce;
                 if (data.vacuum == null || data.vacuum.driveSpeed <= 0f) data.vacuum = VacuumSettings.Defaults();
+                data.runSettings ??= new RunSettings();
+                if (AlgorithmCatalog.Find(data.runSettings.algorithmId) == null)
+                    data.runSettings.algorithmId = AlgorithmCatalog.Entries[0].Id;
+                var builtInPattern = AlgorithmCatalog.PatternOf(data.runSettings.algorithmId);
+                if (builtInPattern.HasValue) data.pattern = builtInPattern.Value;
                 data.cellSize = data.cellSize > 0f ? Mathf.Clamp(data.cellSize, MinCellSize, MaxCellSize) : SimDefaults.CellSizeMeters;
                 data.telemetryInterval = data.telemetryInterval > 0f
                     ? Mathf.Clamp(data.telemetryInterval, MinTelemetryInterval, MaxTelemetryInterval) : 0.5f;
@@ -86,6 +93,9 @@ namespace RobotVacuum.LevelEditor
 
         /// <summary>The live settings. Change fields on it directly, then call <see cref="Save"/>.</summary>
         public static VacuumSettings Vacuum => Current.vacuum;
+
+        /// <summary>The algorithm, heatmap and SLAM options shown on the setup screen.</summary>
+        public static RunSettings RunSettings => Current.runSettings;
 
         /// <summary>Imperial (feet) or metric units for every length, area and speed in the interface.</summary>
         public static bool UseFeet
@@ -134,6 +144,12 @@ namespace RobotVacuum.LevelEditor
             randomSeed = !fixedSeed.HasValue && RandomSeed,
             seed = fixedSeed ?? Seed,
             cellSizeMeters = CellSize,
+            algorithmId = pattern.HasValue ? AlgorithmCatalog.IdOf(pattern.Value) : RunSettings.algorithmId,
+            heatmapMode = RunSettings.heatmapMode,
+            slam = RunSettings.slam,
+            showBeliefOverlay = RunSettings.showBeliefOverlay,
+            slamLoopClosure = RunSettings.slamLoopClosure,
+            slamCorrectionQuality = RunSettings.slamCorrectionQuality,
             driveSpeed = Vacuum.driveSpeed,
             reverseSpeed = Vacuum.reverseSpeed,
             turnSpeed = Vacuum.turnSpeed,
@@ -182,7 +198,7 @@ namespace RobotVacuum.LevelEditor
 
         /// <summary>A one-line description for summaries, e.g. "Spiral · 0.65 m/s · 300 units".</summary>
         public static string Summary =>
-            $"{MovementAlgorithms.LabelOf(Pattern)} · {Vacuum.FormatSpeed(Vacuum.driveSpeed)} · {VacuumSettings.FormatCapacity(Vacuum.batteryCapacity)}";
+            $"{AlgorithmCatalog.NameOf(RunSettings.algorithmId)} · {Vacuum.FormatSpeed(Vacuum.driveSpeed)} · {VacuumSettings.FormatCapacity(Vacuum.batteryCapacity)}";
 
         public static void Save() => PlayerPrefs.SetString(PrefsKey, Current.ToJson());
 
