@@ -53,9 +53,12 @@ namespace RobotVacuum.Sim
         public static float CleanFraction(float cleanliness, float targetMaxClean) =>
             targetMaxClean <= 0f ? 1f : Mathf.Clamp01(cleanliness / targetMaxClean);
 
+        /// <summary>Outside every room (not floor): left out of the percentages. Older saves without the mask count everything.</summary>
+        bool OutsideRooms(int i) => outsideRooms != null && i < outsideRooms.Length && outsideRooms[i];
+
         /// <summary>
-        /// Average goal progress across cleanable cells, 0 to 100. A cell at half the target counts as half
-        /// clean; a cell past the target counts as fully clean and no more.
+        /// Average goal progress across cleanable cells inside the rooms, 0 to 100. A cell at half the target counts
+        /// as half clean; a cell past the target counts as fully clean and no more.
         /// </summary>
         public float CoveragePercent()
         {
@@ -65,7 +68,7 @@ namespace RobotVacuum.Sim
             float sum = 0f;
             for (int i = 0; i < cleanliness.Length; i++)
             {
-                if (nonCleanable[i]) continue;
+                if (nonCleanable[i] || OutsideRooms(i)) continue;
                 counted++;
                 sum += CleanFraction(cleanliness[i], targetMaxClean);
             }
@@ -81,7 +84,7 @@ namespace RobotVacuum.Sim
             int reached = 0;
             for (int i = 0; i < cleanliness.Length; i++)
             {
-                if (nonCleanable[i]) continue;
+                if (nonCleanable[i] || OutsideRooms(i)) continue;
                 counted++;
                 if (cleanliness[i] >= targetMaxClean) reached++;
             }

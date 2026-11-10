@@ -280,14 +280,26 @@ MonoBehaviour:
   palette: {fileID: 0}
   settings:
     pattern: 0
-    randomSeed: 1
-    seed: 100
+    algorithmId: BoustrophedonSweep
+    randomSeed: 0
+    seed: 1029520771
     targetMaxClean: 2
     heatmapMode: 0
     driveSpeed: 0
     reverseSpeed: 0
     turnSpeed: 0
-    batteryCapacity: 20
+    batteryCapacity: 3600
+    slam: 1
+    noiseScale: 1
+    lidarEnabled: 1
+    lidarRangeMeters: 0
+    lidarHalfAngleDegrees: 180
+    lidarRayCount: 360
+    floorSensorEnabled: 1
+    showBeliefOverlay: 1
+    logAlgorithmDecisions: 1
+    slamCorrectionQuality: 0
+    slamLoopClosure: 1
     cellSizeMeters: 0
     vacuumPower: 0
 --- !u!4 &588408581

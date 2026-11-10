@@ -38,6 +38,8 @@ namespace RobotVacuum.Sim
         LevelData handedLevel;
         SimHud hud;
         RunEndPanel endPanel;
+        bool overlayBox; // the Show Belief Overlay box as last applied, so only a change of the box is passed on
+        HeatmapMode heatmapBox; // the Heatmap Mode as last applied, likewise
 
         void Awake()
         {
@@ -63,7 +65,24 @@ namespace RobotVacuum.Sim
                 }
 
                 // A level from the app runs with the configuration chosen there: algorithm, seed, grid, vacuum.
-                settings = SimConfig.ToRunSettings();
+                // The app has no controls yet for the controller's settings (SLAM, sensing, the belief overlay, the
+                // decision log), so those still come from this component's Inspector.
+                var fromApp = SimConfig.ToRunSettings();
+                fromApp.heatmapMode = settings.heatmapMode;
+                fromApp.targetMaxClean = settings.targetMaxClean;
+                fromApp.slam = settings.slam;
+                fromApp.noiseScale = settings.noiseScale;
+                fromApp.lidarEnabled = settings.lidarEnabled;
+                fromApp.lidarRangeMeters = settings.lidarRangeMeters;
+                fromApp.lidarHalfAngleDegrees = settings.lidarHalfAngleDegrees;
+                fromApp.lidarRayCount = settings.lidarRayCount;
+                fromApp.floorSensorEnabled = settings.floorSensorEnabled;
+                fromApp.showBeliefOverlay = settings.showBeliefOverlay;
+                fromApp.logAlgorithmDecisions = settings.logAlgorithmDecisions;
+                fromApp.slamCorrectionQuality = settings.slamCorrectionQuality;
+                fromApp.slamLoopClosure = settings.slamLoopClosure;
+                fromApp.vacuumPower = settings.vacuumPower;
+                settings = fromApp;
             }
 
             if (!SimulationSession.TryStart(runLevel, settings, headless: false, out session, out string error))
@@ -74,6 +93,8 @@ namespace RobotVacuum.Sim
 
             session.Finished += OnRunFinished;
             session.Closed += OnSessionClosed;
+            overlayBox = settings.showBeliefOverlay;
+            heatmapBox = settings.heatmapMode;
             Debug.Log($"SimTestDriver: running {source}, seed {session.Settings.seed}. Run folder: {session.RunFolder}", this);
 
             FrameCamera();
@@ -84,6 +105,26 @@ namespace RobotVacuum.Sim
             hud.RestartRequested = RunAgain;
             hud.LeaveRequested = LeaveToEditor;
             hud.Show(runLevel); // the HUD destroys runLevel when it goes away
+        }
+
+        // Ticking Show Belief Overlay mid-run switches the overlay. (Its own Show box on the overlay object still
+        // works too; this only passes on changes of the box here.)
+        // Heatmap Mode likewise switches the heatmap mid-run.
+        void Update()
+        {
+            var runner = session != null ? session.Runner : null;
+
+            if (settings.heatmapMode != heatmapBox)
+            {
+                heatmapBox = settings.heatmapMode;
+                if (runner != null && runner.Heatmap != null) runner.Heatmap.Mode = heatmapBox;
+            }
+
+            if (settings.showBeliefOverlay != overlayBox)
+            {
+                overlayBox = settings.showBeliefOverlay;
+                if (runner != null && runner.BeliefOverlay != null) runner.BeliefOverlay.Show = overlayBox;
+            }
         }
 
         void OnDestroy()
@@ -240,7 +281,8 @@ namespace RobotVacuum.Sim
                 case RunEndReason.TimeCap: return "time limit reached";
                 case RunEndReason.StoppedByUser: return "stopped";
                 case RunEndReason.Error: return "error";
-                case RunEndReason.Degenerate: return "no progress";
+                case RunEndReason.Degenerate: return "could not complete";
+                case RunEndReason.ReturnedLowBattery: return "returned to dock (battery low)";
                 default: return "unknown";
             }
         }

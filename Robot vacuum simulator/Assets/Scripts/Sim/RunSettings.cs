@@ -15,9 +15,15 @@ namespace RobotVacuum.Sim
     [Serializable]
     public class RunSettings
     {
-        [Header("Run")]
-        [Tooltip("The movement algorithm the vacuum uses.")]
+        // The built-in the run uses, for older code and config files. Hidden in the Inspector: the Algorithm dropdown
+        // below sets it whenever a built-in is picked. algorithmId decides; this follows it.
+        [HideInInspector]
         public MovementPattern pattern = MovementPattern.RandomBounce;
+
+        [Header("Run")]
+        [Tooltip("The movement algorithm: a built-in, or one from the Algorithms folder (Rescan picks up new files). Saved in config.json by id: a built-in's id (RandomBounce, Legacy.Spiral, ...) or a plugin's namespace + class. Empty = the built-in that the pattern names.")]
+        [AlgorithmId(nameof(pattern))]
+        public string algorithmId = "";
 
         [Tooltip("On: a fresh random seed every run. Off: use Seed below. Either way, the seed actually used is saved in the run's config.json, so the run can be repeated.")]
         public bool randomSeed = true;
@@ -44,12 +50,50 @@ namespace RobotVacuum.Sim
         [Tooltip("Battery capacity in work units. 0 = the battery's own default.")]
         public float batteryCapacity;
 
+        [Header("Sensing")]
+        [Tooltip("SLAM on: the robot starts with no map, its sensors and odometry are noisy, and it must build its map and track its own position. SLAM off (Normal): the map is preloaded and readings are exact.")]
+        public bool slam;
+
+        [Tooltip("How noisy the sensors are in a SLAM run: 0 = perfect, 1 = a realistic budget robot, higher = worse (max 10). Used ONLY when SLAM is on; a Normal run never reads it. Unlike most settings here, 0 is a real value, not 'default'.")]
+        public float noiseScale = 1f;
+
+        [Tooltip("Lidar on/off. Off = the robot senses by whisker only.")]
+        public bool lidarEnabled = true;
+
+        [Tooltip("Lidar maximum range in metres. 0 = default (8 m). Never below 0.2 m.")]
+        public float lidarRangeMeters;
+
+        [Tooltip("Lidar view half-angle in degrees, measured from straight ahead and spread equally to both sides: 180 = full circle, 0 = no rays (whisker only). Clamped to 0–180. Unlike most settings here, 0 is a real value.")]
+        public float lidarHalfAngleDegrees = 180f;
+
+        [Tooltip("Number of lidar rays, 8–360, used exactly as set. One ray always points straight ahead. Lower it if 360 is too slow; a warning appears if the rays are packed closer than the grid can use.")]
+        public int lidarRayCount = 360;
+
+        [Tooltip("The vacuum resistance (floor) sensor on/off: it reads how hard the floor under the robot is to clean. Off in a SLAM run = the robot assumes every floor cleans normally.")]
+        public bool floorSensorEnabled = true;
+
+        [Header("Debug")]
+        [Tooltip("Draws what the robot believes (its Internal Model, believed position and current waypoint) over the floor. Graphics runs only. Can also be switched during a run on the 'Belief Overlay (debug)' object.")]
+        public bool showBeliefOverlay;
+
+        [Tooltip("Writes the cleaning algorithm's decisions to the Console (what it chose, which room, where, how far), warns when a planned path crosses a wall SLAM has only shaded in, and reports what is left below the target when the algorithm finishes.")]
+        public bool logAlgorithmDecisions = true;
+
         [Header("Advanced")]
+        [Tooltip("SLAM only: how many lidar returns each scan match uses. Performance = every 3rd, least CPU; Balanced = every 2nd, the default; Reliable = every return, most CPU.")]
+        public Control.PoseCorrectionQuality slamCorrectionQuality = Control.PoseCorrectionQuality.Balanced;
+
+        [Tooltip("SLAM only: loop closure. When the robot comes back somewhere it has been, it recognises the place and corrects the drift built up since, across its whole path and map. On by default; switch off to see pose correction alone.")]
+        public bool slamLoopClosure = true;
+
         [Tooltip("Grid cell edge length in metres, shared by both models. 0 = default (SimDefaults.CellSizeMeters, 2 inches).")]
         public float cellSizeMeters;
 
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
+
+        /// <summary>The highest noise scale allowed.</summary>
+        public const float MaxNoiseScale = 10f;
 
         /// <summary>True for a number the caller actually set.</summary>
         public static bool IsSet(float value) => value > 0f;
@@ -71,9 +115,23 @@ namespace RobotVacuum.Sim
                 resolved.randomSeed = false;
             }
 
+            // The algorithm: always recorded by id. A built-in's id and the pattern are kept in step.
+            if (string.IsNullOrEmpty(resolved.algorithmId)) resolved.algorithmId = Control.AlgorithmCatalog.IdOf(resolved.pattern);
+            var builtInPattern = Control.AlgorithmCatalog.PatternOf(resolved.algorithmId);
+            if (builtInPattern.HasValue) resolved.pattern = builtInPattern.Value;
+
             if (!IsSet(resolved.targetMaxClean)) resolved.targetMaxClean = HeatmapDefaults.TargetMaxClean;
             if (!IsSet(resolved.cellSizeMeters)) resolved.cellSizeMeters = SimDefaults.CellSizeMeters;
             if (!IsSet(resolved.vacuumPower)) resolved.vacuumPower = HeatmapDefaults.BaseVacuumPower;
+
+            // Sensing. The noise scale is touched ONLY when SLAM is on (clamped to 0–MaxNoiseScale). In a Normal
+            // run it is neither read nor changed: it is recorded exactly as set, and nothing uses it.
+            if (resolved.slam)
+                resolved.noiseScale = float.IsNaN(resolved.noiseScale) ? 1f : Mathf.Clamp(resolved.noiseScale, 0f, MaxNoiseScale);
+            if (!IsSet(resolved.lidarRangeMeters)) resolved.lidarRangeMeters = Sensors.LidarSensor.DefaultRangeMeters;
+            resolved.lidarRangeMeters = Mathf.Max(Sensors.LidarSensor.MinRangeMeters, resolved.lidarRangeMeters);
+            resolved.lidarHalfAngleDegrees = Sensors.LidarRayLayout.ClampHalfAngle(resolved.lidarHalfAngleDegrees);
+            resolved.lidarRayCount = Sensors.LidarRayLayout.ClampCount(resolved.lidarRayCount);
 
             return resolved;
         }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using RobotVacuum.Level;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 
 namespace RobotVacuum.Sim
@@ -19,6 +20,12 @@ namespace RobotVacuum.Sim
             public bool visuals;
 
             public MovementPattern pattern;
+
+            /// <summary>The algorithm by catalog id; null or empty = the built-in that <see cref="pattern"/> names.</summary>
+            public string algorithmId;
+
+            /// <summary>The algorithm this run uses, by id.</summary>
+            public string AlgorithmId => string.IsNullOrEmpty(algorithmId) ? AlgorithmCatalog.IdOf(pattern) : algorithmId;
 
             /// <summary>
             /// Seeds every random choice the vacuum makes. The same level, pattern and seed give the same
@@ -41,16 +48,25 @@ namespace RobotVacuum.Sim
             /// <summary>Cleanliness per second of dwell on an effort-1 floor. Zero or less means <see cref="HeatmapDefaults.BaseVacuumPower"/>.</summary>
             public float vacuumPower;
 
+            /// <summary>The controller's settings: SLAM on/off, noise, lidar. Null means <see cref="ControllerSettings.Default"/> (Normal).</summary>
+            public ControllerSettings? controller;
+
+            /// <summary>Show the debug overlay of the robot's beliefs at the start (graphics runs only; it can be switched during the run).</summary>
+            public bool showBeliefOverlay;
+
             /// <summary>The build options for a run described by already-resolved settings.</summary>
             public static Options From(RunSettings settings, bool headless) => new Options
             {
                 visuals = !headless,
                 pattern = settings.pattern,
+                algorithmId = settings.algorithmId,
                 seed = settings.seed,
                 targetMaxClean = settings.targetMaxClean,
                 heatmapMode = settings.heatmapMode,
                 cellSizeMeters = settings.cellSizeMeters,
                 vacuumPower = settings.vacuumPower,
+                controller = ControllerSettings.From(settings),
+                showBeliefOverlay = settings.showBeliefOverlay,
             };
 
             public static Options Visible(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
@@ -63,7 +79,8 @@ namespace RobotVacuum.Sim
                 new Options { visuals = false, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean };
         }
 
-        SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning, CoverageHeatmapRenderer heatmap, int seed, List<MovingCat> cats)
+        SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning,
+            CoverageHeatmapRenderer heatmap, BeliefOverlay beliefOverlay, int seed, List<MovingCat> cats)
         {
             this.cats = cats;
             Root = root;
@@ -71,8 +88,10 @@ namespace RobotVacuum.Sim
             Robot = robot;
             Cleaning = cleaning;
             Heatmap = heatmap;
+            BeliefOverlay = beliefOverlay;
             Seed = seed;
             Battery = robot != null ? robot.GetComponent<Battery>() : null;
+            Brain = robot != null ? robot.Brain : null;
         }
 
         readonly List<MovingCat> cats;
@@ -80,6 +99,12 @@ namespace RobotVacuum.Sim
         public GameObject Root { get; }
         public LevelRenderer Level { get; }
         public VacuumRobot Robot { get; }
+
+        /// <summary>The controller: sensors, the Internal Model, the algorithm.</summary>
+        public MovementBrain Brain { get; }
+
+        /// <summary>The debug view of the robot's beliefs, or null for a headless run. Its Show switch turns it off.</summary>
+        public BeliefOverlay BeliefOverlay { get; }
         public VacuumCleaningController Cleaning { get; }
         public Battery Battery { get; }
 
@@ -101,6 +126,12 @@ namespace RobotVacuum.Sim
         /// </summary>
         public static SimulationRunner Start(LevelData level, Options options)
         {
+            var controllerSettings = options.controller ?? ControllerSettings.Default;
+
+            // Refused before anything is built: the algorithm must exist, and a SLAM run needs one that declares SLAM support.
+            string refusal = AlgorithmCatalog.Refusal(options.AlgorithmId, controllerSettings.slam);
+            if (refusal != null) throw new System.InvalidOperationException(refusal);
+
             var root = new GameObject("Simulation");
 
             var levelObject = new GameObject("Level");
@@ -114,6 +145,7 @@ namespace RobotVacuum.Sim
             robotObject.transform.SetParent(root.transform, false);
             var robot = robotObject.AddComponent<VacuumRobot>();
             robot.Pattern = options.pattern;
+            robot.AlgorithmId = options.AlgorithmId;
             robot.Seed = options.seed;
 
             // ONE shared instance for the whole run -- see VacuumRobot.RandomSource's doc comment for why
@@ -121,6 +153,11 @@ namespace RobotVacuum.Sim
             // (int)->(uint) is a plain bit-reinterpreting cast: deterministic for any given seed, including
             // negative ones, so it doesn't break reproducibility.
             robot.RandomSource = new RandomProvider((uint)options.seed);
+
+            // The controller was added with the body; it starts its run when the body respawns below.
+            var brain = robot.Brain;
+            if (brain == null) brain = robotObject.AddComponent<MovementBrain>();
+            brain.Configure(controllerSettings);
 
             var cleaning = robotObject.AddComponent<VacuumCleaningController>();
             cleaning.Initialize(options.targetMaxClean, options.cellSizeMeters, options.vacuumPower);
@@ -134,18 +171,32 @@ namespace RobotVacuum.Sim
                 heatmapRenderer.Mode = options.heatmapMode;
             }
 
+            BeliefOverlay beliefOverlay = null;
+            if (options.visuals)
+            {
+                var overlay = new GameObject("Belief Overlay (debug)");
+                overlay.transform.SetParent(root.transform, false);
+                beliefOverlay = overlay.AddComponent<BeliefOverlay>();
+                beliefOverlay.Brain = brain;
+                beliefOverlay.Show = options.showBeliefOverlay;
+            }
+
             // ResetToSpawn rebuilds robot.RandomSource from the seed, so the cats draw their seeds after it.
             // A repeat of the run meets the same cats doing the same things.
             robot.ResetToSpawn();
             var cats = MovingCat.SpawnPlacedCats(renderer, root.transform, robot.RandomSource);
-            return new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, options.seed, cats);
+            var runner = new SimulationRunner(root, renderer, robot, cleaning, heatmapRenderer, beliefOverlay, options.seed, cats);
+
+            // The algorithm list is fixed until this run is stopped (or its objects are destroyed).
+            AlgorithmCatalog.BeginRun(runner, () => root != null);
+            return runner;
         }
 
         /// <summary>Puts the vacuum and the cats back at their start points and forgets all coverage.</summary>
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
-            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn();
+            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn(Robot != null ? Robot.RandomSource : new RandomProvider((uint)Seed));
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 
@@ -157,6 +208,7 @@ namespace RobotVacuum.Sim
         /// </summary>
         public void Stop(bool immediate = false)
         {
+            AlgorithmCatalog.EndRun(this);
             if (Root == null) return;
 
             if (Application.isPlaying && !immediate) Object.Destroy(Root);

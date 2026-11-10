@@ -1375,7 +1375,7 @@ namespace RobotVacuum.LevelEditor
         public void Restart()
         {
             if (Robot != null) Robot.ResetToSpawn();
-            foreach (var cat in cats) if (cat != null) cat.ResetToSpawn();
+            foreach (var cat in cats) if (cat != null && Robot != null) cat.ResetToSpawn(Robot.RandomSource);
             if (Cleaning != null) Cleaning.ResetCoverage();
         }
 

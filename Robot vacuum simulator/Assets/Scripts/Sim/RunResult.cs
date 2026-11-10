@@ -13,7 +13,7 @@ namespace RobotVacuum.Sim
         /// <summary>Not ended (a result with this reason was never finished).</summary>
         None = 0,
 
-        /// <summary>The cleaning algorithm reported the job done. Reserved: no algorithm reports this yet.</summary>
+        /// <summary>The cleaning algorithm reported the job done and the robot drove back to the dock.</summary>
         Completed = 1,
 
         /// <summary>The battery ran out: the normal way a run ends (SDD 1.3.3).</summary>
@@ -28,8 +28,14 @@ namespace RobotVacuum.Sim
         /// <summary>Something failed. Detection is planned, not built (SDD Section 12).</summary>
         Error = 5,
 
-        /// <summary>The run stopped making progress without an error (stuck robot and similar). Planned, not built.</summary>
+        /// <summary>
+        /// The run could not complete without an error: the robot stopped making progress, or (built) it finished or ran
+        /// low but could not reach the dock. errorMessage says which.
+        /// </summary>
         Degenerate = 6,
+
+        /// <summary>The battery ran low, so the robot drove back to the dock before the job was done.</summary>
+        ReturnedLowBattery = 7,
     }
 
     /// <summary>
@@ -50,6 +56,10 @@ namespace RobotVacuum.Sim
         public int seed;
         public MovementPattern pattern;
 
+        // The algorithm by catalog id and display name. For a plugin, pattern is just what the settings held; algorithmId is the truth.
+        public string algorithmId;
+        public string algorithmName;
+
         // Graded average against the target (see ExternalModelData.CoveragePercent).
         public float coveragePercent;
 
@@ -61,6 +71,53 @@ namespace RobotVacuum.Sim
         public float blockedAreaSquareMeters;
         public float simulatedSeconds;
         public float realSeconds;
+
+        // SLAM runs: how far the robot's believed pose had drifted from the truth when the run ended. Always 0
+        // in a Normal run, where the believed pose is the true pose.
+        public bool slam;
+        public float driftMeters;
+        public float driftHeadingDegrees;
+
+        // SLAM local tracking: scans matched to the map, scans with too few returns to match, scans added to the
+        // submaps (after the motion filter), and submaps started.
+        public int scanMatches;
+        public int scanMatchesTooFewHits;
+        public int scansInserted;
+        public int submaps;
+
+        // Performance: real milliseconds spent per simulated second on each part of the controller's step.
+        public float msSensingPerSimSecond;
+        public float msPosePerSimSecond;
+        public float msMappingPerSimSecond;
+
+        // SLAM accuracy over the whole run, step by step (the target: within 5 cm and 2° for 99% of the time, never
+        // beyond 8 cm / 3°, within 5 cm at the end). Percentiles are to the nearest millimetre / 0.01°, rounded up.
+        public float driftMaxMeters;
+        public float driftP99Meters;
+        public float driftP95Meters;
+        public float driftRmsMeters;
+        public float driftMaxHeadingDegrees;
+        public float driftP99HeadingDegrees;
+        public float driftRmsHeadingDegrees;
+
+        // SLAM loop closure (global SLAM): whether it ran, submap searches made, loop-closure links accepted, pose
+        // graph solves, and its cost.
+        public bool loopClosure;
+        public int loopSearches;
+        public int loopLinks;
+        public int poseGraphSolves;
+        public float msLoopClosurePerSimSecond;
+
+        // Real ms per simulated second on the algorithm, path planning and driving.
+        public float msControlPerSimSecond;
+
+        // Parts of it: the algorithm's NextGoal, and the path planner (whoever asked: the driver or the algorithm,
+        // so the two can overlap when an algorithm plans paths itself).
+        public float msAlgorithmPerSimSecond;
+        public float msPlanningPerSimSecond;
+
+        // The longest single physics step the controller took (sense + pose + map + loop closure), real milliseconds.
+        public float msLongestStep;
 
         // Null/empty when a file wasn't produced (e.g. the run failed before
         // completing). heatmapImagePath is the older single-image field and

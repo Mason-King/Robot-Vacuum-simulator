@@ -109,6 +109,39 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Coverage_LeavesOutCellsOutsideEveryRoom()
+        {
+            // The grid is the level's bounding box; the sample apartment fills well under two thirds of it. A fully
+            // cleaned apartment must read close to 100%, not the ~55% it would if the empty corners counted.
+            var apartment = TestLevels.NewLevel(SampleLevels.PopulateApartment);
+            try
+            {
+                var grid = new ExternalModelGrid(apartment, null, 0.1f, 2f);
+                grid.PopulateFromLevelObject();
+                var data = grid.ToData();
+                int inside = 0;
+                for (int row = 0; row < grid.Rows; row++)
+                    for (int col = 0; col < grid.Cols; col++)
+                        if (grid.GetCell(row, col).CountsTowardCoverage)
+                        {
+                            grid.Accumulate(row, col, 2f, 2f, 0f);
+                            inside++;
+                        }
+                Assert.Greater(grid.OffFloorCellCount, 0, "the test needs a level with cells outside the rooms");
+                for (int row = 0; row < grid.Rows; row++)
+                    for (int col = 0; col < grid.Cols; col++)
+                        Assert.AreEqual(grid.GetCell(row, col).isOffFloor, data.outsideRooms[data.Index(row, col)], "saved data and grid agree");
+                Assert.AreEqual(100f, grid.CalculateCoveragePercent(), 1e-3f);
+                Assert.AreEqual(100f, grid.CalculateFullyCleanedPercent(), 1e-3f);
+                Assert.AreEqual(100f, grid.ToData().CoveragePercent(), 1e-3f);
+            }
+            finally
+            {
+                Object.DestroyImmediate(apartment);
+            }
+        }
+
+        [Test]
         public void SavedData_MatchesTheGrid()
         {
             var grid = new ExternalModelGrid(level, null, 0.5f, 2f);
@@ -142,10 +175,11 @@ namespace RobotVacuum.Tests
         {
             const float target = 2f;
 
-            // Cleanliness: 0 to target. Coverage and OverCoverage: 0 to twice the target.
+            // Cleanliness: 0 to target. Coverage: 0 to twice the target. OverCoverage: 0 to four times the target.
             Assert.AreEqual(1f, HeatmapColors.Normalize(HeatmapMode.FloorCleanliness, 0f, 2f, target), 1e-5f);
             Assert.AreEqual(0.5f, HeatmapColors.Normalize(HeatmapMode.FloorCoverage, 2f, 0f, target), 1e-5f);
-            Assert.AreEqual(0.5f, HeatmapColors.Normalize(HeatmapMode.FloorOverCoverage, 0f, 2f, target), 1e-5f);
+            Assert.AreEqual(0.25f, HeatmapColors.Normalize(HeatmapMode.FloorOverCoverage, 0f, 2f, target), 1e-5f);
+            Assert.AreEqual(1f, HeatmapColors.Normalize(HeatmapMode.FloorOverCoverage, 0f, 8f, target), 1e-5f);
 
             // Coverage reads dwell, the other two read cleanliness.
             Assert.AreEqual(0f, HeatmapColors.Normalize(HeatmapMode.FloorCoverage, 0f, 4f, target));

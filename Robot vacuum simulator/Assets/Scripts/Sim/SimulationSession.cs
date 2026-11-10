@@ -181,6 +181,10 @@ namespace RobotVacuum.Sim
                 SimulatedSeconds = 0f;
                 RealSeconds = 0f;
 
+                // The folder first, so the Console is captured into it from the very start (console_log.txt).
+                RunFolder = RunArtifacts.NewRunFolder();
+                log = new RunLog(RunFolder);
+
                 Runner = SimulationRunner.Start(Level, SimulationRunner.Options.From(Settings, Headless));
 
                 // Unset vacuum values keep the robot's own defaults; record what it actually ended up with.
@@ -188,7 +192,6 @@ namespace RobotVacuum.Sim
                 Settings.RecordVacuumFrom(Runner.Robot, Runner.Battery);
 
                 // The inputs are saved before the run moves, so even a run that dies part-way is reproducible.
-                RunFolder = RunArtifacts.NewRunFolder();
                 new RunConfig
                 {
                     level = LevelSnapshot.FromLevel(Level, Level.name),
@@ -216,6 +219,7 @@ namespace RobotVacuum.Sim
                 // A folder whose config.json exists but whose result.json doesn't reads as a crashed run, so
                 // record the failure there if the folder was already made.
                 if (RunFolder != null) WriteResult(RunResult.Failure(error));
+                StopLog();
                 TearDownRunner();
                 return false;
             }
@@ -228,8 +232,16 @@ namespace RobotVacuum.Sim
 
             SimulatedSeconds += dt;
 
+            var outcome = Runner.Robot != null ? Runner.Robot.Outcome : Control.RunOutcome.None;
+
             if (Runner.Robot != null && Runner.Robot.AlgorithmFailed)
                 EndRun(RunEndReason.Error, "The movement algorithm failed. See the Console for details.", raiseFinished: true);
+            else if (outcome == Control.RunOutcome.Completed)
+                EndRun(RunEndReason.Completed, null, raiseFinished: true);
+            else if (outcome == Control.RunOutcome.DockedLowBattery)
+                EndRun(RunEndReason.ReturnedLowBattery, null, raiseFinished: true);
+            else if (outcome == Control.RunOutcome.DockUnreachable)
+                EndRun(RunEndReason.Degenerate, Runner.Robot.OutcomeMessage, raiseFinished: true);
             else if (Runner.Battery != null && !Runner.Battery.CanOperate)
                 EndRun(RunEndReason.BatteryDepleted, null, raiseFinished: true);
             else if (SimulatedSeconds >= SimDefaults.MaxSimulatedSeconds)
@@ -256,12 +268,60 @@ namespace RobotVacuum.Sim
                 levelName = Level.name,
                 seed = Settings.seed,
                 pattern = Settings.pattern,
+                algorithmId = Settings.algorithmId,
+                algorithmName = Control.AlgorithmCatalog.NameOf(Settings.algorithmId),
                 targetMaxClean = Settings.targetMaxClean,
                 coveragePercent = Runner != null ? Runner.CoveragePercent : 0f,
                 blockedAreaSquareMeters = Runner != null ? Runner.BlockedArea : 0f,
                 simulatedSeconds = SimulatedSeconds,
                 realSeconds = RealSeconds,
+                slam = Settings.slam,
             };
+
+            var brain = Runner != null ? Runner.Brain : null;
+            if (brain != null)
+            {
+                result.driftMeters = brain.DriftMeters;
+                result.driftHeadingDegrees = brain.DriftHeadingDegrees;
+                result.msSensingPerSimSecond = brain.SensingMsPerSimSecond;
+                result.msPosePerSimSecond = brain.PoseMsPerSimSecond;
+                result.msMappingPerSimSecond = brain.MappingMsPerSimSecond;
+                result.msLoopClosurePerSimSecond = brain.LoopClosureMsPerSimSecond;
+                result.msControlPerSimSecond = brain.ControlMsPerSimSecond;
+                result.msAlgorithmPerSimSecond = brain.AlgorithmMsPerSimSecond;
+                result.msPlanningPerSimSecond = brain.PlanningMsPerSimSecond;
+                result.msLongestStep = brain.LongestStepMs;
+
+                var drift = brain.Drift;
+                if (Settings.slam && drift != null)
+                {
+                    result.driftMaxMeters = drift.MaxMeters;
+                    result.driftP99Meters = drift.PositionPercentile(0.99f);
+                    result.driftP95Meters = drift.PositionPercentile(0.95f);
+                    result.driftRmsMeters = drift.RmsMeters;
+                    result.driftMaxHeadingDegrees = drift.MaxDegrees;
+                    result.driftP99HeadingDegrees = drift.HeadingPercentile(0.99f);
+                    result.driftRmsHeadingDegrees = drift.RmsDegrees;
+                }
+
+                var tracking = brain.SlamTracking;
+                if (tracking != null)
+                {
+                    result.scanMatches = tracking.Matches;
+                    result.scanMatchesTooFewHits = tracking.TooFewHits;
+                    result.scansInserted = tracking.ScansInserted;
+                    result.submaps = tracking.Submaps.Count;
+                }
+
+                var loop = brain.SlamLoopClosure;
+                if (loop != null)
+                {
+                    result.loopClosure = true;
+                    result.loopSearches = loop.Searches;
+                    result.loopLinks = loop.LoopLinks;
+                    result.poseGraphSolves = loop.Optimisations;
+                }
+            }
 
             // The one moment the live grid still exists: save the model and the three PNGs, then result.json
             // last, since its existence is what marks the run as finished.
@@ -282,8 +342,17 @@ namespace RobotVacuum.Sim
 
             WriteResult(result);
             Result = result;
+            StopLog();
 
             if (raiseFinished) Finished?.Invoke(this);
+        }
+
+        RunLog log;
+
+        void StopLog()
+        {
+            log?.Dispose();
+            log = null;
         }
 
         // Holds the end state on screen: nothing moves or cleans any more, but nothing is destroyed.
@@ -321,6 +390,7 @@ namespace RobotVacuum.Sim
 
         void TearDownRunner()
         {
+            StopLog();
             if (clock != null) clock.Unbind();
             clock = null;
 

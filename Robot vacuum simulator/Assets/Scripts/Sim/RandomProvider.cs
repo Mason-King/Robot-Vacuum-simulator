@@ -20,7 +20,8 @@ public class RandomProvider
         SensorNoise = 0,
         RandomBounceAlgorithm = 1,
         DebrisAccumulation = 2,
-        DynamicObstacles = 3,   // seeds for cats and other moving obstacles
+        Odometry = 3, // each stream's seed is master + its number, so a stream's number must never change
+        DynamicObstacles = 4,   // seeds for cats and other moving obstacles
     }
 
     private class RandomHandle
@@ -55,6 +56,22 @@ public class RandomProvider
     {
         var handle = _subGenerators[subsystem];
         return handle.Rng.NextFloat(min, max);
+    }
+
+    /// <summary>
+    /// Draw from a normal (Gaussian) distribution with the given mean and standard deviation, from the given
+    /// subsystem's stream. Box–Muller transform on two uniform draws. Always consumes exactly two draws, so
+    /// the stream stays in step however the result is used, and no extra state is kept between calls (the
+    /// snapshot below stays one integer per subsystem).
+    /// </summary>
+    public double NextGaussian(Subsystem subsystem, double mean = 0.0, double standardDeviation = 1.0)
+    {
+        double u1 = NextDouble(subsystem);
+        double u2 = NextDouble(subsystem);
+
+        // u1 is in [0,1); 1 - u1 is in (0,1], so the log is always finite.
+        double magnitude = Math.Sqrt(-2.0 * Math.Log(1.0 - u1));
+        return mean + standardDeviation * magnitude * Math.Cos(2.0 * Math.PI * u2);
     }
 
     /// <summary>Draw a uniform uint from the given subsystem's stream (used to seed per-entity generators).</summary>

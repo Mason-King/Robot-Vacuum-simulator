@@ -34,7 +34,7 @@ namespace RobotVacuum.Tests
             {
                 var cat = catObject.AddComponent<MovingCat>();
                 var body = catObject.GetComponent<Rigidbody2D>();
-                cat.Initialize(new Rect(-2f, -2f, 4f, 4f), Vector2.zero, 1u);
+                cat.Initialize(new Rect(-2f, -2f, 4f, 4f), Vector2.zero, new RandomProvider(1u));
 
                 Assert.AreEqual(RigidbodyType2D.Dynamic, body.bodyType);
                 Assert.IsFalse(cat.CollisionShape.isTrigger);
@@ -126,20 +126,20 @@ namespace RobotVacuum.Tests
             return level;
         }
 
-        static uint[] CatSeeds(LevelRenderer renderer, Transform parent, uint masterSeed)
+        static Vector2[] CatDirections(LevelRenderer renderer, Transform parent, RandomProvider randomSource)
         {
-            var cats = MovingCat.SpawnPlacedCats(renderer, parent, new RandomProvider(masterSeed));
-            var seeds = new uint[cats.Count];
+            var cats = MovingCat.SpawnPlacedCats(renderer, parent, randomSource);
+            var directions = new Vector2[cats.Count];
             for (int i = 0; i < cats.Count; i++)
             {
-                seeds[i] = cats[i].Seed;
+                directions[i] = cats[i].Direction;
                 Object.DestroyImmediate(cats[i].gameObject);
             }
-            return seeds;
+            return directions;
         }
 
         [Test]
-        public void SpawnPlacedCats_SameMasterSeedGivesSameCatSeeds_DifferentSeedDoesNot()
+        public void SpawnPlacedCats_SameMasterSeedGivesSameCats_DifferentSeedDoesNot()
         {
             LevelData level = LevelWithTwoCats();
             var levelObject = new GameObject("Cat seed level");
@@ -148,12 +148,12 @@ namespace RobotVacuum.Tests
                 var renderer = levelObject.AddComponent<LevelRenderer>();
                 renderer.Level = level;
 
-                uint[] first = CatSeeds(renderer, levelObject.transform, 42u);
-                uint[] again = CatSeeds(renderer, levelObject.transform, 42u);
-                uint[] other = CatSeeds(renderer, levelObject.transform, 43u);
+                Vector2[] first = CatDirections(renderer, levelObject.transform, new RandomProvider(42u));
+                Vector2[] again = CatDirections(renderer, levelObject.transform, new RandomProvider(42u));
+                Vector2[] other = CatDirections(renderer, levelObject.transform, new RandomProvider(43u));
 
                 Assert.AreEqual(2, first.Length);
-                Assert.AreNotEqual(first[0], first[1], "each cat gets its own seed");
+                Assert.AreNotEqual(first[0], first[1], "each cat takes its own draws");
                 CollectionAssert.AreEqual(first, again);
                 CollectionAssert.AreNotEqual(first, other);
             }
@@ -165,7 +165,62 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void ResetToSpawn_RestoresSeedAndPlacedPosition()
+        public void Cats_DrawFromTheSharedProvider_SoItsSnapshotCoversThem()
+        {
+            LevelData level = LevelWithTwoCats();
+            var levelObject = new GameObject("Cat snapshot level");
+            try
+            {
+                var renderer = levelObject.AddComponent<LevelRenderer>();
+                renderer.Level = level;
+                var source = new RandomProvider(42u);
+                var before = source.SnapshotState();
+
+                var cats = MovingCat.SpawnPlacedCats(renderer, levelObject.transform, source);
+                Vector2 direction = cats[0].Direction;
+                Assert.AreNotEqual(before[RandomProvider.Subsystem.DynamicObstacles], source.SnapshotState()[RandomProvider.Subsystem.DynamicObstacles],
+                    "spawning the cats advances the shared stream");
+
+                source.RestoreState(before);
+                cats[0].ResetToSpawn(source);
+                Assert.AreEqual(direction, cats[0].Direction, "restoring the provider replays the cat");
+
+                Assert.AreEqual(before[RandomProvider.Subsystem.Odometry], source.SnapshotState()[RandomProvider.Subsystem.Odometry],
+                    "the cats leave the other streams alone");
+            }
+            finally
+            {
+                Object.DestroyImmediate(levelObject);
+                Object.DestroyImmediate(level);
+            }
+        }
+
+        [Test]
+        public void SpawnPlacedCats_PutsThemInOneHerd_InLevelOrder()
+        {
+            LevelData level = LevelWithTwoCats();
+            var levelObject = new GameObject("Cat herd level");
+            try
+            {
+                var renderer = levelObject.AddComponent<LevelRenderer>();
+                renderer.Level = level;
+                var cats = MovingCat.SpawnPlacedCats(renderer, levelObject.transform, new RandomProvider(1u));
+
+                var herd = levelObject.GetComponentInChildren<CatHerd>();
+                Assert.IsNotNull(herd);
+                CollectionAssert.AreEqual(cats, herd.Cats);
+                Assert.AreEqual("Miso", herd.Cats[0].name);
+                Assert.AreEqual("Tofu", herd.Cats[1].name);
+            }
+            finally
+            {
+                Object.DestroyImmediate(levelObject);
+                Object.DestroyImmediate(level);
+            }
+        }
+
+        [Test]
+        public void ResetToSpawn_RestoresPlacedPosition_AndReplaysFromARebuiltProvider()
         {
             LevelData level = LevelWithTwoCats();
             var levelObject = new GameObject("Cat reset level");
@@ -174,14 +229,12 @@ namespace RobotVacuum.Tests
                 var renderer = levelObject.AddComponent<LevelRenderer>();
                 renderer.Level = level;
                 var cat = MovingCat.SpawnPlacedCats(renderer, levelObject.transform, new RandomProvider(42u))[0];
-                uint seed = cat.Seed;
                 Vector2 spawned = cat.transform.position;
                 Vector2 direction = cat.Direction;
 
                 cat.transform.position = spawned + new Vector2(0.5f, -0.25f);
-                cat.ResetToSpawn();
+                cat.ResetToSpawn(new RandomProvider(42u)); // as a restart does: the robot rebuilds the provider from the seed
 
-                Assert.AreEqual(seed, cat.Seed);
                 Assert.AreEqual(spawned, (Vector2)cat.transform.position);
                 Assert.AreEqual(direction, cat.Direction, "the random sequence starts over");
             }
