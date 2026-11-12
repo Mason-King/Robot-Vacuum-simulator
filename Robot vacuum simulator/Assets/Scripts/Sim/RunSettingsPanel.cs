@@ -17,14 +17,18 @@ namespace RobotVacuum.Sim.Control
         {
             if (runSettings == null) throw new ArgumentNullException(nameof(runSettings));
             if (showWarning == null) throw new ArgumentNullException(nameof(showWarning));
+            AddToClassList("le-settings-panel");
 
             var entries = AlgorithmCatalog.Entries.ToList();
             int algorithmIndex = entries.FindIndex(entry => entry.Id == runSettings.algorithmId);
             if (algorithmIndex < 0) algorithmIndex = 0;
             runSettings.algorithmId = entries[algorithmIndex].Id;
 
+            bool runActive = session != null && session.Runner != null;
             var algorithm = new DropdownField("Algorithm", entries.Select(entry => entry.Name).ToList(), algorithmIndex);
-            algorithm.SetEnabled(session == null || session.Runner == null);
+            // The algorithm is fixed for the whole run; it can only be chosen before the run starts.
+            algorithm.SetEnabled(!runActive);
+            if (runActive) algorithm.AddToClassList("le-settings-panel__locked");
             algorithm.RegisterValueChangedCallback(evt =>
             {
                 int selectedIndex = algorithm.index;
@@ -37,6 +41,13 @@ namespace RobotVacuum.Sim.Control
                 }
             });
             Add(algorithm);
+            if (runActive)
+            {
+                var lockedHint = new Label("Set before the run starts. It can't change mid-run.");
+                lockedHint.AddToClassList("le-empty-hint");
+                lockedHint.AddToClassList("le-settings-panel__hint");
+                Add(lockedHint);
+            }
 
             var heatmapModes = Enum.GetValues(typeof(HeatmapMode)).Cast<HeatmapMode>().ToList();
             int heatmapIndex = heatmapModes.IndexOf(runSettings.heatmapMode);

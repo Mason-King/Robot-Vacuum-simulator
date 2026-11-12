@@ -2059,8 +2059,17 @@
 }
 
 .le-run-speed {
-    width: 170px;
+    width: 220px;
     margin: 0 6px;
+}
+
+/* The typed box already shows the speed, so the read-out beside the track would repeat it. */
+.le-run-speed .le-slider__value {
+    display: none;
+}
+
+.le-run-speed .le-slider__input {
+    width: 64px;
 }
 
 .le-run-furniture {
@@ -2632,4 +2641,165 @@
 
 .le-app .unity-scroller--vertical .unity-base-slider__dragger:hover {
     background-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ------------------------------------------------------------ run settings (algorithm, heatmap, SLAM) */
+
+/* Labels sit above their fields so long algorithm names get the full width of the popover. */
+.le-settings-panel {
+    min-width: 260px;
+    max-width: 320px;
+    margin-bottom: 4px;
+}
+
+.le-settings-panel .unity-base-field {
+    margin: 0 0 10px 0;
+    padding: 0;
+}
+
+.le-settings-panel .unity-base-popup-field {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.le-settings-panel .unity-base-field__label {
+    min-width: 0;
+    width: auto;
+    margin: 0 0 6px 0;
+    padding: 0;
+    font-size: 12px;
+    color: var(--text-2);
+}
+
+.le-settings-panel .unity-base-popup-field__input {
+    min-height: 32px;
+    margin: 0;
+    padding: 0 8px 0 10px;
+    border-width: 1px;
+    border-radius: 8px;
+    border-color: var(--border-strong);
+    background-color: var(--surface-2);
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-settings-panel .unity-base-popup-field__input:hover {
+    background-color: var(--surface-3);
+}
+
+.le-settings-panel .unity-base-popup-field__text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    margin: 0;
+    padding: 0;
+    color: var(--text);
+    font-size: 13px;
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-settings-panel .unity-base-popup-field__arrow {
+    -unity-background-image-tint-color: var(--text-2);
+    margin-left: 6px;
+}
+
+/* Other settings locked mid-run (SLAM) dim, but stay readable. Must come before the algorithm's rule below. */
+.le-settings-panel .unity-base-field:disabled {
+    opacity: 0.6;
+}
+
+/* Locked mid-run: still fully legible, just flat, so the reader can see which algorithm is running. */
+.le-settings-panel .le-settings-panel__locked:disabled,
+.le-settings-panel .le-settings-panel__locked:disabled .unity-base-field__label,
+.le-settings-panel .le-settings-panel__locked:disabled .unity-base-popup-field__input,
+.le-settings-panel .le-settings-panel__locked:disabled .unity-base-popup-field__text,
+.le-settings-panel .le-settings-panel__locked.unity-disabled,
+.le-settings-panel .le-settings-panel__locked.unity-disabled .unity-base-field__label,
+.le-settings-panel .le-settings-panel__locked.unity-disabled .unity-base-popup-field__input,
+.le-settings-panel .le-settings-panel__locked.unity-disabled .unity-base-popup-field__text {
+    opacity: 1;
+}
+
+.le-settings-panel .le-settings-panel__locked .unity-base-popup-field__input {
+    background-color: var(--surface);
+    border-color: var(--border);
+}
+
+.le-settings-panel .le-settings-panel__locked .unity-base-popup-field__arrow {
+    display: none;
+}
+
+.le-settings-panel .le-settings-panel__hint {
+    margin: -6px 0 10px 0;
+}
+
+.le-settings-panel .unity-toggle {
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-settings-panel .unity-toggle .unity-base-field__label {
+    flex-grow: 1;
+    margin: 0;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.le-settings-panel .unity-toggle__checkmark {
+    width: 16px;
+    height: 16px;
+    border-width: 1px;
+    border-radius: 4px;
+    border-color: var(--border-strong);
+    background-color: var(--surface-2);
+    -unity-background-image-tint-color: var(--text);
+}
+
+.le-settings-panel .unity-foldout__text {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.le-settings-panel .unity-foldout__checkmark {
+    -unity-background-image-tint-color: var(--text-2);
+}
+
+.le-settings-panel .unity-foldout__content {
+    margin-left: 0;
+    margin-top: 8px;
+}
+
+/* The dropdown's option list opens on the panel root, outside .le-app, so it uses literal colours. */
+.unity-base-dropdown .unity-base-dropdown__container-outer {
+    border-width: 1px;
+    border-radius: 8px;
+    border-color: #353B47;
+    background-color: #1C2028;
+}
+
+.unity-base-dropdown .unity-base-dropdown__container-inner {
+    background-color: #1C2028;
+    padding: 4px;
+}
+
+.unity-base-dropdown .unity-base-dropdown__item {
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.unity-base-dropdown .unity-base-dropdown__item:hover {
+    background-color: #262B35;
+}
+
+.unity-base-dropdown .unity-base-dropdown__label {
+    color: #E8EAEE;
+    font-size: 13px;
+}
+
+.unity-base-dropdown .unity-base-dropdown__checkmark {
+    -unity-background-image-tint-color: #5B8DEF;
 }

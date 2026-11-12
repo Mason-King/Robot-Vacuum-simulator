@@ -1099,7 +1099,7 @@ namespace RobotVacuum.LevelEditor
 
             overlay.ShowDialog(
                 "Critical warning: collision detected",
-                "You can't start a simulation until every piece of furniture is clear of the walls.\n\n" +
+                "You can't start a simulation until every piece of furniture is clear of the walls and the vacuum.\n\n" +
                 string.Join("\n", explanations),
                 null,
                 new DialogButton("OK", ButtonStyle.Danger, null));
@@ -1154,15 +1154,6 @@ namespace RobotVacuum.LevelEditor
             VisualElement settingsButton = null;
             settingsButton = Ui.Button(bar, "Settings", IconKind.Spawn, () => ShowVacuumSettings(settingsButton), "le-btn--ghost");
             Ui.Tooltip(settingsButton, "Vacuum speed and battery");
-
-            var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
-            movement.SelectionChanged += index =>
-            {
-                SimLauncher.MovementPattern = (MovementPattern)index;
-                if (run != null && run.Robot != null) run.Robot.Pattern = SimLauncher.MovementPattern;
-            };
-            Ui.Tooltip(movement, "Movement algorithm");
-            bar.Add(movement);
 
             var live = Ui.Div(bar, "le-run-live");
             Ui.Div(live, "le-run-live__dot");
