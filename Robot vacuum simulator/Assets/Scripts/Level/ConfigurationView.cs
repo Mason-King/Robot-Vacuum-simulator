@@ -95,7 +95,7 @@ namespace RobotVacuum.LevelEditor
             AddSlider(panel, "Drive speed", 0.05f, 2f, settings.driveSpeed, settings.FormatSpeed, v => settings.driveSpeed = v);
             AddSlider(panel, "Reverse speed", 0.05f, 1.5f, settings.reverseSpeed, settings.FormatSpeed, v => settings.reverseSpeed = v);
             AddSlider(panel, "Turn speed", 30f, 720f, settings.turnSpeed, v => $"{v:0} °/s", v => settings.turnSpeed = v);
-            AddSlider(panel, "Battery capacity", 10f, 1800f, settings.batteryCapacity, VacuumSettings.FormatCapacity,
+            AddSlider(panel, "Battery capacity", 10f, Battery.MaxCapacity, settings.batteryCapacity, VacuumSettings.FormatCapacity,
                 v => settings.batteryCapacity = v);
         }
 

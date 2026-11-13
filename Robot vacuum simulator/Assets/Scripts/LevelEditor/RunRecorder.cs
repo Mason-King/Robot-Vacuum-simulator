@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using RobotVacuumSim.EnvironmentModel;
 using UnityEngine;
 
@@ -190,6 +191,9 @@ namespace RobotVacuum.LevelEditor
                 levelName = world.Level != null ? world.Level.name : "Floor plan",
                 levelPath = SimLauncher.SimulatedPath,
                 pattern = world.Pattern,
+                algorithmId = world.Session.Settings != null && !string.IsNullOrEmpty(world.Session.Settings.algorithmId)
+                    ? world.Session.Settings.algorithmId
+                    : AlgorithmCatalog.IdOf(world.Pattern),
                 seed = seed,
                 batchId = batchId,
                 trial = trial,
@@ -197,6 +201,7 @@ namespace RobotVacuum.LevelEditor
                 cellSize = world.Cleaning != null ? world.Cleaning.CellSizeMeters : SimConfig.CellSize,
                 telemetryInterval = telemetryInterval,
             };
+            report.algorithmName = AlgorithmCatalog.NameOf(report.algorithmId);
             report.dataFolder = world.Session.RunFolder ?? RunHistory.DataFolderFor(report.id);
 
             replay.sampleInterval = telemetryInterval;

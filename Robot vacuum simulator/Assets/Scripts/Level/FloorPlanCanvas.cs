@@ -1346,34 +1346,63 @@ namespace RobotVacuum.LevelEditor
             painter.Stroke();
         }
 
+        static readonly Rect CatBounds = Poly2D.Bounds(CatShape.Silhouette);
+
+        /// <summary>
+        /// Paints the same top-down cat the simulation draws, fitted to the placed footprint. The fur takes
+        /// <paramref name="fill"/> (so hover and ghost tints show); outline and details keep the cat's colours.
+        /// </summary>
         void PaintCatGlyph(Painter2D painter, Vector2 center, Vector2 size, float rotation, Color fill, Color edge, float lineWidth)
         {
-            Vector2[] silhouette =
-            {
-                new Vector2(-0.34f, -0.42f), new Vector2(0.34f, -0.42f),
-                new Vector2(0.45f, -0.15f), new Vector2(0.34f, 0.02f),
-                new Vector2(0.31f, 0.40f), new Vector2(0.12f, 0.22f),
-                new Vector2(0f, 0.27f), new Vector2(-0.12f, 0.22f),
-                new Vector2(-0.31f, 0.40f), new Vector2(-0.34f, 0.02f),
-                new Vector2(-0.45f, -0.15f),
-            };
-
             float radians = rotation * Mathf.Deg2Rad;
             float sin = Mathf.Sin(radians);
             float cos = Mathf.Cos(radians);
-            var points = new Vector2[silhouette.Length];
-            for (int i = 0; i < silhouette.Length; i++)
+            // One scale for both axes, so the cat keeps its proportions inside any footprint.
+            float scale = Mathf.Min(size.x / CatBounds.width, size.y / CatBounds.height);
+
+            Vector2[] Place(Vector2[] shape)
             {
-                Vector2 local = Vector2.Scale(silhouette[i], size);
-                points[i] = center + new Vector2(local.x * cos - local.y * sin, local.x * sin + local.y * cos);
+                var points = new Vector2[shape.Length];
+                for (int i = 0; i < shape.Length; i++)
+                {
+                    Vector2 local = (shape[i] - CatBounds.center) * scale;
+                    points[i] = center + new Vector2(local.x * cos - local.y * sin, local.x * sin + local.y * cos);
+                }
+                return points;
             }
 
-            PolygonPath(painter, points);
-            painter.fillColor = fill;
-            painter.Fill(FillRule.NonZero);
-            painter.lineWidth = lineWidth;
-            painter.strokeColor = edge;
-            painter.Stroke();
+            var layers = CatShape.Layers;
+            for (int l = 0; l < layers.Count; l++)
+            {
+                var layer = layers[l];
+                Vector2[] points = Place(layer.vertices);
+
+                if (l <= 1)
+                {
+                    // The silhouette and fur are single outlines; painting them whole keeps the edges smooth.
+                    PolygonPath(painter, points);
+                    painter.fillColor = l == 0 ? new Color(layer.color.r, layer.color.g, layer.color.b, fill.a) : fill;
+                    painter.Fill(FillRule.NonZero);
+                    if (l == 0)
+                    {
+                        painter.lineWidth = lineWidth;
+                        painter.strokeColor = edge;
+                        painter.Stroke();
+                    }
+                    continue;
+                }
+
+                painter.BeginPath();
+                for (int t = 0; t + 2 < layer.triangles.Length; t += 3)
+                {
+                    painter.MoveTo(ToLocal(points[layer.triangles[t]]));
+                    painter.LineTo(ToLocal(points[layer.triangles[t + 1]]));
+                    painter.LineTo(ToLocal(points[layer.triangles[t + 2]]));
+                    painter.ClosePath();
+                }
+                painter.fillColor = new Color(layer.color.r, layer.color.g, layer.color.b, fill.a);
+                painter.Fill(FillRule.NonZero);
+            }
         }
 
         void DashedPolygon(Painter2D painter, IList<Vector2> points, float width, Color color)

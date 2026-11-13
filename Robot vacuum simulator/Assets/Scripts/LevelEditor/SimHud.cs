@@ -130,15 +130,17 @@ namespace RobotVacuum.LevelEditor
 
             // Speed is how many simulated seconds pass per real second. The physics step never changes, so the
             // results are the same at every speed; only the wait differs.
-            var speedSlider = new ValueSlider(MinSpeed, MaxSpeed, speed,
-                v => v < 1f ? $"{v:0.##}×" : $"{Mathf.Round(v):0}×");
+            // Dragging snaps to whole speeds above 1×; a typed value (e.g. 2.5) is used exactly.
+            ValueSlider speedSlider = null;
+            speedSlider = new ValueSlider(MinSpeed, MaxSpeed, speed, v => $"{v:0.##}×", true);
             speedSlider.AddToClassList("le-run-speed");
             speedSlider.ValueChanged += value =>
             {
-                speed = value < 1f ? value : Mathf.Round(value);
+                speed = speedSlider.IsDragging && value >= 1f ? Mathf.Round(value) : value;
+                speedSlider.SetValueWithoutNotify(speed);
                 ApplySpeed();
             };
-            Ui.Tooltip(speedSlider, "Simulation speed, from ¼× to 100× real time");
+            Ui.Tooltip(speedSlider, "Simulation speed, from ¼× to 100× real time. Drag, or type a value and press Enter.");
             bar.Add(speedSlider);
 
             VisualElement settingsButton = null;
@@ -148,19 +150,6 @@ namespace RobotVacuum.LevelEditor
             VisualElement furnitureButton = null;
             furnitureButton = Ui.Button(bar, "Furniture", IconKind.Obstacle, () => ShowFurniture(furnitureButton), "le-btn--ghost");
             Ui.Tooltip(furnitureButton, "Change or remove furniture mid-run. Changes are logged.");
-
-            var movement = new Segmented(MovementBrain.Labels, (int)SimLauncher.MovementPattern);
-            movement.SelectionChanged += index =>
-            {
-                var next = (MovementPattern)index;
-                recorder?.LogParameter("Algorithm", MovementAlgorithms.LabelOf(SimLauncher.MovementPattern), MovementAlgorithms.LabelOf(next));
-                if (recorder != null && SimTime > 0f) recorder.MarkMixedPatterns();
-
-                SimLauncher.MovementPattern = next;
-                if (world?.Robot != null) world.Robot.Pattern = next;
-            };
-            Ui.Tooltip(movement, "Movement algorithm. Switching mid-run is logged, and the run counts as mixed.");
-            bar.Add(movement);
 
             var finish = Ui.Button(bar, "Finish", IconKind.Check, Finish, "le-btn--primary");
             Ui.Tooltip(finish, "End the run and see its analysis");

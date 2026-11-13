@@ -42,11 +42,11 @@ namespace RobotVacuum.Tests
 
                 Vector2[] outline = cat.CollisionShape.GetPath(0);
                 MeshFilter[] visuals = catObject.GetComponentsInChildren<MeshFilter>();
-                Assert.AreEqual(3, visuals.Length);
+                Assert.AreEqual(CatShape.Layers.Count, visuals.Length);
 
                 Mesh silhouette = null;
                 foreach (var visual in visuals)
-                    if (visual.sharedMesh.name == "Cat silhouette") silhouette = visual.sharedMesh;
+                    if (visual.sharedMesh.name == CatShape.SilhouetteLayerName) silhouette = visual.sharedMesh;
                 Assert.IsNotNull(silhouette);
                 Assert.AreEqual(outline.Length, silhouette.vertexCount);
 
