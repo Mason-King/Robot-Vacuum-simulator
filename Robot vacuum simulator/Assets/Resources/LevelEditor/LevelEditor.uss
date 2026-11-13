@@ -2803,3 +2803,25 @@
 .unity-base-dropdown .unity-base-dropdown__checkmark {
     -unity-background-image-tint-color: #5B8DEF;
 }
+
+/* ------------------------------------------------------------ batch setup: algorithm rows */
+
+/* Reuses the settings-panel dropdown look, but spans the dialog instead of a popover. */
+.le-settings-panel.le-batch-algorithms {
+    min-width: 0;
+    max-width: none;
+    margin-bottom: 0;
+}
+
+.le-batch-algorithm-row {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.le-batch-algorithm-row .unity-base-field {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+    margin: 0 6px 0 0;
+}

@@ -47,6 +47,9 @@ namespace RobotVacuum.LevelEditor
     /// <summary>One algorithm's results across a batch's seeds.</summary>
     public sealed class AlgorithmSummary
     {
+        /// <summary>The algorithm's <see cref="RunReport.AlgorithmKey"/>; runs are grouped by it.</summary>
+        public string algorithmId;
+        public string name;
         public MovementPattern pattern;
         public List<RunReport> runs = new List<RunReport>();
         public Summary coverage;
@@ -56,7 +59,7 @@ namespace RobotVacuum.LevelEditor
         public Summary revisits;
         public Summary timeTo90;
 
-        public string Label => MovementAlgorithms.LabelOf(pattern);
+        public string Label => name;
     }
 
     /// <summary>Aggregates batch results: per-algorithm statistics, averaged coverage curves and heatmaps.</summary>
@@ -82,15 +85,16 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Per-algorithm statistics for one batch's runs, best mean coverage first.</summary>
         public static List<AlgorithmSummary> Summarise(IEnumerable<RunReport> runs)
         {
-            var byPattern = new Dictionary<MovementPattern, AlgorithmSummary>();
+            var byAlgorithm = new Dictionary<string, AlgorithmSummary>();
             foreach (var run in runs)
             {
-                if (!byPattern.TryGetValue(run.pattern, out var group))
-                    byPattern[run.pattern] = group = new AlgorithmSummary { pattern = run.pattern };
+                string key = run.AlgorithmKey;
+                if (!byAlgorithm.TryGetValue(key, out var group))
+                    byAlgorithm[key] = group = new AlgorithmSummary { algorithmId = key, name = run.AlgorithmName, pattern = run.pattern };
                 group.runs.Add(run);
             }
 
-            var result = new List<AlgorithmSummary>(byPattern.Values);
+            var result = new List<AlgorithmSummary>(byAlgorithm.Values);
             foreach (var group in result)
             {
                 group.runs.Sort((a, b) => a.seed.CompareTo(b.seed));
