@@ -340,6 +340,7 @@ namespace RobotVacuum.Sim
                 }
             }
 
+            LagLog.EndRun(); // the lag summary, while the run's console_log.txt is still open
             WriteResult(result);
             Result = result;
             StopLog();

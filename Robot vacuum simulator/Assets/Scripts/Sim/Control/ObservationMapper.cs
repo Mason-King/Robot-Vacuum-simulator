@@ -20,7 +20,9 @@ namespace RobotVacuum.Sim.Control
     ///   footprint          → cells under the body can't be obstacles; dwell and cleanliness beliefs grow there
     ///
     /// SLAM off: observations are ASSIGNED, except that a preloaded wall is never cleared (see
-    /// <see cref="InternalModelWriter.MarkPermanent"/>).
+    /// <see cref="InternalModelWriter.MarkPermanent"/>), a lidar ray's clear view skips settled floor, and a lidar hit
+    /// or bump on a settled face (the surface of a wall or furniture the preload placed) is not written (see
+    /// <see cref="InternalModelWriter.BeginSettledFloor"/>).
     /// SLAM on: the lidar scan has already gone into <see cref="LocalSlam"/>'s submaps (design doc, section 19); each
     /// cell that scan changed takes its traversability from the submaps' occupancy probability. Floor ease and vacuum
     /// resistance keep the weighted rule in <see cref="BeliefRules"/>. Each branch tests the SLAM bool, never the
@@ -33,6 +35,25 @@ namespace RobotVacuum.Sim.Control
         readonly float cellSize;
         readonly LocalSlam localSlam;
         readonly GlobalSlam globalSlam;
+
+        // ---- Read-outs (the lag log; reporting only, never read by the simulation) -------------------------
+
+        /// <summary>Where a cell flip between blocked and passable came from.</summary>
+        public enum FlipSource { LidarHit, LidarClear, SlamSync, Redraw, Drag, Bump, Footprint, Count }
+
+        readonly int[] flips = new int[(int)FlipSource.Count];
+
+        /// <summary>Cells flipped between blocked and passable (each flip makes the planner's next path rebuild its clearance field).</summary>
+        public int Flips(FlipSource source) => flips[(int)source];
+
+        /// <summary>Normal: cells a lidar ray passed through that were settled floor, so were skipped.</summary>
+        public long SettledSkips { get; private set; }
+
+        /// <summary>Normal: lidar hits and bumps on a settled face (the known wall or furniture surface), not written.</summary>
+        public int FaceHitsIgnored { get; private set; }
+        public int FaceBumpsIgnored { get; private set; }
+
+        void CountFlips(FlipSource source, int versionBefore) => flips[(int)source] += writer.TopologyVersion - versionBefore;
 
         /// <summary>SLAM: every Internal Model cell drawn from the submaps (so a redraw can clear the ones no longer drawn).</summary>
         HashSet<long> drawn = new HashSet<long>();
@@ -51,15 +72,65 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Applies everything in <paramref name="frame"/>, seen from <paramref name="pose"/>.</summary>
         /// <summary>SLAM: true if the cell is drawn from the submaps, i.e. the lidar has sensed it (free or blocked).</summary>
-        public bool IsDrawn(int row, int col) => drawn.Contains(CellIndex.Pack(row, col));
+        public bool IsDrawn(int row, int col)
+        {
+            int r = row - drawnMapMinRow, c = col - drawnMapMinCol;
+            return r >= 0 && c >= 0 && r < drawnMapRows && c < drawnMapCols && drawnMap[r * drawnMapCols + c];
+        }
+
+        // The same cells as 'drawn', as a dense array (IsDrawn is asked for every cell of the map by the algorithm's
+        // map analysis; a hash lookup per cell was most of its cost). Every change to 'drawn' goes through these.
+        bool[] drawnMap = new bool[0];
+        int drawnMapMinRow, drawnMapMinCol, drawnMapRows, drawnMapCols;
+        const int DrawnMapPad = 32; // cells of room added on each side when the dense array grows
+
+        void MarkDrawn(int row, int col)
+        {
+            drawn.Add(CellIndex.Pack(row, col));
+            int r = row - drawnMapMinRow, c = col - drawnMapMinCol;
+            if (r < 0 || c < 0 || r >= drawnMapRows || c >= drawnMapCols)
+            {
+                GrowDrawnMap(row, col);
+                r = row - drawnMapMinRow;
+                c = col - drawnMapMinCol;
+            }
+            drawnMap[r * drawnMapCols + c] = true;
+        }
+
+        void GrowDrawnMap(int row, int col)
+        {
+            int minRow = drawnMapRows == 0 ? row - DrawnMapPad : Mathf.Min(drawnMapMinRow, row - DrawnMapPad);
+            int minCol = drawnMapCols == 0 ? col - DrawnMapPad : Mathf.Min(drawnMapMinCol, col - DrawnMapPad);
+            int maxRow = drawnMapRows == 0 ? row + DrawnMapPad : Mathf.Max(drawnMapMinRow + drawnMapRows - 1, row + DrawnMapPad);
+            int maxCol = drawnMapCols == 0 ? col + DrawnMapPad : Mathf.Max(drawnMapMinCol + drawnMapCols - 1, col + DrawnMapPad);
+            int rows = maxRow - minRow + 1, cols = maxCol - minCol + 1;
+            var grown = new bool[rows * cols];
+            for (int r = 0; r < drawnMapRows; r++)
+                System.Array.Copy(drawnMap, r * drawnMapCols, grown, (drawnMapMinRow + r - minRow) * cols + (drawnMapMinCol - minCol), drawnMapCols);
+            drawnMap = grown;
+            drawnMapMinRow = minRow;
+            drawnMapMinCol = minCol;
+            drawnMapRows = rows;
+            drawnMapCols = cols;
+        }
+
+        void ClearDrawn()
+        {
+            drawn.Clear();
+            System.Array.Clear(drawnMap, 0, drawnMap.Length);
+        }
 
         public void Apply(SensorFrame frame, RobotPose pose)
         {
             if (frame.hasLidarScan) ApplyLidar(frame, pose);
+            int version = writer.TopologyVersion;
             ApplyDrag(frame, pose);
+            CountFlips(FlipSource.Drag, version);
             sensedResistance = frame.hasVacuumResistance ? frame.vacuumResistance : (float?)null;
             if (frame.hasVacuumResistance) ApplyVacuumResistance(frame, pose);
+            version = writer.TopologyVersion;
             if (frame.bumped) ApplyBump(frame, pose); // last, so a certain 0 is never overwritten by this step's clear views
+            CountFlips(FlipSource.Bump, version);
         }
 
         // ---- Lidar ---------------------------------------------------------------------------------------
@@ -68,7 +139,9 @@ namespace RobotVacuum.Sim.Control
         {
             if (slam)
             {
+                int version = writer.TopologyVersion;
                 SyncFromSubmaps();
+                CountFlips(FlipSource.SlamSync, version);
                 return;
             }
 
@@ -107,8 +180,28 @@ namespace RobotVacuum.Sim.Control
                 bool last = r == r1 && c == c1;
                 float distance = step * metersPerStep;
 
-                if (last && hit) ObserveHit(r, c, distance, maxRange);
-                else ObserveClear(r, c, distance, maxRange);
+                // Normal: settled floor is skipped (its value can only be what the preload wrote), and a hit on a
+                // settled face is the known surface (see InternalModelWriter.BeginSettledFloor).
+                byte settled = writer.SettledState(r, c);
+                int version = writer.TopologyVersion;
+                if (last && hit)
+                {
+                    if (settled == InternalModelWriter.SettledFace) FaceHitsIgnored++;
+                    else
+                    {
+                        ObserveHit(r, c, distance, maxRange);
+                        CountFlips(FlipSource.LidarHit, version);
+                    }
+                }
+                else if (settled == InternalModelWriter.SettledFloor || settled == InternalModelWriter.SettledFace)
+                {
+                    SettledSkips++;
+                }
+                else
+                {
+                    ObserveClear(r, c, distance, maxRange);
+                    CountFlips(FlipSource.LidarClear, version);
+                }
 
                 if (last) return;
 
@@ -157,7 +250,7 @@ namespace RobotVacuum.Sim.Control
                 int gRow = row, gCol = col;
                 if (corrected && !ToGlobalCell(row, col, cos, sin, localOrigin, globalOrigin, out gRow, out gCol)) continue;
                 writer.SetTraversability(gRow, gCol, LocalSlam.Traversability(p, writer.EaseAt(gRow, gCol)));
-                drawn.Add(CellIndex.Pack(gRow, gCol));
+                MarkDrawn(gRow, gCol);
             }
         }
 
@@ -179,6 +272,13 @@ namespace RobotVacuum.Sim.Control
         public void RedrawFromSubmaps()
         {
             if (localSlam == null || globalSlam == null) return;
+            int flipVersion = writer.TopologyVersion;
+            RedrawWindow();
+            CountFlips(FlipSource.Redraw, flipVersion);
+        }
+
+        void RedrawWindow()
+        {
             var submaps = localSlam.Submaps;
             var active = localSlam.ActiveSubmaps;
 
@@ -230,7 +330,7 @@ namespace RobotVacuum.Sim.Control
             }
 
             // 4. Write the window (the writer skips cells already equal) and remember what is drawn.
-            drawn.Clear();
+            ClearDrawn();
             for (int r = 0; r < windowRows; r++)
             {
                 int row = windowMinRow + r;
@@ -240,7 +340,7 @@ namespace RobotVacuum.Sim.Control
                     if (p <= 0f) continue;
                     int col = windowMinCol + c;
                     writer.SetTraversability(row, col, LocalSlam.Traversability(p, writer.EaseAt(row, col)));
-                    drawn.Add(CellIndex.Pack(row, col));
+                    MarkDrawn(row, col);
                 }
             }
         }
@@ -299,7 +399,9 @@ namespace RobotVacuum.Sim.Control
                 int row = (int)(key >> 32), col = (int)key;
                 writer.SetTraversability(row, col, writer.EaseAt(row, col));
             }
-            (drawn, drawing) = (drawing, drawn);
+            // Now drawn = the cells drawn this time (keeping the dense copy in step).
+            ClearDrawn();
+            foreach (long key in drawing) MarkDrawn((int)(key >> 32), (int)key);
         }
 
         void DrawSubmapReference(Submap submap)
@@ -331,6 +433,12 @@ namespace RobotVacuum.Sim.Control
 
             if (writer.Grid.TryWorldToGridIndex(contact, out int row, out int col))
             {
+                // Normal: a bump on a settled face is the known wall or furniture surface (SLAM never has settled cells).
+                if (writer.SettledState(row, col) == InternalModelWriter.SettledFace)
+                {
+                    FaceBumpsIgnored++;
+                    return;
+                }
                 if (slam) localSlam?.MarkCertain(globalSlam != null ? globalSlam.ToLocal(contact) : contact);
                 writer.SetTraversability(row, col, 0f); // certain: set directly in both modes
             }
@@ -392,6 +500,7 @@ namespace RobotVacuum.Sim.Control
             float coverRadiusSq = radius * radius;
             float solid = Mathf.Max(0f, radius - cellSize);
             float solidSq = solid * solid;
+            int flipVersion = writer.TopologyVersion;
 
             for (int row = minRow; row <= maxRow; row++)
             {
@@ -414,6 +523,7 @@ namespace RobotVacuum.Sim.Control
                     writer.AddDwellAndCleanliness(row, col, dt, dt * vacuumPower / resistance);
                 }
             }
+            CountFlips(FlipSource.Footprint, flipVersion);
         }
     }
 }

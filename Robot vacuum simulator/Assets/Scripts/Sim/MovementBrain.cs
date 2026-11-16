@@ -64,6 +64,8 @@ namespace RobotVacuum.Sim
         readonly System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         double msSensing, msPose, msMapping, msLoopClosure, msControl, msAlgorithm;
         float msLongestStep;
+        readonly double[] lagParts = new double[(int)LagLog.Part.Count]; // this step's parts, for the lag log
+        MapAnalysis mapAnalysis; // the algorithm's map analysis, for the lag log's breakdown
 
         string activeAlgorithmId;
         AlgorithmEntry activeEntry;
@@ -85,6 +87,8 @@ namespace RobotVacuum.Sim
         int homeAttempts;
         Vector2 dockPosition;
         float nextBatteryCheckTime;
+        float nextBatteryCheckCharge;   // the next check waits until the charge has fallen to this
+        float lastBatteryCheckCharge;   // the charge at the last check: a higher charge means a recharge
         Battery battery;
         readonly List<Vector2> homePath = new List<Vector2>();
         LegacyPatternDriver legacy;
@@ -250,6 +254,8 @@ namespace RobotVacuum.Sim
             Outcome = RunOutcome.None;
             OutcomeMessage = null;
             nextBatteryCheckTime = 0f;
+            nextBatteryCheckCharge = float.PositiveInfinity;
+            lastBatteryCheckCharge = float.NegativeInfinity; // so the first step checks at once
 
             var level = robot.Level;
             Vector2 anchor = levelRenderer != null && level != null
@@ -269,6 +275,8 @@ namespace RobotVacuum.Sim
             msSensing = msPose = msMapping = msLoopClosure = msControl = msAlgorithm = 0;
             msLongestStep = 0f;
             drift.Clear();
+            LagLog.BeginRun(planner, observations);
+            if (localSlam != null) LagLog.SetSlam(localSlam, globalSlam);
 
             if (!settings.slam && level != null)
                 NormalPreload.Run(writer, level, levelRenderer);
@@ -337,7 +345,8 @@ namespace RobotVacuum.Sim
                 }
                 algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
                     writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
-                    targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log));
+                    targetCleanliness, vacuumPower, drive, mapAnalysis = new MapAnalysis(map), log));
+                LagLog.SetMapAnalysis(mapAnalysis);
             }
             catch (System.Exception exception)
             {
@@ -377,9 +386,16 @@ namespace RobotVacuum.Sim
                 settings.slam ? settings.noiseScale : ControllerSettings.NormalNoiseScale, random);
 
             for (int i = 0; i < sensors.Count; i++)
-                if (sensors[i].Enabled) sensors[i].Sense(context, frame);
+            {
+                if (!sensors[i].Enabled) continue;
+                long sensorStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                sensors[i].Sense(context, frame);
+                if (LagLog.Enabled) LagLog.AddSensorTime(sensors[i], sensorStarted);
+            }
             double stepMs = stopwatch.Elapsed.TotalMilliseconds;
             msSensing += stopwatch.Elapsed.TotalMilliseconds;
+            System.Array.Clear(lagParts, 0, lagParts.Length);
+            lagParts[(int)LagLog.Part.Sensing] = stopwatch.Elapsed.TotalMilliseconds;
 
             // 2. Pose. Normal: the believed pose IS the true pose (no odometry, no noise read).
             //    SLAM: dead reckoning, then local SLAM fits the scan to the current submap and (after the motion
@@ -394,6 +410,7 @@ namespace RobotVacuum.Sim
                 slamLocalPose = localSlam.Track(frame, slamLocalPose, simTime);
                 stepMs += stopwatch.Elapsed.TotalMilliseconds;
                 msPose += stopwatch.Elapsed.TotalMilliseconds;
+                lagParts[(int)LagLog.Part.Track] = stopwatch.Elapsed.TotalMilliseconds;
 
                 // Global SLAM (loop closure): new submaps, the loop search, and a re-solve when due.
                 stopwatch.Restart();
@@ -401,27 +418,40 @@ namespace RobotVacuum.Sim
                 believedPose = globalSlam != null ? globalSlam.ToGlobal(slamLocalPose) : slamLocalPose;
                 stepMs += stopwatch.Elapsed.TotalMilliseconds;
                 msLoopClosure += stopwatch.Elapsed.TotalMilliseconds;
+                if (globalSlam != null)
+                {
+                    lagParts[(int)LagLog.Part.Search] = globalSlam.LastSearchMs;
+                    lagParts[(int)LagLog.Part.Solve] = globalSlam.LastSolveMs;
+                    lagParts[(int)LagLog.Part.LoopOther] = System.Math.Max(0.0,
+                        stopwatch.Elapsed.TotalMilliseconds - globalSlam.LastSearchMs - globalSlam.LastSolveMs);
+                }
             }
             else
             {
                 believedPose = trueAtBelief;
                 stepMs += stopwatch.Elapsed.TotalMilliseconds;
                 msPose += stopwatch.Elapsed.TotalMilliseconds;
+                lagParts[(int)LagLog.Part.Track] = stopwatch.Elapsed.TotalMilliseconds;
             }
             view.SetBelievedPose(believedPose);
 
             // 3 + 4. Observe and believe, placed by the believed pose.
             stopwatch.Restart();
             if (redraw) observations.RedrawFromSubmaps(); // the submaps moved: redraw before this step's updates
+            double redrawMs = stopwatch.Elapsed.TotalMilliseconds;
             observations.Apply(frame, believedPose);
             observations.ApplyFootprint(believedPose, robot.Radius, dt, vacuumPower);
             stepMs += stopwatch.Elapsed.TotalMilliseconds;
             msMapping += stopwatch.Elapsed.TotalMilliseconds;
+            lagParts[(int)LagLog.Part.Redraw] = redrawMs;
+            lagParts[(int)LagLog.Part.Mapping] = stopwatch.Elapsed.TotalMilliseconds - redrawMs;
 
             if (stepMs > msLongestStep) msLongestStep = (float)stepMs;
             if (settings.slam) drift.Add(DriftMeters, DriftHeadingDegrees);
 
             // 5 - 7. Goal, decide, command.
+            double algorithmMsBefore = msAlgorithm;
+            double plannerMsBefore = planner != null ? planner.Milliseconds : 0.0;
             float forward, turn;
             if (startSpinRemaining > 0f)
             {
@@ -465,7 +495,14 @@ namespace RobotVacuum.Sim
                 if (homing != Homing.None) CheckHomeArrival();
                 if (parked) forward = turn = 0f;
                 msControl += stopwatch.Elapsed.TotalMilliseconds;
+                double algorithmMs = msAlgorithm - algorithmMsBefore;
+                lagParts[(int)LagLog.Part.Algorithm] = algorithmMs;
+                lagParts[(int)LagLog.Part.Driver] = System.Math.Max(0.0, stopwatch.Elapsed.TotalMilliseconds - algorithmMs);
             }
+
+            if (LagLog.Enabled)
+                LagLog.Step(simTime, lagParts, planner != null ? planner.Milliseconds - plannerMsBefore : 0.0,
+                    localSlam != null ? localSlam.Submaps.Count : 0);
 
             robot.Command(forward, turn);
         }
@@ -486,10 +523,12 @@ namespace RobotVacuum.Sim
                 Vec2? picked;
                 try
                 {
+                    planner.Caller = PathPlanner.PlanCaller.Algorithm; // lag log only
                     picked = algorithm.NextGoal(map, believedPose.ToApi(), status);
                 }
                 finally
                 {
+                    planner.Caller = PathPlanner.PlanCaller.Driver;
                     msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                 }
                 next = picked.HasValue ? picked.Value.ToUnity() : (Vector2?)null;
@@ -547,19 +586,50 @@ namespace RobotVacuum.Sim
         // ---- The dock ------------------------------------------------------------------------------------------
 
         /// <summary>Low battery: if the charge is down to what the trip home would cost (plus a margin), head home now.</summary>
+        /// <summary>
+        /// Costs the trip home and heads home when the charge is down to the reserve. Planning a route home is the
+        /// expensive part, so it is not done on a clock: after each check, the next waits until the robot has used
+        /// <see cref="ControllerConstants.BatteryCheckSpareFraction"/> of its SPARE charge (charge minus reserve),
+        /// and never comes sooner than <see cref="ControllerConstants.BatteryCheckSeconds"/> after the last.
+        ///
+        /// Why a third is safe: driving d metres costs at least d of charge and can lengthen the trip home by at
+        /// most d, which raises the reserve by at most about 1.9 times the charge spent (the 1.25 reserve factor
+        /// times the 1.5 floor margin, plus the operating drain for the longer trip). After a third of the spare is
+        /// used, the reserve can have grown by at most about two thirds of it, so the robot is still above it. A
+        /// healthy battery is checked rarely (about 20 times over a full charge), a nearly empty one often, and a
+        /// tiny one (a runner sets 6 units) from the first step. Limit: a newly mapped wall (SLAM) can lengthen the
+        /// way home by more than the distance driven.
+        ///
+        /// A charge above the last check's means a recharge (changing capacity mid-run recharges the battery): the
+        /// next step checks at once. Between checks each step costs two comparisons.
+        /// </summary>
         void CheckBattery()
         {
-            if (battery == null || simTime < nextBatteryCheckTime) return;
-            nextBatteryCheckTime = simTime + ControllerConstants.BatteryCheckSeconds;
+            if (battery == null) return;
+            float charge = battery.CurrentCharge;
+            bool recharged = charge > lastBatteryCheckCharge;
+            if (!recharged && (charge > nextBatteryCheckCharge || simTime < nextBatteryCheckTime)) return;
 
-            if (!planner.FindPath(believedPose.position, dockPosition, homePath, out float length)) return; // no way home anyway
+            nextBatteryCheckTime = simTime + ControllerConstants.BatteryCheckSeconds;
+            lastBatteryCheckCharge = charge;
+            nextBatteryCheckCharge = float.PositiveInfinity; // no route home: check again after the minimum gap
+
+            planner.Caller = PathPlanner.PlanCaller.Battery; // lag log only
+            bool found = planner.FindPath(believedPose.position, dockPosition, homePath, out float length);
+            planner.Caller = PathPlanner.PlanCaller.Driver;
+            if (!found) return; // no way home anyway
             float turning = 180f + 90f * Mathf.Max(0, homePath.Count - 2); // turning to set off, and at each corner
             // The trip's time costs too: the battery drains every second the vacuum runs, moving or not.
             float seconds = length / Mathf.Max(0.05f, robot.DriveSpeedMetersPerSecond) + turning / Mathf.Max(1f, robot.TurnSpeedDegreesPerSecond);
             float cost = (length * battery.DistanceEnergyPerMeter + turning * battery.TurnEnergyPerDegree) * ControllerConstants.HomeFloorMargin
                          + seconds * battery.OperatingEnergyPerSecond;
             float reserve = cost * ControllerConstants.HomeReserveFactor + ControllerConstants.HomeReserveExtra;
-            if (battery.CurrentCharge <= reserve) StartHoming(Homing.LowBattery);
+            if (charge <= reserve)
+            {
+                StartHoming(Homing.LowBattery);
+                return;
+            }
+            nextBatteryCheckCharge = charge - (charge - reserve) * ControllerConstants.BatteryCheckSpareFraction;
         }
 
         void StartHoming(Homing why)

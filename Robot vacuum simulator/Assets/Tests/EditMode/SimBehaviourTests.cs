@@ -11,6 +11,11 @@ namespace RobotVacuum.Tests
 {
     public class SimulationSpeedTests
     {
+        /// <summary>
+        /// Unity applies Time.maximumDeltaTime to a frame's REAL time and then multiplies by the time scale, so the cap
+        /// stays at the base real-time value while the simulated catch-up per frame (cap × speed) expands with speed.
+        /// (Edit mode: no governor runs, so the cap is the base.)
+        /// </summary>
         [TestCase(2f)]
         [TestCase(100f)]
         public void Apply_PreservesFixedTimestepAndExpandsFrameCatchupLimit(float speed)
@@ -25,7 +30,9 @@ namespace RobotVacuum.Tests
                 SimulationSpeed.Apply(speed, baseMaximumDeltaTime);
 
                 Assert.AreEqual(speed, Time.timeScale);
-                Assert.AreEqual(baseMaximumDeltaTime * speed, Time.maximumDeltaTime, 1e-5f);
+                Assert.AreEqual(baseMaximumDeltaTime, Time.maximumDeltaTime, 1e-5f, "the cap is real time");
+                Assert.AreEqual(baseMaximumDeltaTime * speed, Time.maximumDeltaTime * Time.timeScale, 1e-3f,
+                    "simulated catch-up per frame expands with speed");
                 Assert.AreEqual(originalFixedDeltaTime, Time.fixedDeltaTime);
             }
             finally

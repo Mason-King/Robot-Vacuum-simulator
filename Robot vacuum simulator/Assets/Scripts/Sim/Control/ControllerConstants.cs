@@ -77,8 +77,15 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public const float SweepSpeedFloor = RobotVacuum.AlgorithmApi.DriveRequests.SweepSpeedFloor;
 
-        /// <summary>How often the trip home is costed against the battery, simulated seconds.</summary>
+        /// <summary>The shortest gap between two costings of the trip home against the battery, simulated seconds.</summary>
         public const float BatteryCheckSeconds = 1f;
+
+        /// <summary>
+        /// The trip home is costed again once the robot has used this much of its spare charge (charge minus the
+        /// homing reserve) since the last costing. A third keeps the robot above the reserve even if the trip home
+        /// grows as fast as driving away can make it (see MovementBrain.CheckBattery).
+        /// </summary>
+        public const float BatteryCheckSpareFraction = 1f / 3f;
 
         /// <summary>The trip home is costed on normal floor times this (the robot doesn't know every floor's energy cost).</summary>
         public const float HomeFloorMargin = 1.5f;

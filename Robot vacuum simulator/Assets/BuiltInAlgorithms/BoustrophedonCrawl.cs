@@ -236,6 +236,7 @@ namespace RobotVacuum.Algorithms
         {
             Vec2 here = pose.position;
             analysis.Update(here);
+            BuildRoomCells();
             if (analysis.IsEmpty) return Finish();
 
             laneAnchor = map.AnchorWorld;
@@ -1185,22 +1186,44 @@ namespace RobotVacuum.Algorithms
             return analysis.Contains(row, col);
         }
 
-        /// <summary>Every cell that belongs to a room, with its room.</summary>
-        void ForCells(Action<int, int, int> visit)
+        // Every room cell, and each room's cells, row by row (the order a scan of the map visits them), listed once
+        // per decision right after analysis.Update: the rooms don't change until the next Update, which only
+        // Choose calls. The scans below then visit exactly the cells, in exactly the order, a full scan of the map
+        // would, without walking the cells outside every room or asking each cell its room again.
+        readonly List<(int row, int col, int label)> roomCells = new List<(int, int, int)>();
+        readonly List<List<(int row, int col)>> cellsByRoom = new List<List<(int, int)>>();
+
+        void BuildRoomCells()
         {
+            roomCells.Clear();
+            for (int i = 0; i < cellsByRoom.Count; i++) cellsByRoom[i].Clear();
             for (int row = analysis.MinRow; row < analysis.MinRow + analysis.Rows; row++)
                 for (int col = analysis.MinCol; col < analysis.MinCol + analysis.Cols; col++)
                 {
                     int label = analysis.RoomOf(row, col);
-                    if (label >= 0) visit(row, col, label);
+                    if (label < 0) continue;
+                    roomCells.Add((row, col, label));
+                    while (cellsByRoom.Count <= label) cellsByRoom.Add(new List<(int, int)>());
+                    cellsByRoom[label].Add((row, col));
                 }
         }
 
-        void ForRoomCells(int room, Action<int, int> visit) =>
-            ForCells((row, col, label) =>
+        /// <summary>Every cell that belongs to a room, with its room.</summary>
+        void ForCells(Action<int, int, int> visit)
+        {
+            for (int i = 0; i < roomCells.Count; i++)
             {
-                if (label == room) visit(row, col);
-            });
+                var cell = roomCells[i];
+                visit(cell.row, cell.col, cell.label);
+            }
+        }
+
+        void ForRoomCells(int room, Action<int, int> visit)
+        {
+            if (room < 0 || room >= cellsByRoom.Count) return;
+            var cells = cellsByRoom[room];
+            for (int i = 0; i < cells.Count; i++) visit(cells[i].row, cells[i].col);
+        }
 
         void EndWithStop()
         {

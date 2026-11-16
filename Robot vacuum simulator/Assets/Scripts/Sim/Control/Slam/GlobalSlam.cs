@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using RobotVacuum.Sim.Sensors;
 using UnityEngine;
 using G = RobotVacuum.Sim.Control.GlobalSlamConstants;
@@ -18,8 +19,15 @@ namespace RobotVacuum.Sim.Control
     ///     links; the first submap, at the dock, fixed), moving submaps as rigid pieces.
     ///
     /// The robot's believed pose is local SLAM's pose carried by the matching submap's correction; the Internal
-    /// Model is redrawn from the submaps at their new poses when they move. Plain C#, no Unity objects; all of it
-    /// within the physics step that triggers it.
+    /// Model is redrawn from the submaps at their new poses when they move. Plain C#, no Unity objects.
+    ///
+    /// BACKGROUND WORK (live submap mode): the search and the solve run on a worker thread. Each is handed copies
+    /// of what it needs when it is due (the scan's points and, per candidate, the finished submap's grid and the
+    /// guess; or the submap poses and links), and its result is applied exactly <see cref="ApplyAfterNodes"/> scans
+    /// later, waiting for the worker only if it is not done by then. A finished submap's grid never changes in live
+    /// mode, so the worker reads it while local SLAM writes the active ones. Results depend only on the scans, never
+    /// on timing, so runs are reproducible; and the same with <see cref="Threaded"/> off (the work then runs at once,
+    /// but is still applied later). Node mode (tests) stays as it was, all within the step.
     /// </summary>
     public sealed class GlobalSlam
     {
@@ -38,10 +46,89 @@ namespace RobotVacuum.Sim.Control
 
         public GlobalSlam(LocalSlam localSlam) => local = localSlam;
 
+        // ---- Background work (live submap mode) ----------------------------------------------------------------
+
+        /// <summary>A search's or solve's result is applied this many scans (graph nodes) after it was started.</summary>
+        public const int ApplyAfterNodes = 3;
+
+        /// <summary>Run searches and solves on a worker thread (true), or at once on the calling thread (false). Results are the same either way.</summary>
+        public bool Threaded { get; set; } = true;
+
+        /// <summary>A search started at <c>dueNode - ApplyAfterNodes</c>: per candidate, the inputs and the match.</summary>
+        sealed class SearchJob
+        {
+            public int dueNode, home;
+            public GraphPose scanInHome;
+            public List<Vector2> points;
+            public int[] submap;
+            public ProbabilityGrid[] grid;
+            public RobotPose[] guess;
+            public bool[] accepted;
+            public RobotPose[] found;
+            public float[] score;
+            public Task work;
+        }
+
+        /// <summary>A solve started at <c>dueNode - ApplyAfterNodes</c>: copies of the submap poses (solved in place) and links.</summary>
+        sealed class SolveJob
+        {
+            public int dueNode;
+            public List<GraphPose> before, solved;
+            public List<GraphLink> links;
+            public Task work;
+        }
+
+        readonly Queue<SearchJob> pendingSearches = new Queue<SearchJob>();
+        SolveJob pendingSolve;
+
+        /// <summary>Real ms the main thread has waited for the worker in total (it waits only when a result is due and not ready).</summary>
+        public double WaitMs { get; private set; }
+
+        Task Run(System.Action work)
+        {
+            if (Threaded) return Task.Run(work);
+            work();
+            return Task.CompletedTask;
+        }
+
+        void Await(Task work)
+        {
+            if (work.IsCompleted)
+            {
+                if (work.IsFaulted) throw work.Exception.InnerException;
+                return;
+            }
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            try { work.Wait(); }
+            catch (System.AggregateException e) { throw e.InnerException; }
+            finally { WaitMs += MsSince(started); }
+        }
+
+        /// <summary>Waits for any background work still running (before a new run reuses the matcher and graph).</summary>
+        void DrainBackgroundWork()
+        {
+            foreach (var job in pendingSearches)
+                try { job.work?.Wait(); } catch (System.AggregateException) { }
+            if (pendingSolve != null)
+                try { pendingSolve.work?.Wait(); } catch (System.AggregateException) { }
+            pendingSearches.Clear();
+            pendingSolve = null;
+        }
+
         // ---- Counts (for result.json) ----
         public int Searches { get; private set; }
         public int LoopLinks { get; private set; }
         public int Optimisations { get; private set; }
+
+        /// <summary>
+        /// Real milliseconds the last <see cref="AfterTrack(SensorFrame)"/> spent in the loop-closure search and in the
+        /// pose-graph solve (0 when it did neither). For the lag log; reporting only, never read by the simulation.
+        /// </summary>
+        public double LastSearchMs { get; private set; }
+        public double LastSolveMs { get; private set; }
+
+        static double MsSince(long started) =>
+            (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         /// <summary>The submaps' global poses, by submap index.</summary>
         public IReadOnlyList<GraphPose> SubmapGlobalPoses => globals;
@@ -64,6 +151,8 @@ namespace RobotVacuum.Sim.Control
 
         public void Begin()
         {
+            DrainBackgroundWork();
+            WaitMs = 0;
             globals.Clear();
             links.Clear();
             poses.Clear();
@@ -86,17 +175,38 @@ namespace RobotVacuum.Sim.Control
         public bool AfterTrack(SensorFrame frame)
         {
             SearchLog.Clear();
+            LastSearchMs = LastSolveMs = 0;
             AddNewSubmaps();
             if (!local.InsertedThisStep) return false;
 
             nodes++;
             nodesSinceSolve++;
-            if (nodes % G.SearchEveryNodes == 0) Search(frame, local.InsertedPose, local.InsertedHome);
 
+            // Results due now, in the order their work was started (a search started with a solve applies first).
+            long searchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            while (pendingSearches.Count > 0 && pendingSearches.Peek().dueNode <= nodes) ApplySearch(pendingSearches.Dequeue());
             bool redraw = false;
-            if (nodesSinceSolve >= G.OptimiseEveryNodes && newLinks)
+            long solveStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (pendingSolve != null && pendingSolve.dueNode <= nodes)
             {
-                redraw = Optimise();
+                redraw = ApplySolve(pendingSolve);
+                pendingSolve = null;
+            }
+            LastSolveMs = MsSince(solveStarted);
+            LastSearchMs = (solveStarted - searchStarted) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+            if (nodes % G.SearchEveryNodes == 0)
+            {
+                searchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                StartSearch(frame, local.InsertedPose, local.InsertedHome);
+                LastSearchMs += MsSince(searchStarted);
+            }
+
+            if (nodesSinceSolve >= G.OptimiseEveryNodes && newLinks && pendingSolve == null)
+            {
+                solveStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                StartSolve();
+                LastSolveMs += MsSince(solveStarted);
                 nodesSinceSolve = 0;
                 newLinks = false;
             }
@@ -194,17 +304,25 @@ namespace RobotVacuum.Sim.Control
         {
             if (!NodeMode) return AfterTrack(frame);
             SearchLog.Clear();
+            LastSearchMs = LastSolveMs = 0;
             AddNewVariables(odometry);
             if (!local.InsertedThisStep) return false;
 
             nodes++;
             nodesSinceSolve++;
-            if (nodes % G.SearchEveryNodes == 0) SearchForNode(frame, nodeVar.Count - 1);
+            if (nodes % G.SearchEveryNodes == 0)
+            {
+                long searchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                SearchForNode(frame, nodeVar.Count - 1);
+                LastSearchMs = MsSince(searchStarted);
+            }
 
             bool redraw = false;
             if (nodesSinceSolve >= G.OptimiseEveryNodes)
             {
+                long solveStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 redraw = OptimiseNodes();
+                LastSolveMs = MsSince(solveStarted);
                 nodesSinceSolve = 0;
             }
             if (local.ActiveSubmaps.Count > 0) referenceSubmap = local.ActiveSubmaps[0].index;
@@ -377,7 +495,12 @@ namespace RobotVacuum.Sim.Control
             }
         }
 
-        void Search(SensorFrame frame, RobotPose scanLocal, int home)
+        /// <summary>
+        /// Starts a loop-closure search for the scan just added (in <paramref name="home"/>'s submap at
+        /// <paramref name="scanLocal"/>): picks the nearest finished submaps and each one's guess now, and hands the
+        /// matching to the worker. Applied by <see cref="ApplySearch"/> <see cref="ApplyAfterNodes"/> scans later.
+        /// </summary>
+        void StartSearch(SensorFrame frame, RobotPose scanLocal, int home)
         {
             CollectPoints(frame);
             if (points.Count < S.MinHits) return;
@@ -401,24 +524,95 @@ namespace RobotVacuum.Sim.Control
             });
 
             int tries = Mathf.Min(G.MaxSubmapsPerSearch, candidates.Count);
+            if (tries == 0) return;
+            var job = new SearchJob
+            {
+                dueNode = nodes + ApplyAfterNodes,
+                home = home,
+                scanInHome = scanInHome,
+                points = new List<Vector2>(points),
+                submap = new int[tries],
+                grid = new ProbabilityGrid[tries],
+                guess = new RobotPose[tries],
+                accepted = new bool[tries],
+                found = new RobotPose[tries],
+                score = new float[tries],
+            };
             for (int t = 0; t < tries; t++)
             {
                 int i = candidates[t];
                 Searches++;
-
+                job.submap[t] = i;
+                job.grid[t] = submaps[i].grid;
                 // The guess, in submap i's grid (local SLAM's frame at the time it was built).
-                var guess = GraphPose.Compose(submaps[i].LocalPose, GraphPose.Relative(globals[i], scanGlobal)).ToRobotPose();
-                bool accepted = matcher.Match(submaps[i].grid, points, guess, out RobotPose found);
-                if (LogSearches) SearchLog.Add((i, home, guess, found, accepted, matcher.LastScore));
-                if (!accepted) continue;
+                job.guess[t] = GraphPose.Compose(submaps[i].LocalPose, GraphPose.Relative(globals[i], scanGlobal)).ToRobotPose();
+            }
+
+            // The worker: only the matcher (its own caches) and the finished grids, which never change.
+            job.work = Run(() =>
+            {
+                for (int t = 0; t < job.submap.Length; t++)
+                {
+                    job.accepted[t] = matcher.Match(job.grid[t], job.points, job.guess[t], out job.found[t]);
+                    job.score[t] = matcher.LastScore;
+                }
+            });
+            pendingSearches.Enqueue(job);
+        }
+
+        void ApplySearch(SearchJob job)
+        {
+            Await(job.work);
+            var submaps = local.Submaps;
+            for (int t = 0; t < job.submap.Length; t++)
+            {
+                int i = job.submap[t];
+                if (LogSearches) SearchLog.Add((i, job.home, job.guess[t], job.found[t], job.accepted[t], job.score[t]));
+                if (!job.accepted[t]) continue;
 
                 // Link submap i to the scan's own submap through the scan: (i → scan) ∘ (home → scan)⁻¹.
-                var iToScan = GraphPose.Relative(submaps[i].LocalPose, GraphPose.From(found));
-                var measured = GraphPose.Compose(iToScan, Inverse(scanInHome));
-                links.Add(new GraphLink(i, home, measured, G.LoopSigmaMeters * LoopSigmaScale, G.LoopSigmaDegrees * LoopSigmaScale, revisit: true));
+                var iToScan = GraphPose.Relative(submaps[i].LocalPose, GraphPose.From(job.found[t]));
+                var measured = GraphPose.Compose(iToScan, Inverse(job.scanInHome));
+                links.Add(new GraphLink(i, job.home, measured, G.LoopSigmaMeters * LoopSigmaScale, G.LoopSigmaDegrees * LoopSigmaScale, revisit: true));
                 LoopLinks++;
                 newLinks = true;
             }
+        }
+
+        /// <summary>Starts a re-solve of the submap graph on copies of the poses and links; applied by <see cref="ApplySolve"/>.</summary>
+        void StartSolve()
+        {
+            Optimisations++;
+            var job = new SolveJob
+            {
+                dueNode = nodes + ApplyAfterNodes,
+                before = new List<GraphPose>(globals),
+                solved = new List<GraphPose>(globals),
+                links = new List<GraphLink>(links),
+            };
+            job.work = Run(() => graph.Optimise(job.solved, job.links));
+            pendingSolve = job;
+        }
+
+        /// <summary>
+        /// Applies a finished solve. Submaps added since it started weren't in it: each is re-placed after its
+        /// predecessor by local SLAM's relative pose, as when it was added. True if the submaps moved enough to redraw.
+        /// </summary>
+        bool ApplySolve(SolveJob job)
+        {
+            Await(job.work);
+            double moved = 0, turned = 0;
+            for (int i = 0; i < job.solved.Count && i < globals.Count; i++)
+            {
+                double dx = job.solved[i].x - job.before[i].x, dy = job.solved[i].y - job.before[i].y;
+                moved = System.Math.Max(moved, System.Math.Sqrt(dx * dx + dy * dy));
+                turned = System.Math.Max(turned, System.Math.Abs(GraphPose.WrapDegrees(job.solved[i].heading - job.before[i].heading)));
+                globals[i] = job.solved[i];
+            }
+            var submaps = local.Submaps;
+            for (int k = job.solved.Count; k < globals.Count; k++)
+                globals[k] = GraphPose.Compose(globals[k - 1], GraphPose.Relative(submaps[k - 1].LocalPose, submaps[k].LocalPose));
+            return moved > G.RedrawMoveMeters || turned > G.RedrawTurnDegrees;
         }
 
         double DistanceSq(int submap, GraphPose p)
@@ -441,22 +635,6 @@ namespace RobotVacuum.Sim.Control
                 if (seen++ % stride != 0) continue;
                 points.Add(RobotPose.DirectionOf(rays[i].bearing) * rays[i].range);
             }
-        }
-
-        bool Optimise()
-        {
-            Optimisations++;
-            var before = new List<GraphPose>(globals);
-            graph.Optimise(globals, links);
-
-            double moved = 0, turned = 0;
-            for (int i = 0; i < globals.Count; i++)
-            {
-                double dx = globals[i].x - before[i].x, dy = globals[i].y - before[i].y;
-                moved = System.Math.Max(moved, System.Math.Sqrt(dx * dx + dy * dy));
-                turned = System.Math.Max(turned, System.Math.Abs(GraphPose.WrapDegrees(globals[i].heading - before[i].heading)));
-            }
-            return moved > G.RedrawMoveMeters || turned > G.RedrawTurnDegrees;
         }
     }
 }

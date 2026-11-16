@@ -175,6 +175,19 @@ namespace RobotVacuum.Sim.Control
         public int TooFewHits { get; private set; }
         public int ScansInserted { get; private set; }
 
+        // ---- Cost read-outs (the lag log; reporting only, never read by the simulation) ----
+
+        /// <summary>Real ms in Track's scan match and in its insert into the submaps, over the run.</summary>
+        public double MatchMs { get; private set; }
+        public double InsertMs { get; private set; }
+
+        /// <summary>Matcher iterations and points matched, summed over the run's matches.</summary>
+        public long MatchIterations { get; private set; }
+        public long MatchPoints { get; private set; }
+
+        static double MsSince(long started) =>
+            (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
         /// <summary>Starts a run at the dock: the one pose known exactly.</summary>
         public void Begin(RobotPose start)
         {
@@ -186,6 +199,8 @@ namespace RobotVacuum.Sim.Control
             lastInserted = start;
             lastInsertedTime = 0f;
             Matches = TooFewHits = ScansInserted = 0;
+            MatchMs = InsertMs = 0;
+            MatchIterations = MatchPoints = 0;
         }
 
         /// <summary>
@@ -211,10 +226,14 @@ namespace RobotVacuum.Sim.Control
                 CollectPoints(frame);
                 if (points.Count >= S.MinHits)
                 {
+                    long matchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     matcher.Weights = PointWeightPower > 0 ? weights : null;
                     pose = matcher.Match(active[0].grid, points, predicted, TranslationWeightOverride > 0f ? TranslationWeightOverride : S.TranslationWeight,
                         RotationWeightOverride > 0f ? RotationWeightOverride : S.RotationWeight);
                     Matches++;
+                    MatchMs += MsSince(matchStarted);
+                    MatchIterations += matcher.LastIterations;
+                    MatchPoints += points.Count;
                 }
                 else
                 {
@@ -226,7 +245,9 @@ namespace RobotVacuum.Sim.Control
             if (!anyInserted || MovedEnough(mapPose, simTime))
             {
                 int home = active.Count > 0 ? active[0].index : 0;
+                long insertStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 Insert(insertFrame ?? frame, mapPose, simTime);
+                InsertMs += MsSince(insertStarted);
                 InsertedThisStep = true;
                 InsertedPose = mapPose;
                 InsertedHome = home;

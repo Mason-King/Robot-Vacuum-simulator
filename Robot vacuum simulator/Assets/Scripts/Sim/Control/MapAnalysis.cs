@@ -32,12 +32,35 @@ namespace RobotVacuum.Sim.Control
 
         public bool Update(Vec2 robot)
         {
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
             bool changed = snapshot.Take(map);
             if (changed) Version++;
+            long taken = System.Diagnostics.Stopwatch.GetTimestamp();
             reach.Build(snapshot, map, robot);
+            long reached = System.Diagnostics.Stopwatch.GetTimestamp();
             rooms.Build(snapshot, map, reach, changed);
+            long done = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            Updates++;
+            if (changed) ChangedUpdates++;
+            SnapshotMs += Ms(started, taken);
+            ReachMs += Ms(taken, reached);
+            RoomsMs += Ms(reached, done);
             return changed;
         }
+
+        // ---- Cost read-outs (the lag log; reporting only, never read by the simulation) ---------------------
+
+        /// <summary>Update calls, and how many found the walls or explored cells changed (redoing the distance transform and doorway search).</summary>
+        public int Updates { get; private set; }
+        public int ChangedUpdates { get; private set; }
+
+        /// <summary>Real ms in Update's three parts: copying the map (and, when changed, its distance transform), the reach flood, the rooms.</summary>
+        public double SnapshotMs { get; private set; }
+        public double ReachMs { get; private set; }
+        public double RoomsMs { get; private set; }
+
+        static double Ms(long from, long to) => (to - from) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         public bool IsEmpty => snapshot.IsEmpty;
         public int MinRow => snapshot.MinRow;
