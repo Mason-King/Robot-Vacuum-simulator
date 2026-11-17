@@ -158,7 +158,8 @@ class Cloud:
                 if entry != ".gitkeep":
                     path = os.path.join(target, entry)
                     shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-            shutil.copytree(build_dir, target, dirs_exist_ok=True)
+            # Unity's *_DoNotShip folders (Burst debug info) don't belong in the image.
+            shutil.copytree(build_dir, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*_DoNotShip"))
         if not any(name.endswith(".x86_64") for name in os.listdir(os.path.join(DOCKER_DIR, "build"))):
             sys.exit("cloud/docker/build has no Linux server build. Build it (Robot Vacuum > Build > Linux Headless Server) "
                      "and pass --build-dir <folder with RobotVacuumServer.x86_64>.")

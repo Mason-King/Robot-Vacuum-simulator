@@ -4,6 +4,7 @@ using System.IO;
 using RobotVacuum.Level;
 using RobotVacuum.LevelEditor;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 
 namespace RobotVacuum.Headless
@@ -84,6 +85,8 @@ namespace RobotVacuum.Headless
                 Reject(new List<string> { $"Shard index {shardIndex} is outside the {shardCount} shard(s) of this job." });
                 return;
             }
+
+            foreach (string note in job.loadNotes) Log(note);
 
             var mine = job.RunsForShard(shardIndex, shardCount);
             Log($"Job \"{job.campaignName}\" ({job.campaignId}) is valid: {job.runs.Count} run(s) in total, {mine.Count} in shard {shardIndex + 1} of {shardCount}.");
@@ -196,7 +199,9 @@ namespace RobotVacuum.Headless
                 configurationIndex = run.configuration,
                 configuration = currentConfig.name,
                 algorithm = run.algorithm,
+                algorithmName = AlgorithmCatalog.NameOf(run.algorithm),
                 seed = run.seed,
+                slam = currentConfig.sensing.slam,
                 endReason = "NotStarted",
                 batteryCapacity = currentConfig.battery.capacity,
                 targetMaxClean = currentConfig.simulation.targetMaxClean,
@@ -205,9 +210,9 @@ namespace RobotVacuum.Headless
 
             try
             {
-                run.TryPattern(out var pattern);
                 currentConfig.simulation.TryHeatmapMode(out var heatmapMode);
-                currentOutcome.algorithm = pattern.ToString();
+                currentConfig.sensing.TryCorrectionQuality(out var correctionQuality);
+                var sensing = currentConfig.sensing;
 
                 // A private copy of the floor plan, coverings resolved by name against the job's palette.
                 var snapshot = LevelSnapshot.Parse(plan.ToJson(false));
@@ -225,7 +230,9 @@ namespace RobotVacuum.Headless
 
                 var settings = new RunSettings
                 {
-                    pattern = pattern,
+                    // The job has already resolved the name to a catalog id; a built-in's pattern follows it (RunSettings.Resolved).
+                    algorithmId = run.algorithm,
+                    pattern = AlgorithmCatalog.PatternOf(run.algorithm) ?? MovementPattern.RandomBounce,
                     randomSeed = false,
                     seed = run.seed,
                     targetMaxClean = currentConfig.simulation.targetMaxClean,
@@ -237,6 +244,17 @@ namespace RobotVacuum.Headless
                     cellSizeMeters = currentConfig.simulation.cellSizeMeters,
                     vacuumPower = currentConfig.vacuum.vacuumPower,
                     maxSimulatedSeconds = currentConfig.simulation.maxSimulatedSeconds,
+                    slam = sensing.slam,
+                    noiseScale = sensing.noiseScale,
+                    lidarEnabled = sensing.lidarEnabled,
+                    lidarRangeMeters = sensing.lidarRangeMeters,
+                    lidarHalfAngleDegrees = sensing.lidarHalfAngleDegrees,
+                    lidarRayCount = sensing.lidarRayCount,
+                    floorSensorEnabled = sensing.floorSensorEnabled,
+                    slamCorrectionQuality = correctionQuality,
+                    slamLoopClosure = sensing.slamLoopClosure,
+                    showBeliefOverlay = false,
+                    logAlgorithmDecisions = currentConfig.simulation.logAlgorithmDecisions,
                 };
 
                 sessionEnded = false;
@@ -248,7 +266,7 @@ namespace RobotVacuum.Headless
 
                 session.Finished += OnSessionFinished;
                 runStartedRealtime = Time.realtimeSinceStartup;
-                Log($"Run {run.runIndex}: {currentOutcome.floorPlan} / {currentConfig.name} / {pattern} / seed {run.seed} started.");
+                Log($"Run {run.runIndex}: {currentOutcome.floorPlan} / {currentConfig.name} / {currentOutcome.algorithmName} / seed {run.seed} started.");
                 return true;
             }
             catch (Exception ex)

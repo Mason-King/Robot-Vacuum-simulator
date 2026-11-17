@@ -19,12 +19,16 @@ namespace RobotVacuum.Sim
             mode == HeatmapMode.FloorCoverage ? dwellSeconds : cleanliness;
 
         /// <summary>The value at the top of a mode's colour range.</summary>
-        public static float Range(HeatmapMode mode, float targetMaxClean) =>
-            mode == HeatmapMode.FloorCleanliness ? targetMaxClean : targetMaxClean * HeatmapDefaults.DwellTargetScalar;
+        public static float Range(HeatmapMode mode, float targetMaxClean) => targetMaxClean * Scalar(mode);
 
         /// <summary>Where 1x target_max_clean sits along a mode's range, 0 to 1.</summary>
-        public static float TargetPosition(HeatmapMode mode) =>
-            mode == HeatmapMode.FloorCleanliness ? 1f : Mathf.Min(1f, 1f / Mathf.Max(HeatmapDefaults.DwellTargetScalar, 1e-6f));
+        public static float TargetPosition(HeatmapMode mode) => Mathf.Min(1f, 1f / Mathf.Max(Scalar(mode), 1e-6f));
+
+        /// <summary>The top of a mode's range as a multiple of target_max_clean.</summary>
+        static float Scalar(HeatmapMode mode) =>
+            mode == HeatmapMode.FloorCleanliness ? 1f
+            : mode == HeatmapMode.FloorOverCoverage ? HeatmapDefaults.OverCoverageTargetScalar
+            : HeatmapDefaults.DwellTargetScalar;
 
         /// <summary>A cell's position along the mode's range, 0 to 1. Values past the top stay at 1.</summary>
         public static float Normalize(HeatmapMode mode, float dwellSeconds, float cleanliness, float targetMaxClean)

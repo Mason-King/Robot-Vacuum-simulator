@@ -1,0 +1,16 @@
+{
+    "name": "RobotVacuum.Algorithms",
+    "rootNamespace": "RobotVacuum.Algorithms",
+    "references": [
+        "RobotVacuum.AlgorithmApi"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

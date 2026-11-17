@@ -2,6 +2,7 @@ using System;
 using NUnit.Framework;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using RobotVacuumSim.EnvironmentModel;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -41,15 +42,15 @@ namespace RobotVacuum.Tests
         }
     }
 
-    public class MovementBrainTests
+    public class LegacyPatternBrainTests
     {
-        sealed class ThrowingBrain : MovementBrain
+        sealed class ThrowingBrain : LegacyPatternBrain
         {
             public override float Steer(VacuumRobot robot, float dt) => throw new InvalidOperationException("brain failed");
             public override Manoeuvre AfterBump(VacuumRobot robot) => throw new InvalidOperationException("brain failed");
         }
 
-        sealed class InvalidBrain : MovementBrain
+        sealed class InvalidBrain : LegacyPatternBrain
         {
             public override float Steer(VacuumRobot robot, float dt) => float.NaN;
             public override Manoeuvre AfterBump(VacuumRobot robot) => new Manoeuvre(0f, -1f);
@@ -69,22 +70,20 @@ namespace RobotVacuum.Tests
         public void TearDown() => Object.DestroyImmediate(host);
 
         [Test]
-        public void AtLeastFourAlgorithms_EachWithABrainAndALabel()
+        public void AtLeastFourAlgorithms_EachWithALabel_RandomIsAGoalPicker_TheRestAreLegacyBrains()
         {
             var patterns = (MovementPattern[])Enum.GetValues(typeof(MovementPattern));
-
-            // MovementBrain.Create now requires a RandomProvider (brains share one
-            // per run rather than each owning a private Rng) -- any instance works
-            // here, since this test only checks which subclass comes back, not
-            // anything about the random sequence itself.
             var randomSource = new RandomProvider(0);
 
             Assert.GreaterOrEqual(patterns.Length, 4);
             Assert.AreEqual(patterns.Length, MovementBrain.Labels.Length);
-            Assert.IsInstanceOf<RandomBounceBrain>(MovementBrain.Create(MovementPattern.RandomBounce, randomSource));
-            Assert.IsInstanceOf<SpiralBrain>(MovementBrain.Create(MovementPattern.Spiral, randomSource));
-            Assert.IsInstanceOf<WallFollowBrain>(MovementBrain.Create(MovementPattern.WallFollow, randomSource));
-            Assert.IsInstanceOf<LawnmowerBrain>(MovementBrain.Create(MovementPattern.Lawnmower, randomSource));
+
+            Assert.IsInstanceOf<RandomBounceAlgorithm>(AlgorithmCatalog.CreateGoalAlgorithm(MovementPattern.RandomBounce));
+            Assert.IsNull(LegacyPatternBrain.Create(MovementPattern.RandomBounce, randomSource));
+
+            Assert.IsInstanceOf<SpiralBrain>(LegacyPatternBrain.Create(MovementPattern.Spiral, randomSource));
+            Assert.IsInstanceOf<WallFollowBrain>(LegacyPatternBrain.Create(MovementPattern.WallFollow, randomSource));
+            Assert.IsInstanceOf<LawnmowerBrain>(LegacyPatternBrain.Create(MovementPattern.Lawnmower, randomSource));
         }
 
         [Test]
@@ -100,9 +99,9 @@ namespace RobotVacuum.Tests
         {
             var brain = new ThrowingBrain();
 
-            Assert.IsFalse(MovementBrainExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
+            Assert.IsFalse(LegacyPatternExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
             Assert.That(steeringFailure, Does.Contain("brain failed"));
-            Assert.IsFalse(MovementBrainExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
+            Assert.IsFalse(LegacyPatternExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
             Assert.That(bumpFailure, Does.Contain("brain failed"));
         }
 
@@ -111,16 +110,16 @@ namespace RobotVacuum.Tests
         {
             var brain = new InvalidBrain();
 
-            Assert.IsFalse(MovementBrainExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
+            Assert.IsFalse(LegacyPatternExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
             Assert.That(steeringFailure, Does.Contain("Invalid steering"));
-            Assert.IsFalse(MovementBrainExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
+            Assert.IsFalse(LegacyPatternExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
             Assert.That(bumpFailure, Does.Contain("Invalid manoeuvre"));
         }
 
         [Test]
-        public void RandomBounce_TurnsWithinTheRobotsRange()
+        public void Spiral_TurnsWithinTheRobotsRange_AfterABump()
         {
-            var brain = new RandomBounceBrain();
+            var brain = new SpiralBrain();
             brain.AssignRandomSource(new RandomProvider(1u));
 
             for (int i = 0; i < 25; i++)

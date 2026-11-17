@@ -12,8 +12,13 @@ import os
 import pathlib
 import webbrowser
 
-ALGORITHM_ORDER = ["RandomBounce", "Spiral", "WallFollow", "Lawnmower"]
-ALGORITHM_LABELS = {"RandomBounce": "Random bounce", "Spiral": "Spiral", "WallFollow": "Wall follow", "Lawnmower": "Lawnmower"}
+# The built-ins, in catalog order; each keeps its colour slot (1-6) in every report. Custom algorithms share 7-8.
+ALGORITHM_ORDER = ["RandomBounce", "BoustrophedonSweep", "BoustrophedonCrawl", "Legacy.Spiral", "Legacy.WallFollow", "Legacy.Lawnmower"]
+# Results from builds before algorithm ids used the bare pattern names.
+LEGACY_IDS = {"Spiral": "Legacy.Spiral", "WallFollow": "Legacy.WallFollow", "Lawnmower": "Legacy.Lawnmower"}
+ALGORITHM_LABELS = {"RandomBounce": "Random bounce", "BoustrophedonSweep": "Boustrophedon sweep",
+                    "BoustrophedonCrawl": "Boustrophedon crawl", "Legacy.Spiral": "Spiral", "Legacy.WallFollow": "Wall follow",
+                    "Legacy.Lawnmower": "Lawnmower"}
 HEATMAP = "heatmap_floor_cleanliness.png"
 
 
@@ -22,15 +27,25 @@ def esc(value):
 
 
 def label_of(algorithm):
+    algorithm = LEGACY_IDS.get(algorithm, algorithm)
     return ALGORITHM_LABELS.get(algorithm, str(algorithm))
+
+
+def learn_labels(runs):
+    """Custom algorithms are labelled with the display name the node recorded (runs[].algorithmName)."""
+    for run in runs or []:
+        algorithm, name = run.get("algorithm"), run.get("algorithmName")
+        if algorithm and name and algorithm not in ALGORITHM_LABELS:
+            ALGORITHM_LABELS[algorithm] = name
 
 
 def slot_of(algorithm):
     """Colour follows the algorithm, never its rank: the same algorithm is the same colour in every chart."""
+    algorithm = LEGACY_IDS.get(algorithm, algorithm)
     try:
         return ALGORITHM_ORDER.index(algorithm) + 1
     except ValueError:
-        return 5 + (sum(map(ord, str(algorithm))) % 4)
+        return 7 + (sum(map(ord, str(algorithm))) % 2)
 
 
 def num(value):
@@ -432,6 +447,7 @@ def build_html(results, job=None, base_dir="."):
     reps = representative_runs(results)
     shards = shard_count(results, job)
     runs = results.get("runs", [])
+    learn_labels(runs)
 
     best = None
     for g in results.get("groups", []):

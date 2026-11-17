@@ -4,6 +4,7 @@ using System.IO;
 using RobotVacuum.Level;
 using RobotVacuum.LevelEditor;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 
 namespace RobotVacuum.Headless
@@ -48,6 +49,21 @@ namespace RobotVacuum.Headless
 
         public ExecutionSpec execution = new ExecutionSpec();
 
+        /// <summary>
+        /// Cleaning algorithms carried in the job as C# source (requirement 3.8). Each file is written into a copy of the
+        /// simulator's Algorithms folder at its <see cref="AlgorithmSourceFile.path"/> (so a subfolder is one algorithm
+        /// project, as on the desktop), and that copy is scanned before the runs are checked. Empty = the algorithms
+        /// that shipped with the build only.
+        /// </summary>
+        public List<AlgorithmSourceFile> algorithmSources = new List<AlgorithmSourceFile>();
+
+        /// <summary>Notes from loading the job (algorithm load report, replaced files) for the log. Not part of the file.</summary>
+        [NonSerialized] public List<string> loadNotes = new List<string>();
+
+        public const int MaxAlgorithmFiles = 64;
+        public const int MaxAlgorithmFileBytes = 1024 * 1024;
+        public const int MaxAlgorithmTotalBytes = 4 * 1024 * 1024;
+
         // ---------------------------------------------------------------- reading
 
         public static HeadlessJob Load(string path, out List<string> errors)
@@ -90,6 +106,7 @@ namespace RobotVacuum.Headless
 
             job.Normalise();
             errors = job.Validate();
+            if (errors.Count == 0) job.LoadAlgorithms(errors);
             return errors.Count == 0 ? job : null;
         }
 
@@ -107,6 +124,8 @@ namespace RobotVacuum.Headless
             sweep ??= new SweepSpec();
             runs ??= new List<RunSpec>();
             execution ??= new ExecutionSpec();
+            algorithmSources ??= new List<AlgorithmSourceFile>();
+            loadNotes ??= new List<string>();
 
             if (configurations.Count == 0) configurations.Add(new RunConfiguration());
             for (int i = 0; i < configurations.Count; i++)
@@ -116,6 +135,7 @@ namespace RobotVacuum.Headless
                 config.vacuum ??= new VacuumSpec();
                 config.battery ??= new BatterySpec();
                 config.simulation ??= new SimulationSpec();
+                config.sensing ??= new SensingSpec();
                 config.floorEfforts ??= new List<SimConfig.FloorEffort>();
             }
 
@@ -138,7 +158,7 @@ namespace RobotVacuum.Headless
 
             var algorithms = sweep.algorithms != null && sweep.algorithms.Count > 0
                 ? sweep.algorithms
-                : new List<string> { MovementPattern.RandomBounce.ToString() };
+                : new List<string> { AlgorithmCatalog.RandomBounceId };
 
             var seeds = new List<int>();
             if (sweep.seeds != null && sweep.seeds.Count > 0) seeds.AddRange(sweep.seeds);
@@ -258,6 +278,14 @@ namespace RobotVacuum.Headless
                 if (!c.simulation.TryHeatmapMode(out _))
                     errors.Add($"{at}.simulation.heatmapMode: \"{c.simulation.heatmapMode}\" is not one of FloorCleanliness, FloorCoverage, FloorOverCoverage.");
 
+                Range(errors, $"{at}.sensing.noiseScale", c.sensing.noiseScale, 0f, RunSettings.MaxNoiseScale);
+                Range(errors, $"{at}.sensing.lidarRangeMeters", c.sensing.lidarRangeMeters, Sim.Sensors.LidarSensor.MinRangeMeters, SensingSpec.MaxLidarRangeMeters);
+                Range(errors, $"{at}.sensing.lidarHalfAngleDegrees", c.sensing.lidarHalfAngleDegrees, 0f, 180f);
+                if (c.sensing.lidarRayCount < Sim.Sensors.LidarRayLayout.MinRays || c.sensing.lidarRayCount > Sim.Sensors.LidarRayLayout.MaxRays)
+                    errors.Add($"{at}.sensing.lidarRayCount = {c.sensing.lidarRayCount} is outside {Sim.Sensors.LidarRayLayout.MinRays}-{Sim.Sensors.LidarRayLayout.MaxRays}.");
+                if (!c.sensing.TryCorrectionQuality(out _))
+                    errors.Add($"{at}.sensing.slamCorrectionQuality: \"{c.sensing.slamCorrectionQuality}\" is not one of {string.Join(", ", Enum.GetNames(typeof(PoseCorrectionQuality)))}.");
+
                 foreach (var effort in c.floorEfforts)
                 {
                     if (effort == null || string.IsNullOrWhiteSpace(effort.floor)) { errors.Add($"{at}.floorEfforts: every entry needs a floor name."); continue; }
@@ -281,7 +309,7 @@ namespace RobotVacuum.Headless
                 if (run.runIndex < 0) errors.Add($"runs: runIndex {run.runIndex} is negative.");
                 if (run.floorPlan < 0 || run.floorPlan >= floorPlans.Count) errors.Add($"run {run.runIndex}: floorPlan {run.floorPlan} is out of range.");
                 if (run.configuration < 0 || run.configuration >= configurations.Count) errors.Add($"run {run.runIndex}: configuration {run.configuration} is out of range.");
-                if (!run.TryPattern(out _)) errors.Add($"run {run.runIndex}: unknown algorithm \"{run.algorithm}\". Known: {string.Join(", ", Enum.GetNames(typeof(MovementPattern)))}.");
+                if (string.IsNullOrWhiteSpace(run.algorithm)) errors.Add($"run {run.runIndex}: needs an algorithm.");
             }
 
             // Execution
@@ -289,7 +317,148 @@ namespace RobotVacuum.Headless
             if (execution.reportEveryNRuns < 1) errors.Add("execution.reportEveryNRuns must be at least 1.");
             if (execution.maxRealSecondsPerRun < 0f) errors.Add("execution.maxRealSecondsPerRun can't be negative (0 = no limit).");
 
+            errors.AddRange(ValidateAlgorithmSources());
             return errors;
+        }
+
+        // ---------------------------------------------------------------- algorithms (2.3, 3.8, 4.8)
+
+        /// <summary>Checks the carried source files before anything is written to disk: relative .cs paths, sizes.</summary>
+        List<string> ValidateAlgorithmSources()
+        {
+            var errors = new List<string>();
+            if (algorithmSources.Count > MaxAlgorithmFiles)
+                errors.Add($"algorithmSources: {algorithmSources.Count} files is more than the {MaxAlgorithmFiles} allowed.");
+
+            long total = 0;
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < algorithmSources.Count; i++)
+            {
+                var file = algorithmSources[i];
+                string at = $"algorithmSources[{i}]";
+                if (file == null || string.IsNullOrWhiteSpace(file.path)) { errors.Add($"{at}: needs a path."); continue; }
+
+                string path = AlgorithmSourceFile.NormalisePath(file.path);
+                at = $"algorithmSources[{i}] \"{file.path}\"";
+                string[] parts = path.Split('/');
+                if (Path.IsPathRooted(file.path) || file.path.Contains(":") || Array.Exists(parts, p => p.Length == 0 || p == "." || p == ".."))
+                    errors.Add($"{at}: must be a plain relative path inside the Algorithms folder (no drive, leading slash or '..').");
+                else if (!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    errors.Add($"{at}: only C# source files (.cs) can be carried in a job.");
+                else if (Array.Exists(parts, p => p.StartsWith("_") || p.StartsWith(".")))
+                    errors.Add($"{at}: names starting with '_' or '.' are skipped by the loader, so this file would never be used.");
+                else if (path.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+                    errors.Add($"{at}: the path has characters that can't be used in a file name.");
+                if (!paths.Add(path)) errors.Add($"{at}: the same path is given twice.");
+
+                int bytes = System.Text.Encoding.UTF8.GetByteCount(file.source ?? string.Empty);
+                if (bytes == 0) errors.Add($"{at}: the source is empty.");
+                if (bytes > MaxAlgorithmFileBytes) errors.Add($"{at}: {bytes} bytes is more than the {MaxAlgorithmFileBytes} allowed per file.");
+                total += bytes;
+            }
+            if (total > MaxAlgorithmTotalBytes)
+                errors.Add($"algorithmSources: {total} bytes in all is more than the {MaxAlgorithmTotalBytes} allowed.");
+            return errors;
+        }
+
+        /// <summary>
+        /// Makes the algorithm catalog match this job, then checks every run's algorithm against it. With no carried
+        /// sources the shipped Algorithms folder is scanned as usual. With sources, a copy of the shipped folder plus the
+        /// job's files is written to a fresh temporary folder and scanned instead, so a job never changes the installed
+        /// simulator's own Algorithms folder. A carried file that fails to compile rejects the job, since every run that
+        /// uses it would fail. Each run's algorithm is rewritten to its catalog id (so "spiral" is recorded as
+        /// "Legacy.Spiral"), and a SLAM configuration paired with an algorithm that can't do SLAM is rejected.
+        /// </summary>
+        void LoadAlgorithms(List<string> errors)
+        {
+            AlgorithmLoadReport report;
+            if (algorithmSources.Count > 0)
+            {
+                string folder = Path.Combine(Path.GetTempPath(), "robot-vacuum-algorithms", Guid.NewGuid().ToString("N"));
+                WriteAlgorithmFolder(folder);
+                report = AlgorithmCatalog.RescanFolder(folder);
+            }
+            else
+            {
+                report = AlgorithmCatalog.LastReport;
+            }
+
+            if (report != null)
+            {
+                if (report.refused) { errors.Add($"Algorithms could not be loaded: {report.refusedReason}"); return; }
+                loadNotes.Add(report.Text());
+
+                var carriedUnits = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var file in algorithmSources) carriedUnits.Add(AlgorithmSourceFile.NormalisePath(file.path).Split('/')[0]);
+                foreach (var unit in report.units)
+                    if (unit != null && unit.errors.Count > 0 && carriedUnits.Contains(AlgorithmSourceFile.NormalisePath(unit.name).Split('/')[0]))
+                        foreach (string error in unit.errors) errors.Add($"algorithmSources: {error}");
+            }
+            if (errors.Count > 0) return;
+
+            var reported = new HashSet<string>();
+            foreach (var run in runs)
+            {
+                string id = ResolveAlgorithmId(run.algorithm);
+                if (id == null)
+                {
+                    if (reported.Add("?" + run.algorithm))
+                    {
+                        var known = new List<string>();
+                        foreach (var entry in AlgorithmCatalog.Entries) known.Add(entry.Id);
+                        errors.Add($"run {run.runIndex}: unknown algorithm \"{run.algorithm}\". Known: {string.Join(", ", known)} (Spiral, WallFollow and Lawnmower also work).");
+                    }
+                    continue;
+                }
+                run.algorithm = id;
+
+                var config = configurations[run.configuration];
+                string refusal = AlgorithmCatalog.Refusal(id, config.sensing.slam);
+                if (refusal != null && reported.Add(config.name + "|" + id))
+                    errors.Add($"run {run.runIndex} (configuration \"{config.name}\"): {refusal}");
+            }
+        }
+
+        void WriteAlgorithmFolder(string folder)
+        {
+            string shipped = AlgorithmLoader.DefaultFolder;
+            if (Directory.Exists(shipped)) CopyFolder(shipped, folder);
+            Directory.CreateDirectory(folder);
+
+            foreach (var file in algorithmSources)
+            {
+                string relative = AlgorithmSourceFile.NormalisePath(file.path);
+                string target = Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(target)) loadNotes.Add($"algorithmSources: \"{relative}\" replaces the file of the same name that shipped with this build.");
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                File.WriteAllText(target, file.source, new System.Text.UTF8Encoding(false));
+            }
+        }
+
+        static void CopyFolder(string from, string to)
+        {
+            Directory.CreateDirectory(to);
+            foreach (string file in Directory.GetFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)), true);
+            foreach (string directory in Directory.GetDirectories(from)) CopyFolder(directory, Path.Combine(to, Path.GetFileName(directory)));
+        }
+
+        /// <summary>
+        /// The catalog id an algorithm name stands for, or null: a catalog id ("BoustrophedonSweep", "Legacy.Spiral",
+        /// a plugin's "Namespace.Class"), an old pattern name ("Spiral", "WallFollow", "Lawnmower"), or a display name
+        /// ("Boustrophedon Sweep"). Case doesn't matter.
+        /// </summary>
+        public static string ResolveAlgorithmId(string name)
+        {
+            name = name?.Trim();
+            if (string.IsNullOrEmpty(name)) return null;
+            var entries = AlgorithmCatalog.Entries;
+            foreach (var entry in entries)
+                if (string.Equals(entry.Id, name, StringComparison.OrdinalIgnoreCase)) return entry.Id;
+            if (!int.TryParse(name, out _) && Enum.TryParse(name, true, out MovementPattern pattern) && MovementAlgorithms.IsDefined(pattern))
+                return AlgorithmCatalog.IdOf(pattern);
+            foreach (var entry in entries)
+                if (string.Equals(entry.Name, name, StringComparison.OrdinalIgnoreCase)) return entry.Id;
+            return null;
         }
 
         static void Range(List<string> errors, string field, float value, float min, float max)
@@ -405,6 +574,7 @@ namespace RobotVacuum.Headless
         public VacuumSpec vacuum = new VacuumSpec();
         public BatterySpec battery = new BatterySpec();
         public SimulationSpec simulation = new SimulationSpec();
+        public SensingSpec sensing = new SensingSpec();
 
         /// <summary>Cleaning effort overrides by covering name, as the GUI's Configuration screen sets them (1.7.8).</summary>
         public List<SimConfig.FloorEffort> floorEfforts = new List<SimConfig.FloorEffort>();
@@ -458,16 +628,69 @@ namespace RobotVacuum.Headless
 
         public string heatmapMode = nameof(HeatmapMode.FloorCleanliness);
 
+        /// <summary>Write the algorithm's decisions to the log. Off by default here: it is very chatty, and the log goes to CloudWatch.</summary>
+        public bool logAlgorithmDecisions;
+
         public bool TryHeatmapMode(out HeatmapMode mode) =>
             Enum.TryParse(string.IsNullOrWhiteSpace(heatmapMode) ? nameof(HeatmapMode.FloorCleanliness) : heatmapMode.Trim(), true, out mode)
             && Enum.IsDefined(typeof(HeatmapMode), mode);
+    }
+
+    /// <summary>
+    /// What the robot senses with, and whether it must build its own map (SLAM). Same fields and defaults as the GUI's
+    /// run settings (<see cref="RunSettings"/>, Sensing and Advanced). Normal (slam = false): the map is preloaded and
+    /// readings are exact.
+    /// </summary>
+    [Serializable]
+    public sealed class SensingSpec
+    {
+        public const float MaxLidarRangeMeters = 50f;
+
+        public bool slam;
+
+        /// <summary>SLAM only: 0 = perfect sensors, 1 = a realistic budget robot, up to 10.</summary>
+        public float noiseScale = 1f;
+
+        public bool lidarEnabled = true;
+        public float lidarRangeMeters = Sim.Sensors.LidarSensor.DefaultRangeMeters;
+
+        /// <summary>Half the lidar's field of view, from straight ahead: 180 = full circle, 0 = no rays.</summary>
+        public float lidarHalfAngleDegrees = 180f;
+
+        public int lidarRayCount = 360;
+        public bool floorSensorEnabled = true;
+
+        /// <summary>SLAM only: Performance, Balanced or Reliable.</summary>
+        public string slamCorrectionQuality = nameof(PoseCorrectionQuality.Balanced);
+
+        /// <summary>SLAM only.</summary>
+        public bool slamLoopClosure = true;
+
+        public bool TryCorrectionQuality(out PoseCorrectionQuality quality)
+        {
+            string text = string.IsNullOrWhiteSpace(slamCorrectionQuality) ? nameof(PoseCorrectionQuality.Balanced) : slamCorrectionQuality.Trim();
+            quality = PoseCorrectionQuality.Balanced;
+            return !int.TryParse(text, out _) && Enum.TryParse(text, true, out quality) && Enum.IsDefined(typeof(PoseCorrectionQuality), quality);
+        }
+    }
+
+    /// <summary>One C# source file of a carried algorithm (see <see cref="HeadlessJob.algorithmSources"/>).</summary>
+    [Serializable]
+    public sealed class AlgorithmSourceFile
+    {
+        /// <summary>Relative to the Algorithms folder, '/'-separated: "MyAlgo.cs", or "MyProject/Helpers.cs" for a multi-file project.</summary>
+        public string path;
+
+        public string source;
+
+        public static string NormalisePath(string path) => (path ?? string.Empty).Trim().Replace('\\', '/');
     }
 
     /// <summary>A parameter sweep: every floor plan x configuration x algorithm x seed (4.5).</summary>
     [Serializable]
     public sealed class SweepSpec
     {
-        /// <summary>Algorithm names (RandomBounce, Spiral, WallFollow, Lawnmower). Empty = RandomBounce.</summary>
+        /// <summary>Algorithm ids or names (see <see cref="HeadlessJob.ResolveAlgorithmId"/>). Empty = RandomBounce.</summary>
         public List<string> algorithms = new List<string>();
 
         /// <summary>Seeds seedStart, seedStart+1, ... seedCount of them. Ignored when <see cref="seeds"/> is given.</summary>
@@ -491,11 +714,9 @@ namespace RobotVacuum.Headless
         public int runIndex;
         public int floorPlan;
         public int configuration;
-        public string algorithm = nameof(MovementPattern.RandomBounce);
+        /// <summary>The algorithm's catalog id once the job is loaded (any accepted name is rewritten to it).</summary>
+        public string algorithm = AlgorithmCatalog.RandomBounceId;
         public int seed;
-
-        public bool TryPattern(out MovementPattern pattern) =>
-            Enum.TryParse(algorithm?.Trim() ?? string.Empty, true, out pattern) && MovementAlgorithms.IsDefined(pattern);
     }
 
     /// <summary>How a node carries the job out.</summary>

@@ -493,7 +493,9 @@ namespace RobotVacuumSim.EnvironmentModel
         // as half clean, anything at or past the target counts as fully
         // clean and no more, so overshooting one cell cannot make up for
         // missing another. Non-cleanable cells (under blocking furniture)
-        // are excluded from numerator and denominator.
+        // and cells outside every room (the grid is the level's bounding
+        // box, so ~40% of it can be outside the rooms) are excluded from
+        // numerator and denominator.
         //
         // INFERENCE, not confirmed: this exact formula is Claude's reading
         // of "coverage against the target". CalculateFullyCleanedPercent()
@@ -537,6 +539,19 @@ namespace RobotVacuumSim.EnvironmentModel
         }
 
         // ------------------------------------------------------------------
+        // True when the cell's centre lies outside every room (for the saved
+        // data; coverage reads the cells' isOffFloor, set when the grid is
+        // populated from the level).
+        // ------------------------------------------------------------------
+        private bool OutsideRoomsAt(int row, int col)
+        {
+            if (level == null) return false;
+            Vector2 world = GridIndexToWorldCenter(row, col);
+            Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
+            return level.RoomIndexAt(point) < 0;
+        }
+
+        // ------------------------------------------------------------------
         // Copies the grid into a plain saveable object (see
         // ExternalModelData). Also records which cells lie outside every
         // room, so a picture drawn from the data alone can leave them clear.
@@ -569,12 +584,7 @@ namespace RobotVacuumSim.EnvironmentModel
                     data.cleanliness[index] = cell.Cleanliness;
                     data.nonCleanable[index] = cell.isNonCleanable;
 
-                    if (level != null)
-                    {
-                        Vector2 world = GridIndexToWorldCenter(row, col);
-                        Vector2 point = levelRenderer != null ? levelRenderer.WorldToLevel(world) : world;
-                        data.outsideRooms[index] = level.RoomIndexAt(point) < 0;
-                    }
+                    data.outsideRooms[index] = OutsideRoomsAt(row, col);
                 }
             }
 

@@ -23,7 +23,10 @@ class ReportTests(unittest.TestCase):
 
     def test_algorithm_colour_is_fixed(self):
         self.assertEqual(report.slot_of("RandomBounce"), 1)
-        self.assertEqual(report.slot_of("Lawnmower"), 4)
+        self.assertEqual(report.slot_of("BoustrophedonSweep"), 2)
+        self.assertEqual(report.slot_of("Legacy.Lawnmower"), 6)
+        self.assertEqual(report.slot_of("Lawnmower"), 6, "results from older builds keep the same colour")
+        self.assertIn(report.slot_of("Mine.Custom"), (7, 8), "custom algorithms never take a built-in's colour")
 
 
 if __name__ == "__main__":

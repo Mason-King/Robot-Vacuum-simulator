@@ -13,6 +13,7 @@ namespace RobotVacuum.Sim
     /// <item>Three PNGs, one per <see cref="HeatmapMode"/>: export-only, for analysis outside the program.</item>
     /// <item><c>result.json</c>: the numbers (<see cref="RunResult"/>). Its existence is what marks a run as finished.</item>
     /// <item><c>config.json</c>: the run's inputs (<see cref="RunConfig"/>), written when the run starts.</item>
+    /// <item><c>console_log.txt</c>: everything the Console received during the run (<see cref="RunLog"/>).</item>
     /// </list>
     /// Every run writes through <see cref="Write"/>, whatever started it, so all run folders look the same
     /// to anything reading them.

@@ -1,0 +1,5 @@
+<!-- Keep everything in the algorithm API assembly in player builds, even if the simulator itself never calls it:
+     algorithms compiled at runtime from the Algorithms folder use the whole API, and code stripping cannot see them. -->
+<linker>
+  <assembly fullname="RobotVacuum.AlgorithmApi" preserve="all"/>
+</linker>

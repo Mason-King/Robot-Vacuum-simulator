@@ -16,7 +16,7 @@ namespace RobotVacuum.Tests
             Assert.GreaterOrEqual(MovementAlgorithms.Count, 4, "at least four algorithms (1.6.1)");
             Assert.AreEqual("Random", MovementAlgorithms.LabelOf(MovementPattern.RandomBounce));
             Assert.AreEqual("Lawnmower", MovementAlgorithms.LabelOf(MovementPattern.Lawnmower));
-            Assert.IsInstanceOf<IMovementAlgorithm>(MovementAlgorithms.Create(MovementPattern.WallFollow));
+            Assert.IsInstanceOf<WallFollowBrain>(LegacyPatternBrain.Create(MovementPattern.WallFollow, new RandomProvider(1u)));
         }
 
         [Test]
@@ -26,7 +26,7 @@ namespace RobotVacuum.Tests
 
             Assert.IsFalse(MovementAlgorithms.IsDefined(unknown));
             StringAssert.Contains("999", MovementAlgorithms.LabelOf(unknown));
-            Assert.IsInstanceOf<RandomBounceBrain>(MovementAlgorithms.Create(unknown));
+            Assert.IsNull(LegacyPatternBrain.Create(unknown, new RandomProvider(1u)), "not a legacy pattern");
         }
     }
 

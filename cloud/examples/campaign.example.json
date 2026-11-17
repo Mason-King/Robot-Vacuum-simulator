@@ -47,7 +47,7 @@
   ],
 
   "sweep": {
-    "algorithms": [ "RandomBounce", "Spiral", "WallFollow", "Lawnmower" ],
+    "algorithms": [ "RandomBounce", "BoustrophedonSweep", "BoustrophedonCrawl", "Lawnmower" ],
     "seedStart": 1,
     "seedCount": 20
   },

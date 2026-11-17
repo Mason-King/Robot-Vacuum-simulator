@@ -102,8 +102,16 @@ namespace RobotVacuum.Headless
         public string floorPlan;
         public int configurationIndex;
         public string configuration;
+        /// <summary>The algorithm's catalog id (RandomBounce, BoustrophedonSweep, Legacy.Spiral, or a plugin's Namespace.Class).</summary>
         public string algorithm;
+
+        /// <summary>Its display name, for reports.</summary>
+        public string algorithmName;
+
         public int seed;
+
+        /// <summary>True when the run's configuration had SLAM on.</summary>
+        public bool slam;
 
         public bool succeeded;
         public string error;

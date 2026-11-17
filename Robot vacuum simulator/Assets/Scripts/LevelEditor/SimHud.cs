@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -382,6 +383,12 @@ namespace RobotVacuum.LevelEditor
         VisualElement BuildVacuumSettings(VisualElement anchor)
         {
             var panel = Ui.Div(null, "le-run-settings");
+
+            if (session != null && session.Settings != null)
+            {
+                panel.Add(new RunSettingsPanel(session.Settings, session, refusal => overlay.Toast(refusal)));
+                Ui.Div(panel, "le-divider");
+            }
 
             var units = new Segmented(new[] { "Imperial (ft)", "Metric (m)" }, Settings.useFeet ? 0 : 1);
             units.SelectionChanged += index =>

@@ -22,6 +22,8 @@ as the GUI's default. The Unity build re-validates everything before it runs (SD
 | `floorTypes` | stock 6 | Floor coverings rooms can use. Empty = Hardwood, Tile, Laminate, Low Carpet, High Carpet, Area Rug with the app's values. Giving any replaces the whole list. |
 | `floorPlans` | required | One or more floor plans in the format of `Robot vacuum simulator/Docs/floor-plan-format.md` (an exported floor plan file pasted in as-is). With `vacuumctl` you may instead write `{ "file": "floorplans/x.json" }` (path relative to the campaign file); it is inlined before upload. |
 | `configurations` | one default | Named vacuum + battery + simulation settings. |
+| `algorithmFiles` | | Custom algorithms to carry to the nodes: `.cs` files and folders, relative to the campaign file. `vacuumctl` inlines them into `algorithmSources`. See "Custom algorithms" below. |
+| `algorithmSources` | | `[{ "path": "MyAlgo.cs", "source": "..." }]` - what `algorithmFiles` becomes. You can also write it by hand. |
 | `sweep` | | The parameter sweep that generates `runs`. |
 | `runs` | from sweep | Explicit list of runs. `vacuumctl` always fills this in. |
 | `execution` | | How the nodes carry it out. |
@@ -58,6 +60,16 @@ Stock values: see `STOCK_FLOOR_TYPES` in `vacuumctl/campaign.py` (copied from `F
 | `simulation.maxSimulatedSeconds` | 1800 | 1-86400 | Run ends as `TimeCap` if the battery outlasts it. |
 | `simulation.telemetryInterval` | 0.5 s | 0.05-10 | 2.19 |
 | `simulation.heatmapMode` | `FloorCleanliness` | `FloorCleanliness`, `FloorCoverage`, `FloorOverCoverage` | |
+| `simulation.logAlgorithmDecisions` | `false` | | Write each algorithm decision to the log. Off by default here because it is very chatty and the log goes to CloudWatch (the GUI has it on). |
+| `sensing.slam` | `false` | | SLAM on: the robot starts with no map, sensors and odometry are noisy, and it builds its own map. Off (Normal): map preloaded, exact readings. |
+| `sensing.noiseScale` | 1 | 0-10 | SLAM only. 0 = perfect, 1 = a realistic budget robot. |
+| `sensing.lidarEnabled` | `true` | | Off = whisker only. |
+| `sensing.lidarRangeMeters` | 8 | 0.2-50 | |
+| `sensing.lidarHalfAngleDegrees` | 180 | 0-180 | Half the field of view from straight ahead; 180 = full circle. |
+| `sensing.lidarRayCount` | 360 | 8-360 | Whole number. |
+| `sensing.floorSensorEnabled` | `true` | | The floor-resistance sensor. |
+| `sensing.slamCorrectionQuality` | `Balanced` | `Performance`, `Balanced`, `Reliable` | SLAM only: how many lidar returns each scan match uses. |
+| `sensing.slamLoopClosure` | `true` | | SLAM only. |
 | `floorEfforts[]` | none | `{ "floor": name, "effort": 0.1-4 }` | Cleaning-effort override per covering, as on the Configuration screen. |
 
 Robot body geometry (radius, cleaning width) is model-intrinsic (SDD 5.1) and is not a run setting.
@@ -66,16 +78,58 @@ Robot body geometry (radius, cleaning width) is model-intrinsic (SDD 5.1) and is
 
 | Field | Default | Meaning |
 |---|---|---|
-| `algorithms` | `["RandomBounce"]` | Any of `RandomBounce`, `Spiral`, `WallFollow`, `Lawnmower` (case-insensitive). |
+| `algorithms` | `["RandomBounce"]` | Algorithm ids or names, case-insensitive (see "Algorithms" below). |
 | `seedStart`, `seedCount` | 1, 1 | Seeds `seedStart` ... `seedStart + seedCount - 1`. |
 | `seeds` | | Explicit seeds; overrides the two above. |
 | `floorPlans`, `configurations` | all | Names to include. |
 
 Runs are generated in this order, numbered from 0: **floor plan → configuration → algorithm → seed**.
 
+## Algorithms
+
+A run's algorithm can be written as:
+
+| Built-in id | Display name | SLAM | Also accepted |
+|---|---|---|---|
+| `RandomBounce` | Random | yes | |
+| `BoustrophedonSweep` | Boustrophedon Sweep | yes | |
+| `BoustrophedonCrawl` | Boustrophedon Crawl | yes | |
+| `Legacy.Spiral` | Spiral | no | `Spiral` |
+| `Legacy.WallFollow` | Wall follow | no | `WallFollow` |
+| `Legacy.Lawnmower` | Lawnmower | no | `Lawnmower` |
+
+or a custom algorithm's id, which is its `Namespace.ClassName` (or its display name). Both `vacuumctl` and the build
+rewrite every run's algorithm to the catalog id, so results always say `Legacy.Spiral` even if you wrote `spiral`. A
+configuration with `sensing.slam` on cannot use an algorithm that doesn't support SLAM (the legacy patterns don't); the
+job is rejected before anything runs.
+
+### Custom algorithms (3.8)
+
+Every build ships the project's `Robot vacuum simulator/Algorithms` folder, so the algorithms in it can be used on any
+node. To use one that isn't in the image, list it in `algorithmFiles`:
+
+```json
+"algorithmFiles": [ "algorithms/LongStraights.cs", "algorithms/MyProject" ]
+```
+
+- A file is carried as is; a folder is carried with its name, so all its `.cs` files are compiled together as one
+  algorithm project, the same as a subfolder of the desktop Algorithms folder.
+- Only `.cs` source is accepted (no DLLs): it is compiled on each node against the algorithm API and base .NET only, so
+  it cannot reach Unity, the simulator, the file system through the simulator, or the true robot position (2.3, 4.8).
+  C# 9 at most.
+- Paths must stay inside the Algorithms folder (no `..`, drive letters or leading slash). Names starting with `_` or
+  `.` are refused because the loader skips them. Limits: 64 files, 1 MB each, 4 MB in all.
+- The node writes a copy of the shipped folder plus your files to a temporary folder and loads that. A carried file
+  with the same path as a shipped one replaces it (the log says so). A carried file that does not compile rejects the
+  whole job (exit code 2) with the compiler's errors.
+- `vacuumctl validate` finds the ids in your files by pattern, to catch typos and SLAM mismatches before upload; the
+  node's compiler has the final say.
+
+See `examples/slam-custom.example.json` and `examples/algorithms/LongStraights.cs`.
+
 ## `runs[]`
 
-`{ "runIndex": 0, "floorPlan": 0, "configuration": 0, "algorithm": "Spiral", "seed": 7 }` — `floorPlan` and
+`{ "runIndex": 0, "floorPlan": 0, "configuration": 0, "algorithm": "Legacy.Spiral", "seed": 7 }` — `floorPlan` and
 `configuration` are indices into the lists above. `runIndex` values must be unique.
 
 ## `execution`
@@ -112,8 +166,8 @@ Exit codes: `0` all runs succeeded · `10` finished, some runs failed (see resul
                       rooms.csv, external_model.json, heatmap_*.png
 ```
 
-Each entry of `results.json` → `runs[]` has: `runIndex, floorPlan(Index), configuration(Index), algorithm,
-seed, succeeded, error, endReason, coveragePercent, fullyCleanedPercent, simulatedSeconds, realSeconds,
+Each entry of `results.json` → `runs[]` has: `runIndex, floorPlan(Index), configuration(Index), algorithm (catalog id),
+algorithmName, seed, slam, succeeded, error, endReason, coveragePercent, fullyCleanedPercent, simulatedSeconds, realSeconds,
 batteryCapacity, batteryUsed, batteryEmptied, distanceMeters, revisitCount, timeTo50/75/90 (-1 = never),
 floorAreaSquareMeters, blockedAreaSquareMeters, targetMaxClean, cellSizeMeters, runFolder, rooms[], warnings[]`.
 

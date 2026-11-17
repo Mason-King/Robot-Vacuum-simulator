@@ -77,7 +77,12 @@ python -m vacuumctl validate examples/smoke.json                      # no AWS n
 python -m vacuumctl local examples/smoke.json --exe "C:\path\Robot vacuum simulator.exe" --processes 4
 python -m vacuumctl --profile vacuum run examples/smoke.json --nodes 2          # quick cloud check
 python -m vacuumctl --profile vacuum run examples/campaign.example.json --nodes 8
+python -m vacuumctl --profile vacuum run examples/slam-custom.example.json --nodes 4   # SLAM + a custom .cs algorithm
 ```
+
+Algorithms are named by catalog id (`RandomBounce`, `BoustrophedonSweep`, `BoustrophedonCrawl`, `Legacy.Spiral`, ...,
+or a custom algorithm's `Namespace.Class`); the old names `Spiral`, `WallFollow`, `Lawnmower` still work. Each
+configuration can set `sensing` (SLAM, noise, lidar range/angle/rays, floor sensor). See `docs/job-format.md`.
 
 `run` = `up` (provision) → `submit` → `wait` (live progress) → `fetch` (download + statistics) → `down`
 (teardown, even on failure or Ctrl-C). Results land in `cloud-results/<campaignId>/campaign_results.json`;
@@ -127,8 +132,9 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
 
 - **Setup Screen integration** (agreed: CLI only for now). The GUI can call `vacuumctl` with `Process.Start`
   and read `campaign_results.json`; showing that file in the Data Screen covers 2.18.
-- **Custom Logic plugin DLLs (3.8)** are not carried to nodes yet (SDD §14 open item). Planned approach: a
-  `pluginDll` S3 reference in the job, validated before load (4.8).
+- **Custom algorithms (3.8)** are carried to nodes as C# source (`algorithmFiles` in the campaign, compiled on each
+  node against the algorithm API only; see `docs/job-format.md` › Custom algorithms). Prebuilt plugin DLLs are not
+  carried: source can be checked by the same restricted compiler the desktop uses, a DLL can't (4.8).
 - **GameCI and a project path with spaces** (`Robot vacuum simulator`) is untested; if the build step
   misbehaves, rename the folder or pass the path quoted. If the CI editor image lacks the Dedicated Server
   module, set `HEADLESS_SUBTARGET: Player` in the workflow (a normal Linux player run with `-nographics`).
