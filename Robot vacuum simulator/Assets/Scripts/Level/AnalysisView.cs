@@ -25,7 +25,7 @@ namespace RobotVacuum.LevelEditor
         List<RunReport> runs = new List<RunReport>();
         RunReport selectedRun;
         string selectedBatch;
-        MovementPattern batchPattern;
+        string batchAlgorithm;
         bool compareAllLevels;
 
         public event Action BackRequested;
@@ -84,7 +84,7 @@ namespace RobotVacuum.LevelEditor
             selectedRun = null;
             var members = BatchRuns(batchId);
             var summaries = BatchStats.Summarise(members);
-            if (summaries.Count > 0 && !summaries.Exists(s => s.pattern == batchPattern)) batchPattern = summaries[0].pattern;
+            if (summaries.Count > 0 && !summaries.Exists(s => s.algorithmId == batchAlgorithm)) batchAlgorithm = summaries[0].algorithmId;
         }
 
         List<RunReport> BatchRuns(string batchId) => runs.FindAll(run => run.batchId == batchId);
@@ -238,14 +238,14 @@ namespace RobotVacuum.LevelEditor
             var mapHeader = Ui.Div(mapPanel, "le-panel__header");
             var mapTitles = Ui.Div(mapHeader, "le-panel__titles");
             Ui.Text(mapTitles, "Averaged across seeds", "le-panel__title");
-            var chosen = summaries.Find(s => s.pattern == batchPattern) ?? summaries[0];
+            var chosen = summaries.Find(s => s.algorithmId == batchAlgorithm) ?? summaries[0];
             Ui.Text(mapTitles, $"{chosen.Label}: mean coverage map and curve over {chosen.runs.Count} runs", "le-panel__text");
 
             var labels = summaries.ConvertAll(s => s.Label).ToArray();
             var picker = new Segmented(labels, summaries.IndexOf(chosen));
             picker.SelectionChanged += index =>
             {
-                batchPattern = summaries[index].pattern;
+                batchAlgorithm = summaries[index].algorithmId;
                 Rebuild();
             };
             mapPanel.Add(picker);
@@ -340,7 +340,7 @@ namespace RobotVacuum.LevelEditor
             if (run.IsBatch)
                 Ui.Button(header, "Batch", IconKind.Back, () =>
                 {
-                    batchPattern = run.pattern;
+                    batchAlgorithm = run.AlgorithmKey;
                     SelectBatch(run.batchId);
                     Rebuild();
                 }, "le-btn--ghost");
@@ -628,7 +628,7 @@ namespace RobotVacuum.LevelEditor
             foreach (var group in groups)
             {
                 var row = Ui.Div(panel, "le-compare-row");
-                Ui.Text(row, MovementAlgorithms.LabelOf(group.pattern), "le-compare-row__label");
+                Ui.Text(row, group.name, "le-compare-row__label");
 
                 var track = Ui.Div(row, "le-compare-row__track");
                 var fill = Ui.Div(track, "le-compare-row__fill");
@@ -644,14 +644,19 @@ namespace RobotVacuum.LevelEditor
         public readonly struct PatternSummary
         {
             public readonly MovementPattern pattern;
+            public readonly string algorithmId;
+            public readonly string name;
             public readonly int runs;
             public readonly float averageCoverage;
             public readonly float averageSeconds;
             public readonly float coveragePerMinute;
 
-            public PatternSummary(MovementPattern pattern, int runs, float averageCoverage, float averageSeconds, float coveragePerMinute)
+            public PatternSummary(MovementPattern pattern, string algorithmId, string name, int runs, float averageCoverage,
+                float averageSeconds, float coveragePerMinute)
             {
                 this.pattern = pattern;
+                this.algorithmId = algorithmId;
+                this.name = name;
                 this.runs = runs;
                 this.averageCoverage = averageCoverage;
                 this.averageSeconds = averageSeconds;
@@ -665,7 +670,7 @@ namespace RobotVacuum.LevelEditor
         /// </summary>
         public static List<PatternSummary> ComparePatterns(IEnumerable<RunReport> runs, string levelPath = null, string levelName = null)
         {
-            var totals = new Dictionary<MovementPattern, (int count, float coverage, float seconds)>();
+            var totals = new Dictionary<string, (RunReport first, int count, float coverage, float seconds)>();
             foreach (var run in runs)
             {
                 if (run.mixedPatterns) continue;
@@ -677,8 +682,9 @@ namespace RobotVacuum.LevelEditor
                     if (!samePlan) continue;
                 }
 
-                totals.TryGetValue(run.pattern, out var t);
-                totals[run.pattern] = (t.count + 1, t.coverage + run.coveragePercent, t.seconds + run.durationSeconds);
+                string key = run.AlgorithmKey;
+                totals.TryGetValue(key, out var t);
+                totals[key] = (t.first ?? run, t.count + 1, t.coverage + run.coveragePercent, t.seconds + run.durationSeconds);
             }
 
             var result = new List<PatternSummary>();
@@ -686,7 +692,8 @@ namespace RobotVacuum.LevelEditor
             {
                 var t = pair.Value;
                 float perMinute = t.seconds > 0f ? t.coverage / (t.seconds / 60f) : 0f;
-                result.Add(new PatternSummary(pair.Key, t.count, t.coverage / t.count, t.seconds / t.count, perMinute));
+                result.Add(new PatternSummary(t.first.pattern, pair.Key, t.first.AlgorithmName, t.count,
+                    t.coverage / t.count, t.seconds / t.count, perMinute));
             }
 
             result.Sort((a, b) => b.averageCoverage.CompareTo(a.averageCoverage));

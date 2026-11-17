@@ -156,6 +156,18 @@ namespace RobotVacuum.LevelEditor
             batteryCapacity = Vacuum.batteryCapacity,
         };
 
+        /// <summary>
+        /// <see cref="ToRunSettings"/> with the algorithm replaced by <paramref name="algorithmId"/>: any entry in
+        /// <see cref="AlgorithmCatalog"/>, plugins included. A batch starts each trial this way.
+        /// </summary>
+        public static RunSettings ToRunSettings(string algorithmId, int? fixedSeed)
+        {
+            var settings = ToRunSettings((MovementPattern?)null, fixedSeed);
+            settings.algorithmId = algorithmId;
+            settings.pattern = AlgorithmCatalog.PatternOf(algorithmId) ?? MovementPattern.RandomBounce;
+            return settings;
+        }
+
         /// <summary>The adjusted cleaning effort for a covering, or null when it uses the palette's value.</summary>
         public static float? CleaningEffortFor(string floor)
         {

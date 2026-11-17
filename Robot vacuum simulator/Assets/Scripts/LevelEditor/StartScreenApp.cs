@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -197,21 +200,52 @@ namespace RobotVacuum.LevelEditor
 
             var body = Ui.Div(null, "le-batch-setup");
             Ui.Text(body, "Algorithms", "le-field-label");
-            var chips = Ui.Div(body, "le-chip-row");
-            for (int i = 0; i < MovementAlgorithms.Count; i++)
-            {
-                var pattern = (MovementPattern)i;
 
-                spec.patterns.Add(pattern);
-                VisualElement chip = null;
-                chip = Ui.Button(chips, MovementAlgorithms.LabelOf(pattern), null, () =>
+            // One dropdown per algorithm in the batch; + adds another, × takes one out. Starts with the configured one.
+            var entries = AlgorithmCatalog.Entries.ToList();
+            var names = entries.Select(entry => entry.Name).ToList();
+            var chosen = new List<string>();
+            string configured = SimConfig.RunSettings.algorithmId;
+            chosen.Add(entries.Exists(entry => entry.Id == configured) ? configured : entries[0].Id);
+
+            var algorithmList = Ui.Div(body, "le-settings-panel le-batch-algorithms");
+            void RebuildAlgorithmRows()
+            {
+                algorithmList.Clear();
+                for (int i = 0; i < chosen.Count; i++)
                 {
-                    bool on = !spec.patterns.Contains(pattern);
-                    if (on) spec.patterns.Add(pattern);
-                    else spec.patterns.Remove(pattern);
-                    Ui.SetClass(chip, "le-chip--on", on);
-                }, "le-chip le-chip--on");
+                    int row = i;
+                    var line = Ui.Div(algorithmList, "le-batch-algorithm-row");
+
+                    var dropdown = new DropdownField(names, Mathf.Max(0, entries.FindIndex(entry => entry.Id == chosen[row])));
+                    dropdown.RegisterValueChangedCallback(_ =>
+                    {
+                        if (dropdown.index >= 0 && dropdown.index < entries.Count) chosen[row] = entries[dropdown.index].Id;
+                    });
+                    line.Add(dropdown);
+
+                    if (chosen.Count > 1)
+                        Ui.IconButton(line, IconKind.Close, "Remove this algorithm from the batch", () =>
+                        {
+                            chosen.RemoveAt(row);
+                            RebuildAlgorithmRows();
+                        }, "le-btn--ghost");
+
+                    if (row == chosen.Count - 1)
+                        Ui.IconButton(line, IconKind.Plus, "Add another algorithm to the batch", () =>
+                        {
+                            var unused = entries.Find(entry => !chosen.Contains(entry.Id));
+                            if (unused == null)
+                            {
+                                overlay.Toast("Every algorithm is already in the batch.");
+                                return;
+                            }
+                            chosen.Add(unused.Id);
+                            RebuildAlgorithmRows();
+                        }, "le-btn--ghost");
+                }
             }
+            RebuildAlgorithmRows();
 
             Ui.Text(body, "Seeds per algorithm", "le-field-label le-panel__gap");
             var trials = new ValueSlider(1f, 100f, spec.trials, v => $"{Mathf.Round(v):0}", true);
@@ -240,9 +274,34 @@ namespace RobotVacuum.LevelEditor
                 new DialogButton("Cancel", ButtonStyle.Ghost, null),
                 new DialogButton("Run batch", ButtonStyle.Primary, () =>
                 {
-                    if (spec.patterns.Count == 0) overlay.Toast("Pick at least one algorithm.");
-                    else RunBatch(level, path, spec);
+                    string problem = BatchAlgorithmProblem(chosen);
+                    if (problem != null)
+                    {
+                        overlay.Toast(problem);
+                        return;
+                    }
+
+                    spec.algorithmIds.AddRange(chosen);
+                    RunBatch(level, path, spec);
                 }));
+        }
+
+        /// <summary>Why the chosen algorithms can't run as a batch, or null when they can.</summary>
+        static string BatchAlgorithmProblem(List<string> algorithmIds)
+        {
+            if (algorithmIds.Count == 0) return "Add at least one algorithm.";
+
+            var seen = new HashSet<string>();
+            foreach (string id in algorithmIds)
+            {
+                if (!seen.Add(id)) return $"{AlgorithmCatalog.NameOf(id)} is in the batch twice. Pick a different algorithm or remove one.";
+
+                // Every trial uses the configured SLAM setting, so an algorithm that can't run with it would fail every seed.
+                string refusal = AlgorithmCatalog.Refusal(id, SimConfig.RunSettings.slam);
+                if (!string.IsNullOrEmpty(refusal)) return refusal;
+            }
+
+            return null;
         }
 
         /// <summary>Runs a batch experiment on <paramref name="level"/>, after the same checks as a single run.</summary>

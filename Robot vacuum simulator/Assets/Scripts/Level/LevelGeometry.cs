@@ -165,6 +165,29 @@ namespace RobotVacuum.Level
             return false;
         }
 
+        /// <summary>Radius of the vacuum's body, matching the simulated robot and the editor's spawn marker.</summary>
+        public const float VacuumRadius = 0.17f;
+
+        /// <summary>
+        /// True when the vacuum's body, standing at the level's spawn point, overlaps furniture that blocks it.
+        /// Pass-under furniture (tables, raised beds, chairs, cats) is ignored because the vacuum drives beneath it.
+        /// </summary>
+        public static bool SpawnOverlapsFurniture(LevelData level, Obstacle obstacle)
+        {
+            if (level == null || obstacle == null || !obstacle.blocksVacuum) return false;
+
+            var footprint = obstacle.Corners();
+            Vector2 spawn = level.RobotSpawn;
+            if (Poly2D.ContainsPoint(footprint, spawn)) return true;
+
+            float clearance = VacuumRadius - 1e-4f;
+            for (int i = 0; i < footprint.Count; i++)
+                if (Poly2D.DistanceToSegment(spawn, footprint[i], footprint[(i + 1) % footprint.Count], out _) < clearance)
+                    return true;
+
+            return false;
+        }
+
         /// <summary>True when any furniture footprint overlaps a solid wall.</summary>
         public static bool HasFurnitureWallCollision(LevelData level)
         {
@@ -172,6 +195,18 @@ namespace RobotVacuum.Level
 
             foreach (var obstacle in level.Obstacles)
                 if (obstacle != null && FootprintOverlapsWall(level, obstacle.Corners()))
+                    return true;
+
+            return false;
+        }
+
+        /// <summary>True when the vacuum would start inside or overlapping any blocking furniture.</summary>
+        public static bool HasSpawnFurnitureCollision(LevelData level)
+        {
+            if (level == null) return false;
+
+            foreach (var obstacle in level.Obstacles)
+                if (SpawnOverlapsFurniture(level, obstacle))
                     return true;
 
             return false;
