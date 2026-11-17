@@ -23,7 +23,9 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 | Linux server build | `Assets/Editor/Build/HeadlessBuild.cs` | Menu **Robot Vacuum › Build › Linux Headless Server**, or `-executeMethod RobotVacuum.EditorTools.HeadlessBuild.BuildLinuxServer`. |
 | Container | `cloud/docker/` | Ubuntu + the Linux build + `entrypoint.py` (fetch job, run shard, stream results to S3, resume after retry). |
 | Infrastructure | `cloud/infra/base.yaml`, `compute.yaml` | CloudFormation. *base*: ECR, results bucket, budget alert, GitHub OIDC role. *compute*: VPC, AWS Batch (EC2/Spot), job queue/definition, IAM, logs — created per campaign, deleted after. |
-| Control CLI | `cloud/vacuumctl/` | `validate`, `local`, `compare`, `bootstrap`, `push-image`, `up`, `submit`, `status`, `logs`, `retry`, `fetch`, `run`, `down`, `destroy`. |
+| Control CLI | `cloud/vacuumctl/` | `validate`, `local`, `compare`, `connection`, `test-connection`, `sso-login`, `admin-policy`, `backends`, `bootstrap`, `push-image`, `up`, `submit`, `status`, `logs`, `retry`, `fetch`, `run`, `down`, `destroy`. |
+| Settings page | `Assets/Scripts/Level/SettingsView.cs`, `Assets/Scripts/LevelEditor/Cloud/` | Start screen › **Settings**: the cloud connection (account, sign-in, region, prefix, network, compute limits), Test connection, Set up / Remove cloud resources, Save admin policy. Runs `vacuumctl`; holds no credentials. |
+| Admin policy | `cloud/infra/vacuum-sim-user-policy.template.json` | Least-privilege IAM policy for the user or role that runs campaigns (`vacuumctl admin-policy` fills it in). |
 | CI | `.github/workflows/cloud-headless.yml` | Tests → Linux server build artifact → Docker image + 4-run smoke test in the container → push to ECR on `main`. |
 | Job format | `cloud/docs/job-format.md` | Every configuration, vacuum, battery, floor-covering and floor-plan field, with defaults and ranges. |
 
@@ -45,6 +47,65 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 - **Results through S3, not a socket**: nodes need no inbound ports (security group has no ingress), a dead
   node still returns what it finished, and retries resume from `results.json`.
 
+## Cloud connection: bring your own cloud (5.5)
+
+Campaigns run in **your organisation's own AWS account**. The templates set up the resources there, your data
+stays in your account, and AWS bills you directly; there is no service of ours in between. Everything is set on
+the start screen's **Settings** page, or with `python -m vacuumctl connection set ...`; both edit the same file:
+
+| | |
+|---|---|
+| File | `%APPDATA%\RobotVacuumSim\cloud-connection.json` (Windows), `~/.config/RobotVacuumSim/...` elsewhere. `python -m vacuumctl connection path` prints it. Override with `--connection` or `VACUUM_CLOUD_CONNECTION`. |
+| Provider | AWS. Microsoft Azure, Google Cloud and SSH clusters are planned (`vacuumctl backends`); see "Backends" below. |
+| Sign-in | **AWS profile** (`aws configure --profile <name>`), **AWS SSO** (`aws configure sso`; the page's *Sign in (SSO)* button runs `aws sso login`), or a **credentials file** (only its path is saved). |
+| Region, resource prefix | Every AWS resource name starts with the prefix (e.g. `acme-vacuum`), so teams can share one account. |
+| Network | See below. |
+| Compute | Spot or on-demand, maximum vCPUs at once, hard time limit per node, optional instance types. |
+
+**No secrets are stored** (C.12): the file holds a profile *name* or a file *path*, never keys or passwords. Keys stay
+where AWS keeps them: `~/.aws`, the SSO cache, or a `credential_process` (which is how a Windows Credential Manager
+helper plugs in). The simulator itself never talks to AWS: the Settings page runs `vacuumctl`, and nothing touches
+the network until a button there is pressed (1.1.1).
+
+Precedence for each setting: command-line flag > connection file > environment (`AWS_PROFILE`, `AWS_REGION`) > default.
+With no connection file, everything works as before (boto3's default credentials, prefix `robot-vacuum-sim`).
+
+**Test connection** (`python -m vacuumctl test-connection`) changes nothing in the account. It checks the settings,
+the sign-in (who you are, which account), the region, every permission in the admin policy (via the IAM policy
+simulator), whether the cloud resources and an image exist, and the network: VPC count against the default limit
+for new VPCs; for an existing VPC, that the subnets are in it and can reach S3, ECR, ECS and CloudWatch Logs.
+
+**No admin rights?** *Save admin policy…* (or `python -m vacuumctl admin-policy --out policy.json --account <id>`)
+writes a least-privilege IAM policy for your IT admin to attach to a user or role (e.g. `vacuum-sim`). Create it as
+a **customer managed policy** (`aws iam create-policy`, then `attach-user-policy` or `attach-role-policy`): it is
+about 5,000 characters, over the 2,048-character limit for a user's inline policies. It allows only
+what setup and campaigns need, on resources named with your prefix, in your region. EC2 network actions can't be
+narrowed to resource names, so they are limited to the region; an admin who wants more can add a tag condition on
+`aws:ResourceTag/Project` (every stack tags its resources `Project=<prefix>`). It hasn't been tried in a locked-down
+account yet: run Test connection after attaching it.
+
+**Remove all cloud resources** asks you to type the prefix (C.9); the command-line equivalent is
+`python -m vacuumctl destroy` (prompts) or `destroy --confirm <prefix>`.
+
+### Network options
+
+| Setting | What the nodes get | Use when |
+|---|---|---|
+| **New VPC, internet access** (default) | A VPC made for the campaign and deleted after it: public subnets, internet gateway, no inbound rules. | Simplest and cheapest. |
+| **New VPC, private** (`--private-network`) | Private subnets, **no internet gateway**; S3 through a gateway endpoint, ECR, ECS and CloudWatch Logs through interface endpoints. | Custom algorithm code must have no route to the internet (4.8). AWS bills the 6 interface endpoints × 2 zones per hour while the campaign runs. |
+| **Existing VPC** (`--network existing --vpc-id ... --subnet-ids ...`) | Your VPC and subnets; only the nodes' security group is created. Your routing decides what they reach. | Your organisation requires its own network. The subnets need a NAT gateway or VPC endpoints for S3, ECR, ECS and CloudWatch Logs. |
+
+VPC address range: a private /16 to /20 (default `10.42.0.0/16`); two /24 subnets are cut from it. Pick one that
+doesn't overlap a network you peer or VPN with. **HTTPS proxy:** for corporate networks, this computer's proxy for
+`vacuumctl`'s calls to AWS (no user name or password in the file).
+
+### Backends
+
+`vacuumctl/backends.py` is the interface every place a campaign can run implements (test the connection, set up,
+remove, run). Shipped: **local** (this computer) and **aws**. Azure, Google Cloud and SSH clusters are listed as
+planned (C.4). Adding one is a new backend class plus its own settings section on the Settings page; campaign
+files, results, statistics and reports stay the same.
+
 ## One-time setup (starting from an empty AWS account)
 
 1. **Secure the account.** Sign in as root, turn on MFA, then in **IAM Identity Center** create a user with the
@@ -52,11 +113,14 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 2. **Install on your PC:** Python 3.10+, the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
    (only for signing in), and Docker Desktop (only if you push images from your PC instead of CI).
 3. **Sign in:** `aws configure sso --profile vacuum` and pick a region (e.g. `us-east-2`). Credentials stay in
-   your AWS config — nothing is stored in this repo or the build (C.12).
+   your AWS config — nothing is stored in this repo or the build (C.12). Then set the connection, either on the
+   simulator's **Settings** page or with
+   `python -m vacuumctl connection set --sign-in sso --profile vacuum --region us-east-2`, and press **Test connection**
+   (`python -m vacuumctl test-connection`).
 4. **Python deps:** `cd cloud && pip install -r vacuumctl/requirements.txt`
 5. **Create the long-lived resources:**
    ```
-   python -m vacuumctl --profile vacuum --region us-east-2 bootstrap ^
+   python -m vacuumctl bootstrap ^
        --budget-email you@example.com --monthly-budget 20 ^
        --github-repo Mason-King/Robot-Vacuum-simulator
    ```
@@ -75,9 +139,9 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 cd cloud
 python -m vacuumctl validate examples/smoke.json                      # no AWS needed
 python -m vacuumctl local examples/smoke.json --exe "C:\path\Robot vacuum simulator.exe" --processes 4
-python -m vacuumctl --profile vacuum run examples/smoke.json --nodes 2          # quick cloud check
-python -m vacuumctl --profile vacuum run examples/campaign.example.json --nodes 8
-python -m vacuumctl --profile vacuum run examples/slam-custom.example.json --nodes 4   # SLAM + a custom .cs algorithm
+python -m vacuumctl run examples/smoke.json --nodes 2          # quick cloud check
+python -m vacuumctl run examples/campaign.example.json --nodes 8
+python -m vacuumctl run examples/slam-custom.example.json --nodes 4   # SLAM + a custom .cs algorithm
 ```
 
 Algorithms are named by catalog id (`RandomBounce`, `BoustrophedonSweep`, `BoustrophedonCrawl`, `Legacy.Spiral`, ...,
@@ -104,7 +168,7 @@ python -m vacuumctl logs <campaignId> --shard 3
 python -m vacuumctl retry <campaignId>       # only nodes missing runs; they resume
 python -m vacuumctl fetch <campaignId> --all-files
 python -m vacuumctl down
-python -m vacuumctl destroy                  # removes everything, including stored results (asks first)
+python -m vacuumctl destroy                  # removes everything, including stored results (type the prefix to confirm)
 ```
 
 **Cost control:** nodes exist only while jobs run; the compute stack is deleted after `run`; Spot is the
@@ -121,6 +185,48 @@ campaign that overruns; results expire from S3 after 90 days; the budget emails 
 | AT-3.10 | GitHub › Actions › *Cloud headless node*: a run per commit with test stages and the `linux-server-<sha>` artifact (and image in ECR on `main`). |
 | AT-5.5 | `vacuumctl run examples/campaign.example.json --nodes 8`. While it runs, EC2 › Instances shows nodes tagged `robot-vacuum-sim-node`; afterwards they are gone and CloudFormation shows no `robot-vacuum-sim-compute` stack. |
 
+## Trust boundaries (4.8, C.12)
+
+```
+ Your computer                       AWS (your account)                     Inside one container (uid 1000, not root)
+ ─────────────                       ──────────────────                     ──────────────────────────────────────────
+ vacuumctl ── AWS profile ──▶  CloudFormation, Batch, S3 API               entrypoint.py  (holds the job role's credentials;
+  (credentials stay in           │                                           │              non-dumpable, so /proc can't read them)
+   ~/.aws, never in repo)        ▼                                           │ starts with AWS_*/ECS_* removed
+                               Batch job ──▶ EC2 node (no inbound rules;     ▼
+                                              private network: no internet)
+                                              IMDS: hop limit 1  ✗──────  Unity build + custom algorithm code
+                                              (containers can't reach it)   (no AWS credentials; reads job.json,
+                                                                             writes its own shard folder)
+                               Job role: s3 Get/Put on campaigns/<this campaign>/* only (vacuumctl run)
+```
+
+What is enforced:
+- **No inbound access** to nodes (security group has no ingress rules).
+- **The simulator process holds no AWS credentials.** Custom algorithms (carried as `.cs`) can use `System.IO`,
+  `System.Net` and `System.Diagnostics.Process`: the plugin compiler limits what they can *reference* (no
+  UnityEngine, no simulator internals) but is not a sandbox. So the entrypoint alone talks to S3, starts Unity
+  with every `AWS_*`/`ECS_*` variable removed, and marks itself non-dumpable so Unity can't read its environment
+  or memory through `/proc`. The instance metadata service is blocked for containers (IMDSv2, hop limit 1).
+- **Least privilege:** the job role can only read/write `campaigns/<CampaignScope>/*`; `vacuumctl run` sets the
+  scope to its own campaign (`vacuumctl up` on its own leaves it at `*`, any campaign).
+- **Validated before running** (C# `HeadlessJob.Validate` and `vacuumctl/campaign.py`); runs as **non-root**.
+
+- **Network:** with the **private network** option the nodes have no internet gateway, so custom algorithm code
+  has no route to the internet; the VPC endpoints carry only S3, ECR, ECS and CloudWatch Logs traffic.
+
+Known limits (disclose, C.4/C.5): with the default network (internet access), custom code can make **outbound
+internet connections**; choose the private network to prevent it. Even then it could reach AWS service endpoints
+(S3, ECR, ECS, Logs) but holds no credentials to use them. It can read the job file and write anything in its own
+shard's output, and could kill the entrypoint (same user), which fails that node attempt. It cannot reach AWS
+credentials, other campaigns' data or the instance role. With an existing VPC, your organisation's routing decides.
+
+**AT-4.8 evidence:** `tests/test_security_and_logging.py` (credential variables stripped, entrypoint
+non-dumpable, IMDS hop limit, per-campaign S3 scope). Cloud check: run a campaign with a custom algorithm whose
+`Initialize` logs `Environment.GetEnvironmentVariable("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")` (empty),
+`File.Exists("/proc/1/environ")` with a read attempt (`UnauthorizedAccessException`), and an HTTP GET to
+`http://169.254.169.254/latest/meta-data/` (times out); the node log in CloudWatch shows all three.
+
 ## Determinism (SDD §10) — to check once
 
 Run `examples/smoke.json` with a fixed seed three ways — GUI (Windows, rendered), `vacuumctl local` (Windows,
@@ -130,8 +236,13 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
 
 ## Not done here / still open
 
-- **Setup Screen integration** (agreed: CLI only for now). The GUI can call `vacuumctl` with `Process.Start`
-  and read `campaign_results.json`; showing that file in the Data Screen covers 2.18.
+- **Starting campaigns from the GUI.** The Settings page sets up and checks the connection; campaigns still start
+  from `vacuumctl` (or the GUI's in-app batch). A "Run on: This computer / Cloud" choice in the batch dialog would
+  call `vacuumctl run` the way the Settings page calls `test-connection`; showing `campaign_results.json` in
+  Analysis covers 2.18.
+- **Not yet tried in AWS:** the private-network and existing-VPC options, and the admin policy in a non-admin
+  account. Test connection checks what it can without changing anything; do one `run examples/smoke.json` with each
+  network option before relying on it.
 - **Custom algorithms (3.8)** are carried to nodes as C# source (`algorithmFiles` in the campaign, compiled on each
   node against the algorithm API only; see `docs/job-format.md` › Custom algorithms). Prebuilt plugin DLLs are not
   carried: source can be checked by the same restricted compiler the desktop uses, a DLL can't (4.8).
@@ -139,3 +250,9 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
   misbehaves, rename the folder or pass the path quoted. If the CI editor image lacks the Dedicated Server
   module, set `HEADLESS_SUBTARGET: Player` in the workflow (a normal Linux player run with `-nographics`).
 - Unity creates `.meta` files for the new scripts the first time the project is opened — commit them.
+- **CI runs only `HeadlessJobTests` and `CloudConnectionTests`** (`-testFilter` in `cloud-headless.yml`). Five other EditMode tests (level editor,
+  LevelData, SimConfig) fail on `main` too; the team needs to fix or explain them before the presentation (C.14).
+- **Per-cell telemetry in batches (2.19):** batch runs keep the final per-cell state (`external_model.json`) but not
+  the per-cell time series. If the team reads 2.19 as needing it, add a job flag that tells `RunRecorder` to write
+  `cell_events.csv` for batch runs too.
+- **Windows Credential Manager** isn't read directly; use an AWS profile with a `credential_process` helper.

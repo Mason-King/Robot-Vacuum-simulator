@@ -6,7 +6,7 @@ using UnityEngine.SceneManagement;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>The pages of the start screen, which other scenes can ask it to open on.</summary>
-    public enum StartPage { Home, Configuration, Simulate, Analysis }
+    public enum StartPage { Home, Configuration, Simulate, Analysis, Settings }
 
     /// <summary>Where a simulation was started from, and so where leaving it goes back to.</summary>
     public enum SimOrigin { Editor, StartScreen }

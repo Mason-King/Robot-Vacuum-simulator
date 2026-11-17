@@ -6,7 +6,7 @@
 # Build context = this folder, with the Unity Linux server build copied into ./build/ first:
 #   cloud/docker/build/RobotVacuumServer.x86_64
 #   cloud/docker/build/RobotVacuumServer_Data/...
-# CI does this (see .github/workflows/cloud.yml); locally: `python -m vacuumctl push-image --build-dir <dir>`.
+# CI does this (see .github/workflows/cloud-headless.yml); locally: `python -m vacuumctl push-image --build-dir <dir>`.
 
 FROM ubuntu:22.04
 

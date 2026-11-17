@@ -208,6 +208,10 @@ namespace RobotVacuum.Headless
             if (schemaVersion != CurrentSchemaVersion)
                 errors.Add($"schemaVersion {schemaVersion} is not supported (this build reads {CurrentSchemaVersion}).");
 
+            // The ID becomes an S3 prefix and an IAM resource name in the cloud. Same rule as vacuumctl/campaign.py.
+            if (!System.Text.RegularExpressions.Regex.IsMatch(campaignId ?? string.Empty, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"))
+                errors.Add($"campaignId \"{campaignId}\": use 1-128 letters, digits, '.', '_' or '-', starting with a letter or digit.");
+
             // Floor types
             var floorNames = new List<string>();
             for (int i = 0; i < floorTypes.Count; i++)

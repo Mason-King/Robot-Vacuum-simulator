@@ -2633,3 +2633,91 @@
 .le-app .unity-scroller--vertical .unity-base-slider__dragger:hover {
     background-color: rgba(255, 255, 255, 0.22);
 }
+
+/* ---------------------------------------------------------------- Settings page (cloud connection) */
+
+.le-settings__row {
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-settings__label {
+    width: 150px;
+    flex-shrink: 0;
+    margin: 0;
+}
+
+.le-settings__grow {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.le-settings__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.le-settings__actions > * {
+    margin-right: 8px;
+    margin-bottom: 8px;
+}
+
+.le-settings__warn {
+    color: var(--warning);
+}
+
+.le-settings__checks {
+    margin-top: 8px;
+}
+
+.le-settings__check {
+    flex-direction: row;
+    padding: 5px 0;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-settings__check-status {
+    width: 64px;
+    flex-shrink: 0;
+    -unity-font-style: bold;
+}
+
+.le-settings__check--ok .le-settings__check-status {
+    color: var(--success);
+}
+
+.le-settings__check--warn .le-settings__check-status {
+    color: var(--warning);
+}
+
+.le-settings__check--fail .le-settings__check-status {
+    color: var(--danger);
+}
+
+.le-settings__check-name {
+    width: 130px;
+    flex-shrink: 0;
+    color: var(--text);
+}
+
+.le-settings__check-message {
+    flex-grow: 1;
+    flex-shrink: 1;
+    white-space: normal;
+    color: var(--text-2);
+}
+
+.le-settings__output {
+    margin-top: 8px;
+    padding: 8px;
+    border-radius: 6px;
+    background-color: var(--canvas);
+}
+
+.le-settings__output-line {
+    white-space: normal;
+    font-size: 11px;
+    color: var(--text-2);
+}

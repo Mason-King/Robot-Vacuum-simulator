@@ -16,7 +16,7 @@ as the GUI's default. The Unity build re-validates everything before it runs (SD
 | Field | Default | Meaning |
 |---|---|---|
 | `schemaVersion` | `1` | Must be 1. |
-| `campaignId` | generated | Unique ID. `vacuumctl` generates `<name>-<UTC time>-<random>`. |
+| `campaignId` | generated | Unique ID: 1-128 letters, digits, `.`, `_` or `-`, starting with a letter or digit (it becomes an S3 prefix and an IAM resource name). `vacuumctl` generates `<name>-<UTC time>-<random>`. |
 | `campaignName` | `"Campaign"` | Shown in results. |
 | `description` | | Free text. |
 | `floorTypes` | stock 6 | Floor coverings rooms can use. Empty = Hardwood, Tile, Laminate, Low Carpet, High Carpet, Area Rug with the app's values. Giving any replaces the whole list. |
@@ -60,7 +60,7 @@ Stock values: see `STOCK_FLOOR_TYPES` in `vacuumctl/campaign.py` (copied from `F
 | `simulation.maxSimulatedSeconds` | 1800 | 1-86400 | Run ends as `TimeCap` if the battery outlasts it. |
 | `simulation.telemetryInterval` | 0.5 s | 0.05-10 | 2.19 |
 | `simulation.heatmapMode` | `FloorCleanliness` | `FloorCleanliness`, `FloorCoverage`, `FloorOverCoverage` | |
-| `simulation.logAlgorithmDecisions` | `false` | | Write each algorithm decision to the log. Off by default here because it is very chatty and the log goes to CloudWatch (the GUI has it on). |
+| `simulation.logAlgorithmDecisions` | `false` | | Write each algorithm decision to the log. Off by default here because it is very chatty and the log goes to CloudWatch (the GUI has it on). It only writes console messages: it changes no decision, random draw or result file, so GUI and headless runs of the same seed still match (2.17). |
 | `sensing.slam` | `false` | | SLAM on: the robot starts with no map, sensors and odometry are noisy, and it builds its own map. Off (Normal): map preloaded, exact readings. |
 | `sensing.noiseScale` | 1 | 0-10 | SLAM only. 0 = perfect, 1 = a realistic budget robot. |
 | `sensing.lidarEnabled` | `true` | | Off = whisker only. |
@@ -73,6 +73,10 @@ Stock values: see `STOCK_FLOOR_TYPES` in `vacuumctl/campaign.py` (copied from `F
 | `floorEfforts[]` | none | `{ "floor": name, "effort": 0.1-4 }` | Cleaning-effort override per covering, as on the Configuration screen. |
 
 Robot body geometry (radius, cleaning width) is model-intrinsic (SDD 5.1) and is not a run setting.
+
+Every run setting in the GUI's `RunSettings` is covered above (B1). The one exception is `showBeliefOverlay`: it only
+draws the robot's beliefs on screen, so it has no meaning without graphics and headless runs always have it off.
+`randomSeed` is replaced by each run's explicit `seed`.
 
 ## `sweep`
 
@@ -170,6 +174,15 @@ Each entry of `results.json` → `runs[]` has: `runIndex, floorPlan(Index), conf
 algorithmName, seed, slam, succeeded, error, endReason, coveragePercent, fullyCleanedPercent, simulatedSeconds, realSeconds,
 batteryCapacity, batteryUsed, batteryEmptied, distanceMeters, revisitCount, timeTo50/75/90 (-1 = never),
 floorAreaSquareMeters, blockedAreaSquareMeters, targetMaxClean, cellSizeMeters, runFolder, rooms[], warnings[]`.
+
+Per-cell output (2.19): for batch runs `RunRecorder` writes the final per-cell state in `external_model.json` and
+skips the per-cell time series (`cell_events.csv`, `cells_final.csv`), which the GUI writes only for single runs.
+`telemetry.csv` samples position, heading, velocity and battery every `telemetryInterval`. Whether that meets 2.19's
+"per-cell state" telemetry is still a team decision (see `README.md` › Not done here).
+
+On your own computer, every AWS command also appends to **`cloud-results/<campaignId>/vacuumctl.log`** (commands with
+no campaign: `cloud-results/vacuumctl.log`): stack changes, uploads, status polls and every AWS or network error with
+its traceback. This is the dedicated network and infrastructure error log (SDD 8).
 
 `vacuumctl fetch` merges every node's file into **`campaign_results.json`**: totals (planned / returned /
 failed / missing run indices), one group per floor plan × configuration × algorithm with count, mean,

@@ -23,8 +23,39 @@ DOCKER_DIR = os.path.join(CLOUD_DIR, "docker")
 TERMINAL = {"SUCCEEDED", "FAILED"}
 
 
-def log(message):
-    print(message, flush=True)
+_log_path = None
+_quiet_stdout = False
+
+
+def set_machine_output(enabled):
+    """--json: progress goes to stderr so stdout carries only the JSON result the simulator reads."""
+    global _quiet_stdout
+    _quiet_stdout = enabled
+
+
+def set_log_file(path):
+    """Also append every message to this file: the campaign's network/infrastructure log (SDD 8). None = console only."""
+    global _log_path
+    _log_path = path
+    if path:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+
+def log_file():
+    return _log_path
+
+
+def log(message, error=False, console=True):
+    if console:
+        print(message, file=sys.stderr if error or _quiet_stdout else sys.stdout, flush=True)
+    if _log_path:
+        try:
+            with open(_log_path, "a", encoding="utf-8") as handle:
+                stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                for line in str(message).splitlines() or [""]:
+                    handle.write(f"{stamp} {'ERROR ' if error else ''}{line}\n")
+        except OSError:
+            pass  # the log must never stop the campaign
 
 
 class Cloud:
@@ -191,7 +222,10 @@ class Cloud:
 
     # ------------------------------------------------------------------ compute (5.5 provisioning / teardown)
 
-    def up(self, image_tag="latest", provisioning="SPOT", max_vcpus=32, instance_types=None, timeout_seconds=21600):
+    def up(self, image_tag="latest", provisioning="SPOT", max_vcpus=32, instance_types=None, timeout_seconds=21600,
+           campaign_scope="*", network=None):
+        """campaign_scope: the one campaign the nodes' role may read/write (4.8), or "*" for any campaign.
+        network: compute.yaml network parameters (connection.network_parameters); None = a new VPC with internet."""
         base = self.base_outputs()
         if not self.image_exists(image_tag):
             sys.exit(f"No image tagged '{image_tag}' in ECR yet. Push one first (CI on main, or: python -m vacuumctl push-image).")
@@ -202,7 +236,13 @@ class Cloud:
             "ProvisioningModel": provisioning,
             "MaxVCpus": max_vcpus,
             "JobTimeoutSeconds": timeout_seconds,
+            "CampaignScope": campaign_scope or "*",
         }
+        params.update(network or {})
+        if params.get("NetworkMode") == "ExistingVpc":
+            log(f"Network: existing VPC {params['ExistingVpcId']}, subnets {params['ExistingSubnetIds']}")
+        elif params.get("NodeInternetAccess") == "false":
+            log(f"Network: new private VPC {params.get('VpcCidr')} (VPC endpoints, no internet gateway)")
         if instance_types:
             params["InstanceTypes"] = instance_types
         return self.deploy(self.compute_stack, "compute.yaml", params)
@@ -464,6 +504,14 @@ class Cloud:
                 for start in range(0, len(objects), 1000):
                     self.s3.delete_objects(Bucket=bucket, Delete={"Objects": objects[start:start + 1000]})
         self.delete(self.base_stack)
+
+
+def sso_login(profile):
+    """Opens the browser sign-in for an AWS SSO profile (needs the AWS CLI v2). Returns the CLI's exit code."""
+    try:
+        return subprocess.run(["aws", "sso", "login", "--profile", profile]).returncode
+    except FileNotFoundError:
+        sys.exit("AWS SSO sign-in needs the AWS CLI v2 (https://aws.amazon.com/cli/). Install it, then try again.")
 
 
 def _now(short=False):

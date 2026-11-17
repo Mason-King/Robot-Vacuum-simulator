@@ -15,6 +15,9 @@ import uuid
 
 SCHEMA_VERSION = 1
 
+# A campaign ID becomes an S3 prefix and an IAM resource name (compute.yaml CampaignScope). Same rule as HeadlessJob.cs.
+CAMPAIGN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
 # The built-in algorithms (AlgorithmCatalog in CleaningAlgorithm.cs): id -> (display name, supports SLAM).
 BUILTIN_ALGORITHMS = {
     "RandomBounce": ("Random", True),
@@ -397,6 +400,9 @@ def validate(job):
     errors = []
     if job.get("schemaVersion") != SCHEMA_VERSION:
         errors.append(f"schemaVersion {job.get('schemaVersion')} is not supported (expected {SCHEMA_VERSION}).")
+    campaign_id = str(job.get("campaignId") or "")
+    if not CAMPAIGN_ID_PATTERN.match(campaign_id):
+        errors.append(f'campaignId "{campaign_id}": use 1-128 letters, digits, ".", "_" or "-", starting with a letter or digit.')
 
     floor_names = []
     for i, floor in enumerate(job.get("floorTypes") or []):

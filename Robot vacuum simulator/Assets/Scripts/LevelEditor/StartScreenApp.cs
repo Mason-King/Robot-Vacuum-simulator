@@ -83,6 +83,13 @@ namespace RobotVacuum.LevelEditor
                     return view;
                 }
 
+                case StartPage.Settings:
+                {
+                    var view = new SettingsView(overlay);
+                    view.BackRequested += () => Show(StartPage.Home);
+                    return view;
+                }
+
                 default:
                     return BuildHome();
             }
@@ -125,7 +132,7 @@ namespace RobotVacuum.LevelEditor
             return screen;
         }
 
-        static void BuildHeader(VisualElement screen)
+        void BuildHeader(VisualElement screen)
         {
             var header = Ui.Div(screen, "le-topbar");
             var brand = Ui.Div(header, "le-brand");
@@ -137,6 +144,9 @@ namespace RobotVacuum.LevelEditor
             Ui.Text(titles, "Robot Vacuum Simulator", "le-library__title");
 
             Ui.Div(header, "le-topbar__spacer");
+
+            // Settings holds the cloud connection for batch campaigns (5.5). Opening it touches no network (1.1.1).
+            Ui.Button(header, "Settings", IconKind.Sliders, () => Show(StartPage.Settings), "le-btn--ghost");
 
             // Quitting does nothing inside the Unity Editor, so only offer it in builds.
             if (!Application.isEditor)

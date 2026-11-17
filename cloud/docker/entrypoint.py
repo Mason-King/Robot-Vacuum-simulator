@@ -10,9 +10,16 @@
 
 Exit codes: 0 = shard done (individual run failures are recorded in results.json, not retried),
 2 = the job file was rejected (do not retry), anything else = crash (AWS Batch may retry; the retry resumes).
+
+Trust boundary (4.8, C.12): the simulator may run custom algorithms compiled from source carried in the job, and
+that code can use System.IO / System.Net like any .NET code. So only this wrapper holds AWS credentials: the
+simulator is started with every AWS_* / ECS_* credential and metadata variable removed (AWS_BATCH_* job info is
+kept), and this process marks itself non-dumpable so the simulator (same user) can't read its environment or
+memory through /proc. See cloud/README.md, "Trust boundaries".
 """
 
 import argparse
+import ctypes
 import glob
 import os
 import shutil
@@ -30,6 +37,35 @@ UNITY_EXIT_SOME_RUNS_FAILED = 10
 
 def log(message):
     print(f"[entrypoint] {message}", flush=True)
+
+
+# Variables the simulator must not see: they locate the task's AWS credentials or metadata endpoints.
+SECRET_ENV_PREFIXES = ("AWS_", "ECS_")
+# AWS Batch job information the simulator records (HostInfo) and may fall back to. No credentials in these.
+SAFE_ENV_PREFIXES = ("AWS_BATCH_",)
+
+
+def simulator_environment(environ=None):
+    """The environment for the Unity process: this one minus anything that leads to AWS credentials."""
+    environ = os.environ if environ is None else environ
+    return {key: value for key, value in environ.items()
+            if key.startswith(SAFE_ENV_PREFIXES) or not key.upper().startswith(SECRET_ENV_PREFIXES)}
+
+
+def make_non_dumpable():
+    """Linux: hide this process's /proc/<pid>/environ and memory from other processes of the same user.
+
+    boto3 keeps the task's credentials in this process, and the simulator runs as the same user, so without this
+    a custom algorithm could read them back through /proc. Returns True when it took effect.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        PR_SET_DUMPABLE = 4
+        return libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
 
 
 def parse_s3(uri):
@@ -126,6 +162,9 @@ def main():
     parser.add_argument("--sync-interval", type=float, default=float(os.environ.get("VACUUM_SYNC_SECONDS", "15")))
     args = parser.parse_args()
 
+    if not make_non_dumpable():
+        log("warning: could not mark the entrypoint non-dumpable; custom algorithms could read its environment")
+
     shard_index = args.shard_index
     if shard_index is None:
         shard_index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
@@ -166,7 +205,7 @@ def main():
 
     unity_log = open(os.path.join(out_dir, "logs", "unity.log"), "w", encoding="utf-8", errors="replace")
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                               encoding="utf-8", errors="replace", bufsize=1)
+                               encoding="utf-8", errors="replace", bufsize=1, env=simulator_environment())
 
     def forward_output():
         for line in process.stdout:
