@@ -97,6 +97,8 @@ namespace RobotVacuum.LevelEditor
 
         public static string SensingLabel(RunReport run)
         {
+            // Runs imported from a cloud or headless campaign name the configuration they ran instead.
+            if (!run.conditionsRecorded && !string.IsNullOrEmpty(run.configuration)) return $"configuration {run.configuration}";
             if (!run.conditionsRecorded) return "sensing not recorded";
             var text = new StringBuilder(run.slam ? FormattableString.Invariant($"SLAM, noise ×{run.noiseScale:0.##}") : "Normal sensing");
             if (!run.lidarEnabled || run.lidarHalfAngleDegrees <= 0f) text.Append(", whisker only");
@@ -113,7 +115,7 @@ namespace RobotVacuum.LevelEditor
         public static string VacuumLabel(RunReport run)
         {
             var v = run.vacuum;
-            if (v == null) return "vacuum not recorded";
+            if (v == null) return string.IsNullOrEmpty(run.configuration) ? "vacuum not recorded" : "vacuum as configured";
             return FormattableString.Invariant($"{v.driveSpeed:0.00} m/s, {v.turnSpeed:0}°/s, {v.batteryCapacity:0}-unit battery");
         }
 

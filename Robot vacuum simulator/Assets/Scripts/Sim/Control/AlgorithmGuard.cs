@@ -36,7 +36,7 @@ namespace RobotVacuum.Sim.Control
     /// Plugins compile against the algorithm API and base .NET only (no UnityEngine), so running them off the main
     /// thread is safe. Not covered: a stack overflow, which .NET cannot recover from on any thread.
     /// </summary>
-    public sealed class AlgorithmSandbox : IDisposable
+    public sealed class AlgorithmGuard : IDisposable
     {
         /// <summary>Real-time budget for constructing and initializing an algorithm, seconds.</summary>
         public static float InitializeBudgetSeconds = 5f;
@@ -70,7 +70,7 @@ namespace RobotVacuum.Sim.Control
         Exception error;
         bool disposed;
 
-        public AlgorithmSandbox(string label)
+        public AlgorithmGuard(string label)
         {
             this.label = string.IsNullOrEmpty(label) ? "algorithm" : label;
         }
@@ -86,7 +86,7 @@ namespace RobotVacuum.Sim.Control
         public bool TryRun<T>(string what, Func<T> call, float budgetSeconds, out T value)
         {
             value = default;
-            if (disposed) throw new ObjectDisposedException(nameof(AlgorithmSandbox));
+            if (disposed) throw new ObjectDisposedException(nameof(AlgorithmGuard));
             if (Faulted) return false;
 
             EnsureWorker();

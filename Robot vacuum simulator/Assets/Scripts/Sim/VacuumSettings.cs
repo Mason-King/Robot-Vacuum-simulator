@@ -18,6 +18,9 @@ namespace RobotVacuum.LevelEditor
         public float batteryCapacity;
         public bool useFeet;
 
+        /// <summary>The body's outline (3.3). Chosen before a run: <see cref="ApplyTo"/> leaves a running robot's shape alone.</summary>
+        public VacuumShapeKind shape;
+
         /// <summary>The values a freshly built robot and battery start with.</summary>
         public static VacuumSettings Defaults() => new VacuumSettings
         {
@@ -26,6 +29,7 @@ namespace RobotVacuum.LevelEditor
             turnSpeed = 320f,
             batteryCapacity = 300f,
             useFeet = true,
+            shape = VacuumShapeKind.Round,
         };
 
         /// <summary>Reads the settings a robot currently has.</summary>
@@ -35,11 +39,14 @@ namespace RobotVacuum.LevelEditor
             reverseSpeed = robot.ReverseSpeedMetersPerSecond,
             turnSpeed = robot.TurnSpeedDegreesPerSecond,
             batteryCapacity = battery != null ? battery.Capacity : 0f,
+            shape = robot.ShapeKind,
         };
 
         /// <summary>
         /// Pushes every setting onto a robot. Setting a different battery life recharges the battery,
-        /// so an unchanged life is left alone rather than topping the battery up.
+        /// so an unchanged life is left alone rather than topping the battery up. The shape is not pushed: this also
+        /// runs mid-run (the simulator's Settings menu), and a body can't change shape under way. It is set when
+        /// the run is built (<see cref="Sim.SimulationRunner.Options.shape"/>).
         /// </summary>
         public void ApplyTo(VacuumRobot robot, Battery battery)
         {

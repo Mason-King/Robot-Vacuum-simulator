@@ -96,7 +96,7 @@ namespace RobotVacuum.Sim
         float nextGoalTime;
         float vacuumPower;
         bool ready;
-        AlgorithmSandbox sandbox;
+        AlgorithmGuard sandbox;
         readonly WayHomeWait wayHome = new WayHomeWait();
         readonly SandboxLog algorithmLog = new SandboxLog();
 
@@ -337,7 +337,7 @@ namespace RobotVacuum.Sim
 
             // The algorithm's own code runs in a sandbox: a crash, a hang or a bad answer ends this run, not the simulator.
             sandbox?.Dispose();
-            sandbox = new AlgorithmSandbox(AlgorithmCatalog.NameOf(id));
+            sandbox = new AlgorithmGuard(AlgorithmCatalog.NameOf(id));
             drive = new DriveRequests();
             goalMode = DriveMode.Travel;
             // Log lines are queued on the sandbox's thread and written here, on the main thread, after each call.
@@ -346,12 +346,12 @@ namespace RobotVacuum.Sim
                 writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
                 targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log);
 
-            bool created = sandbox.TryRun("Creating the algorithm", activeEntry.Create, AlgorithmSandbox.InitializeBudgetSeconds, out algorithm);
+            bool created = sandbox.TryRun("Creating the algorithm", activeEntry.Create, AlgorithmGuard.InitializeBudgetSeconds, out algorithm);
             if (created && algorithm == null) sandbox.SetFault(AlgorithmFault.Crash, "Creating the algorithm returned nothing.");
             if (created && algorithm != null)
             {
                 var instance = algorithm;
-                sandbox.TryRun("Initialize", () => instance.Initialize(context), AlgorithmSandbox.InitializeBudgetSeconds);
+                sandbox.TryRun("Initialize", () => instance.Initialize(context), AlgorithmGuard.InitializeBudgetSeconds);
             }
             FlushAlgorithmLog();
             if (sandbox.Faulted) Fail(sandbox.FaultMessage, sandbox.Fault);
@@ -397,7 +397,7 @@ namespace RobotVacuum.Sim
             stopwatch.Restart();
             frame.Clear();
             bool collided = robot.TakeCollision(out Vector2 contact);
-            var context = new SensorContext(body.position, body.rotation, robot.Radius, body, levelRenderer,
+            var context = new SensorContext(body.position, body.rotation, robot.Shape, body, levelRenderer,
                 collided, contact, simTime, settings.slam,
                 settings.slam ? settings.noiseScale : ControllerSettings.NormalNoiseScale, random);
 
@@ -439,7 +439,7 @@ namespace RobotVacuum.Sim
             stopwatch.Restart();
             if (redraw) observations.RedrawFromSubmaps(); // the submaps moved: redraw before this step's updates
             observations.Apply(frame, believedPose);
-            observations.ApplyFootprint(believedPose, robot.Radius, dt, vacuumPower);
+            observations.ApplyFootprint(believedPose, robot.Shape, dt, vacuumPower);
             stepMs += stopwatch.Elapsed.TotalMilliseconds;
             msMapping += stopwatch.Elapsed.TotalMilliseconds;
 
@@ -516,7 +516,7 @@ namespace RobotVacuum.Sim
             var pose = believedPose.ToApi();
             var instance = algorithm;
             long started = System.Diagnostics.Stopwatch.GetTimestamp();
-            bool answered = sandbox.TryRun("NextGoal", () => instance.NextGoal(map, pose, status), AlgorithmSandbox.NextGoalBudgetSeconds, out Vec2? picked);
+            bool answered = sandbox.TryRun("NextGoal", () => instance.NextGoal(map, pose, status), AlgorithmGuard.NextGoalBudgetSeconds, out Vec2? picked);
             msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             FlushAlgorithmLog();
             if (!answered)
@@ -527,7 +527,7 @@ namespace RobotVacuum.Sim
 
             driver.StatusReported = true;
 
-            string invalid = AlgorithmSandbox.CheckMove(picked, pose, drive);
+            string invalid = AlgorithmGuard.CheckMove(picked, pose, drive);
             if (invalid != null)
             {
                 sandbox.SetFault(AlgorithmFault.InvalidMove, invalid);
@@ -559,14 +559,19 @@ namespace RobotVacuum.Sim
         float SweepSpeedHere()
         {
             float resistance = 1f;
-            float radius = robot.Radius;
+            var shape = robot.Shape;
+            float radius = shape.IsRound ? robot.Radius : shape.TurnRadius;
             Vector2 p = believedPose.position;
             if (view.TryWorldToCell(p - new Vector2(radius, radius), out var low) && view.TryWorldToCell(p + new Vector2(radius, radius), out var high))
             {
                 for (int row = low.row; row <= high.row; row++)
                     for (int col = low.col; col <= high.col; col++)
-                        if ((view.CellCenter(row, col) - p).sqrMagnitude <= radius * radius)
-                            resistance = Mathf.Max(resistance, view.GetCell(row, col).vacuumResistanceBelief);
+                    {
+                        bool under = shape.IsRound
+                            ? (view.CellCenter(row, col) - p).sqrMagnitude <= radius * radius
+                            : shape.Contains(VacuumShape.ToLocal(view.CellCenter(row, col) - p, believedPose.heading));
+                        if (under) resistance = Mathf.Max(resistance, view.GetCell(row, col).vacuumResistanceBelief);
+                    }
             }
             float speed = CoverageMath.SweepSpeed(goalExposure, vacuumPower, resistance, targetCleanliness) / ControllerConstants.SweepSpeedSafety;
             return Mathf.Max(ControllerConstants.SweepSpeedFloor, speed);

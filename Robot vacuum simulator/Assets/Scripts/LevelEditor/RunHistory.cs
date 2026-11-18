@@ -64,6 +64,15 @@ namespace RobotVacuum.LevelEditor
         public int lidarRayCount;
         public bool floorSensorEnabled;
 
+        /// <summary>
+        /// Where the run came from: empty for runs made in this app, "cloud" or "headless" for runs imported from a
+        /// campaign's results (<see cref="CampaignImport"/>). Imported runs also keep the campaign's name and the
+        /// configuration they used; a campaign is listed as one batch per floor plan and configuration.
+        /// </summary>
+        public string source;
+        public string campaignName;
+        public string configuration;
+
         /// <summary>Why the algorithm was stopped, if it failed.</summary>
         public string failure;
 
@@ -132,6 +141,11 @@ namespace RobotVacuum.LevelEditor
         public string AlgorithmName => !string.IsNullOrEmpty(algorithmName) ? algorithmName : MovementAlgorithms.LabelOf(pattern);
 
         public bool IsBatch => !string.IsNullOrEmpty(batchId);
+
+        public bool IsImported => !string.IsNullOrEmpty(source);
+
+        /// <summary>"Cloud" or "Headless" for imported runs; empty otherwise.</summary>
+        public string SourceLabel => source == "cloud" ? "Cloud" : source == "headless" ? "Headless" : source == "network" ? "Network" : string.Empty;
 
         public DateTime FinishedAt =>
             DateTime.TryParse(finishedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var time) ? time : DateTime.MinValue;

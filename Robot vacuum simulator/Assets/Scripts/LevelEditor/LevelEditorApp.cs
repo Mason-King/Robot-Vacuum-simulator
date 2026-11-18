@@ -1312,6 +1312,7 @@ namespace RobotVacuum.LevelEditor
             var robotObject = new GameObject("Vacuum Robot");
             robotObject.transform.SetParent(root.transform, false);
             Robot = robotObject.AddComponent<VacuumRobot>();
+            Robot.ShapeKind = SimConfig.Vacuum.shape;
             Battery = robotObject.GetComponent<Battery>();
             Robot.Pattern = SimLauncher.MovementPattern;
             // The run's configured seed (a fresh one when "new random seed every run" is on), not the default.

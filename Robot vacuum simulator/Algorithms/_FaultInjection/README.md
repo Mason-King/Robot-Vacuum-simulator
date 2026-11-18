@@ -35,4 +35,4 @@ Rename it back to `_FaultInjection` and rescan when you're done.
 - **Load time:** a constructor or `Name` that never returns is also caught. The load report then shows
   `… did not return within 2 s` for that class, and the other algorithms still load.
 
-The automated equivalents are the EditMode tests in `Assets/Tests/EditMode/AlgorithmSandboxTests.cs`.
+The automated equivalents are the EditMode tests in `Assets/Tests/EditMode/AlgorithmGuardTests.cs`.

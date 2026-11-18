@@ -1,0 +1,402 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Robot Vacuum Simulator - per-campaign compute (requirement 5.5). An isolated VPC and an AWS Batch
+  compute environment that scales EC2 nodes from 0 up to MaxVCpus while jobs are queued and back to 0
+  when they finish. vacuumctl creates this stack before a campaign and deletes it afterwards, so no
+  infrastructure is left behind.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: robot-vacuum-sim
+  ImageUri:
+    Type: String
+    Description: Headless node image, e.g. 123456789012.dkr.ecr.us-east-2.amazonaws.com/robot-vacuum-sim-headless:latest
+  ResultsBucketName:
+    Type: String
+  ProvisioningModel:
+    Type: String
+    Default: SPOT
+    AllowedValues: [SPOT, EC2]
+    Description: SPOT is ~60-70% cheaper; interrupted nodes are retried and resume where they stopped. EC2 = on-demand.
+  MaxVCpus:
+    Type: Number
+    Default: 32
+    MinValue: 1
+    Description: Upper bound on vCPUs running at once. Each node (array child) uses JobVCpus.
+  InstanceTypes:
+    Type: CommaDelimitedList
+    Default: "c6i.large,c6i.xlarge,c7i.large,c7i.xlarge,m6i.large"
+  JobVCpus:
+    Type: Number
+    Default: 1
+  JobMemoryMiB:
+    Type: Number
+    Default: 1800
+  JobTimeoutSeconds:
+    Type: Number
+    Default: 21600
+    Description: Hard limit per node attempt; AWS Batch kills the container after this (forced teardown).
+  CampaignScope:
+    Type: String
+    Default: "*"
+    AllowedPattern: "^(\\*|[A-Za-z0-9][A-Za-z0-9._-]{0,127})$"
+    Description: >-
+      Campaign ID the nodes may read and write under campaigns/<id>/ in the results bucket. `vacuumctl run` sets
+      it to its own campaign; "*" (the `vacuumctl up` default) allows any campaign.
+  NetworkMode:
+    Type: String
+    Default: NewVpc
+    AllowedValues: [NewVpc, ExistingVpc]
+    Description: >-
+      NewVpc = an isolated VPC made for this campaign and deleted with it. ExistingVpc = run the nodes in your
+      organisation's VPC and subnets (ExistingVpcId, ExistingSubnetIds); its routing decides what they can reach.
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/(1[6-9]|20)$"
+    Description: NewVpc only. Address range of the VPC, /16 to /20. Two /24 subnets are cut from it. Pick one that doesn't overlap a network you peer with.
+  NodeInternetAccess:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      NewVpc only. true = public subnets with an internet gateway (no inbound rules). false = private subnets, no
+      internet gateway; nodes reach S3, ECR, ECS and CloudWatch Logs through VPC endpoints only, so custom
+      algorithm code has no route to the internet (4.8). The interface endpoints cost a little per hour while the stack is up.
+  ExistingVpcId:
+    Type: String
+    Default: ""
+    Description: ExistingVpc only. vpc-... ID. The nodes' security group is made in it.
+  ExistingSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: ExistingVpc only. subnet-... IDs in that VPC. They must reach S3, ECR, ECS and CloudWatch Logs (NAT gateway or VPC endpoints).
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+
+Conditions:
+  IsSpot: !Equals [!Ref ProvisioningModel, SPOT]
+  CreateVpc: !Equals [!Ref NetworkMode, NewVpc]
+  PublicNodes: !And [!Condition CreateVpc, !Equals [!Ref NodeInternetAccess, "true"]]
+  PrivateNodes: !And [!Condition CreateVpc, !Equals [!Ref NodeInternetAccess, "false"]]
+
+Resources:
+  # ------------------------------------------------------------------ network (NetworkMode / NodeInternetAccess)
+  # NewVpc + internet: public subnets, internet gateway, nodes get public IPs, no inbound rules.
+  # NewVpc + no internet: private subnets, no internet gateway; VPC endpoints are the only way out.
+  # ExistingVpc: nothing here is created except the security group; the organisation's routing applies.
+  Vpc:
+    Type: AWS::EC2::VPC
+    Condition: CreateVpc
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true   # needed for the interface endpoints' private DNS names
+      Tags: [{Key: Name, Value: !Sub "${ProjectName}-batch"}, {Key: Project, Value: !Ref ProjectName}]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: PublicNodes
+    Properties:
+      Tags: [{Key: Project, Value: !Ref ProjectName}]
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: PublicNodes
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 2, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: !If [PublicNodes, true, false]
+      Tags: [{Key: Name, Value: !Sub "${ProjectName}-a"}]
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 2, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: !If [PublicNodes, true, false]
+      Tags: [{Key: Name, Value: !Sub "${ProjectName}-b"}]
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: PublicNodes
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateVpc
+    Properties: {SubnetId: !Ref SubnetA, RouteTableId: !Ref RouteTable}
+
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateVpc
+    Properties: {SubnetId: !Ref SubnetB, RouteTableId: !Ref RouteTable}
+
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    # cfn-lint W1030 checks the ExistingVpc branch with the parameters' empty defaults. Those are only used when
+    # NetworkMode = ExistingVpc, and both validators (vacuumctl/connection.py, CloudConnection.cs) require real
+    # vpc-/subnet- IDs then, so the empty value can never reach AWS. Only W1030, only on this resource.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
+    Properties:
+      GroupDescription: Headless simulator nodes - outbound only (S3, ECR, ECS, CloudWatch). No inbound access.
+      VpcId: !If [CreateVpc, !Ref Vpc, !Ref ExistingVpcId]
+      SecurityGroupEgress:
+        - {IpProtocol: "-1", CidrIp: 0.0.0.0/0}   # with no internet gateway there is no route out anyway
+
+  # ---- private network: VPC endpoints (PrivateNodes only)
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway        # free; also carries ECR's image layers
+      RouteTableIds: [!Ref RouteTable]
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: PrivateNodes
+    Properties:
+      GroupDescription: HTTPS from the nodes to the VPC interface endpoints
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref NodeSecurityGroup}
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  EcrDockerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  EcsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  EcsAgentEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecs-agent"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  EcsTelemetryEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: PrivateNodes
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecs-telemetry"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  # ------------------------------------------------------------------ IAM (narrowly scoped, C.12 / 4.8)
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - {Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  JobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: The headless container may read the job file and write results under campaigns/<CampaignScope>/ in the results bucket, nothing else.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: sts:AssumeRole}
+      Policies:
+        - PolicyName: campaign-data
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ResultsBucketName}/campaigns/${CampaignScope}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ResultsBucketName}"
+                Condition:
+                  StringLike:
+                    s3:prefix: !Sub "campaigns/${CampaignScope}/*"
+
+  # Containers must not reach the EC2 instance metadata service (4.8): it would hand out the instance role's
+  # credentials. IMDSv2 with a hop limit of 1 answers the host (the ECS agent) but not containers on the Docker
+  # bridge network, which AWS Batch on EC2 uses. The job's own credentials come from the ECS credentials endpoint.
+  NodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+
+  # ------------------------------------------------------------------ AWS Batch
+  ComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    # cfn-lint W1030 checks the ExistingVpc branch with the parameters' empty defaults. Those are only used when
+    # NetworkMode = ExistingVpc, and both validators (vacuumctl/connection.py, CloudConnection.cs) require real
+    # vpc-/subnet- IDs then, so the empty value can never reach AWS. Only W1030, only on this resource.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
+    Properties:
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: !Ref ProvisioningModel
+        AllocationStrategy: !If [IsSpot, SPOT_PRICE_CAPACITY_OPTIMIZED, BEST_FIT_PROGRESSIVE]
+        MinvCpus: 0
+        MaxvCpus: !Ref MaxVCpus
+        InstanceTypes: !Ref InstanceTypes
+        Subnets: !If [CreateVpc, [!Ref SubnetA, !Ref SubnetB], !Ref ExistingSubnetIds]
+        SecurityGroupIds: [!Ref NodeSecurityGroup]
+        InstanceRole: !GetAtt InstanceProfile.Arn
+        LaunchTemplate:
+          LaunchTemplateId: !Ref NodeLaunchTemplate
+          Version: !GetAtt NodeLaunchTemplate.LatestVersionNumber
+        Ec2Configuration:
+          - ImageType: ECS_AL2023
+        Tags:
+          Project: !Ref ProjectName
+          Name: !Sub "${ProjectName}-node"
+
+  JobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub "${ProjectName}-queue"
+      State: ENABLED
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref ComputeEnvironment
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${ProjectName}/batch"
+      RetentionInDays: !Ref LogRetentionDays
+
+  JobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${ProjectName}-headless"
+      Type: container
+      PlatformCapabilities: [EC2]
+      PropagateTags: true
+      Tags:
+        Project: !Ref ProjectName
+      Parameters:
+        jobUri: "s3://unset/job.json"
+        outputUri: "s3://unset/shards"
+      ContainerProperties:
+        Image: !Ref ImageUri
+        JobRoleArn: !GetAtt JobRole.Arn
+        Command: ["--job-uri", "Ref::jobUri", "--output-uri", "Ref::outputUri"]
+        ResourceRequirements:
+          - {Type: VCPU, Value: !Ref JobVCpus}
+          - {Type: MEMORY, Value: !Ref JobMemoryMiB}
+        Environment:
+          - {Name: VACUUM_SYNC_SECONDS, Value: "15"}
+          - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}   # the metadata service is blocked, so say it here
+          - {Name: AWS_EC2_METADATA_DISABLED, Value: "true"}      # boto3: don't wait on the blocked endpoint
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref LogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: node
+      Timeout:
+        AttemptDurationSeconds: !Ref JobTimeoutSeconds
+      RetryStrategy:
+        Attempts: 3
+        EvaluateOnExit:
+          - {OnExitCode: "2", Action: EXIT}      # job file rejected: retrying can't help
+          - {OnStatusReason: "Host EC2*", Action: RETRY}  # Spot reclaimed the node
+          - {OnReason: "*", Action: RETRY}
+
+Outputs:
+  JobQueueArn:
+    Value: !Ref JobQueue
+  JobDefinitionArn:
+    Value: !Ref JobDefinition
+  ComputeEnvironmentArn:
+    Value: !Ref ComputeEnvironment
+  LogGroupName:
+    Value: !Ref LogGroup
