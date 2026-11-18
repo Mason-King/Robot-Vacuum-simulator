@@ -101,10 +101,19 @@ namespace RobotVacuum.Sim.Control
 
         /// <param name="marginFromRange">The free-space margin applies only to returns further than this (0 = all).</param>
         public void Insert(RobotPose pose, IReadOnlyList<Sensors.LidarRay> rays, float noReturnLength, float maxRange,
-            float marginPerSigma, float marginFromRange, List<long> changed)
+            float marginPerSigma, float marginFromRange, List<long> changed) =>
+            Insert(pose, rays, noReturnLength, maxRange, marginPerSigma, marginFromRange, changed, null);
+
+        /// <param name="record">If given, every cell this scan touches is recorded in order, so another grid on the
+        /// same lattice can take the same scan with <see cref="Replay"/> instead of tracing it again.</param>
+        internal void Insert(RobotPose pose, IReadOnlyList<Sensors.LidarRay> rays, float noReturnLength, float maxRange,
+            float marginPerSigma, float marginFromRange, List<long> changed, ScanCells record)
         {
             scanId++;
             ScanCount++;
+            record?.Clear();
+            float hitOdds = HitOdds, hitProbability = HitProbability;
+            float missOdds = MissOdds, missProbability = MissProbability;
 
             // Hits first: each hit cell is raised once, and no ray of this scan may lower it.
             for (int i = 0; i < rays.Count; i++)
@@ -112,12 +121,18 @@ namespace RobotVacuum.Sim.Control
                 if (!rays[i].hit || rays[i].range > maxRange) continue;
                 Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + rays[i].bearing) * rays[i].range;
                 if (!TryCell(end, out int row, out int col) || !Ensure(row, col, out int index)) continue;
+                float offsetX = end.x - anchor.x, offsetY = end.y - anchor.y;
                 hitCount[index]++;
-                hitSumX[index] += end.x - anchor.x;
-                hitSumY[index] += end.y - anchor.y;
-                if (stamp[index] == scanId) continue;
+                hitSumX[index] += offsetX;
+                hitSumY[index] += offsetY;
+                if (stamp[index] == scanId)
+                {
+                    record?.Add(row, col, ScanCells.HitAgain, false, offsetX, offsetY);
+                    continue;
+                }
                 stamp[index] = scanId;
-                Update(index, row, col, HitOdds, HitProbability, changed);
+                bool didChange = Update(index, row, col, hitOdds, hitProbability, changed);
+                record?.Add(row, col, ScanCells.Hit, didChange, offsetX, offsetY);
             }
 
             // Then the free space each ray passed through.
@@ -138,7 +153,71 @@ namespace RobotVacuum.Sim.Control
 
                 Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + rays[i].bearing) * length;
                 // The last cell a ray that hit reaches is never cleared by it (as measured: see FreeSpaceMarginSigmas).
-                TraceMisses(pose.position, end, includeEnd: !rays[i].hit, changed);
+                TraceMisses(pose.position, end, includeEnd: !rays[i].hit, missOdds, missProbability, changed, record);
+            }
+        }
+
+        /// <summary>True if this grid and <paramref name="other"/> share a lattice (same anchor, cell size and limit), so
+        /// a scan's cells in one are its cells in the other.</summary>
+        internal bool SameLattice(ProbabilityGrid other) =>
+            anchor.x == other.anchor.x && anchor.y == other.anchor.y && cellSize == other.cellSize && maxIndex == other.maxIndex;
+
+        /// <summary>
+        /// Takes the scan another grid on the same lattice just inserted with a <paramref name="record"/>: exactly as
+        /// <see cref="Insert(RobotPose, IReadOnlyList{Sensors.LidarRay}, float, float, float, float, List{long})"/>
+        /// would (the same cells, updated in the same order, the hit sums added in the same order), without tracing
+        /// the rays again. A cell is added to <paramref name="changed"/> only if it changed here and not in the grid
+        /// that recorded the scan, which is what de-duplicating the two grids' changes kept.
+        /// </summary>
+        internal void Replay(ScanCells record, List<long> changed)
+        {
+            scanId++;
+            ScanCount++;
+            float hitOdds = HitOdds, hitProbability = HitProbability;
+            float missOdds = MissOdds, missProbability = MissProbability;
+
+            var cells = record.cells;
+            for (int i = 0; i < record.count; i++)
+            {
+                var cell = cells[i];
+                // Never fails: the recording grid ensured this cell, and the limit is the same.
+                if (!Ensure(cell.row, cell.col, out int index)) continue;
+                stamp[index] = scanId;
+                if (cell.kind == ScanCells.Miss)
+                {
+                    Update(index, cell.row, cell.col, missOdds, missProbability, cell.changedThere ? null : changed);
+                    continue;
+                }
+                hitCount[index]++;
+                hitSumX[index] += cell.offsetX;
+                hitSumY[index] += cell.offsetY;
+                if (cell.kind == ScanCells.Hit)
+                    Update(index, cell.row, cell.col, hitOdds, hitProbability, cell.changedThere ? null : changed);
+            }
+        }
+
+        /// <summary>The cells one scan touched in a grid, in order (see <see cref="Replay"/>).</summary>
+        internal sealed class ScanCells
+        {
+            internal const byte Hit = 0, HitAgain = 1, Miss = 2;
+
+            internal struct Cell
+            {
+                public int row, col;
+                public byte kind;
+                public bool changedThere;     // the recording grid's probability changed
+                public float offsetX, offsetY; // a hit's position relative to the anchor
+            }
+
+            internal Cell[] cells = new Cell[4096];
+            internal int count;
+
+            internal void Clear() => count = 0;
+
+            internal void Add(int row, int col, byte kind, bool changedThere, float offsetX, float offsetY)
+            {
+                if (count == cells.Length) Array.Resize(ref cells, cells.Length * 2);
+                cells[count++] = new Cell { row = row, col = col, kind = kind, changedThere = changedThere, offsetX = offsetX, offsetY = offsetY };
             }
         }
 
@@ -151,7 +230,7 @@ namespace RobotVacuum.Sim.Control
             changed?.Add(CellIndex.Pack(row, col));
         }
 
-        void Update(int index, int row, int col, float odds, float first, List<long> changed)
+        bool Update(int index, int row, int col, float odds, float first, List<long> changed)
         {
             float old = probability[index];
             float next;
@@ -164,13 +243,15 @@ namespace RobotVacuum.Sim.Control
                 float o = Odds(old) * odds;
                 next = Mathf.Clamp(o / (1f + o), S.MinProbability, S.MaxProbability);
             }
-            if (next == old) return;
+            if (next == old) return false;
             probability[index] = next;
             changed?.Add(CellIndex.Pack(row, col));
+            return true;
         }
 
         /// <summary>Every cell the segment from <paramref name="from"/> to <paramref name="to"/> crosses (Amanatides–Woo), as misses.</summary>
-        void TraceMisses(Vector2 from, Vector2 to, bool includeEnd, List<long> changed)
+        void TraceMisses(Vector2 from, Vector2 to, bool includeEnd, float missOdds, float missProbability,
+            List<long> changed, ScanCells record)
         {
             if (!TryCell(from, out int row, out int col) || !TryCell(to, out int endRow, out int endCol)) return;
 
@@ -192,7 +273,8 @@ namespace RobotVacuum.Sim.Control
                     if (Ensure(row, col, out int index) && stamp[index] != scanId)
                     {
                         stamp[index] = scanId;
-                        Update(index, row, col, MissOdds, MissProbability, changed);
+                        bool didChange = Update(index, row, col, missOdds, missProbability, changed);
+                        record?.Add(row, col, ScanCells.Miss, didChange, 0f, 0f);
                     }
                 }
                 if (atEnd) return;

@@ -359,10 +359,16 @@ namespace RobotVacuum.Sim.Control
 
             float noReturn = Mathf.Min(S.MissingDataRayLengthMeters, frame.lidarRange);
             float margin = MarginSigmasOverride >= 0f ? MarginSigmasOverride : freeSpaceMargin;
-            foreach (var submap in active)
+            // The active submaps share a lattice, so the scan is traced once, into the older one, and the cells it
+            // touched are replayed into the newer one: the same result as inserting into each.
+            bool replay = active.Count == 2 && ReplayInserts && active[0].grid.SameLattice(active[1].grid);
+            int insertedInto = active.Count;
+            for (int i = 0; i < active.Count; i++)
             {
-                submap.grid.Insert(pose, frame.lidarRays, noReturn, InsertRange, margin, MarginFromRangeMeters, changed);
-                submap.AddInsertPosition(pose.position);
+                var grid = active[i].grid;
+                if (replay && i == 1) grid.Replay(scanCells, changed);
+                else grid.Insert(pose, frame.lidarRays, noReturn, InsertRange, margin, MarginFromRangeMeters, changed, replay ? scanCells : null);
+                active[i].AddInsertPosition(pose.position);
             }
             if (KeepNodes)
                 nodes.Add(new ScanNode(nodes.Count, pose, simTime, frame.lidarRays.ToArray(), frame.lidarRange,
@@ -376,12 +382,21 @@ namespace RobotVacuum.Sim.Control
             // The newer submap is full: finish the older one and start a new one here.
             if (active[active.Count - 1].grid.ScanCount >= (ScansPerSubmapOverride > 0 ? ScansPerSubmapOverride : S.ScansPerSubmap)) AddSubmap(pose.position);
 
-            // Each changed cell once.
-            int write = 0;
-            for (int i = 0; i < changed.Count; i++)
-                if (changedSet.Add(changed[i])) changed[write++] = changed[i];
-            changed.RemoveRange(write, changed.Count - write);
+            // Each changed cell once. One grid changes a cell at most once per scan, and a replay adds only cells the
+            // first grid didn't, so the list already is; two grids inserted separately can repeat cells.
+            if (insertedInto > 1 && !replay)
+            {
+                int write = 0;
+                for (int i = 0; i < changed.Count; i++)
+                    if (changedSet.Add(changed[i])) changed[write++] = changed[i];
+                changed.RemoveRange(write, changed.Count - write);
+            }
         }
+
+        readonly ProbabilityGrid.ScanCells scanCells = new ProbabilityGrid.ScanCells();
+
+        /// <summary>Diagnostics (tests): false inserts each scan into each active submap separately (the old way).</summary>
+        internal static bool ReplayInserts = true;
 
         /// <summary>
         /// Rebuilds a FINISHED submap from scans at the given poses (in local SLAM's frame, i.e. the submap's grid frame),

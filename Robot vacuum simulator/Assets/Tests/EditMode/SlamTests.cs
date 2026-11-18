@@ -198,6 +198,52 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void TheFastFit_IsTheReferenceFit_BitForBit()
+        {
+            // The speed pass reuses each accepted trial's gradient and reads the map's 4 × 4 cells straight from the
+            // array. Against the original fit: the same pose, iterations and mean probability, every time. Guesses up to
+            // 10 cm and 5° off make the fit reject steps too, and some scans reach past the submap's edge.
+            var world = SlamWorld.Apartment();
+            var random = new RandomProvider(21);
+            var dock = new Vector2(-2f, -1f);
+            var grid = DockSubmap(world, random, dock);
+            var fast = new ScanMatcher();
+            var reference = new ScanMatcher();
+            var rng = new System.Random(21);
+
+            for (int t = 0; t < 40; t++)
+            {
+                var truth = new RobotPose(dock + new Vector2((float)(rng.NextDouble() * 0.6 - 0.3), (float)(rng.NextDouble() * 0.6 - 0.3)),
+                    (float)(rng.NextDouble() * 360 - 180));
+                float off = t < 20 ? 0.02f : 0.10f, turn = t < 20 ? 0.7f : 5f;
+                var guess = new RobotPose(truth.position + new Vector2((float)(rng.NextDouble() * 2 * off - off), (float)(rng.NextDouble() * 2 * off - off)),
+                    truth.heading + (float)(rng.NextDouble() * 2 * turn - turn));
+                var points = Points(world.Scan(truth, random), 1 + t % 3);
+                float occupied = t % 2 == 0 ? S.OccupiedSpaceWeight : 3f;
+
+                var a = fast.Match(grid, points, guess, occupied, S.TranslationWeight, S.RotationWeight);
+                var b = reference.MatchReference(grid, points, guess, occupied, S.TranslationWeight, S.RotationWeight);
+                Assert.AreEqual(b.position.x, a.position.x, 0f, $"trial {t}: x");
+                Assert.AreEqual(b.position.y, a.position.y, 0f, $"trial {t}: y");
+                Assert.AreEqual(b.heading, a.heading, 0f, $"trial {t}: heading");
+                Assert.AreEqual(reference.LastIterations, fast.LastIterations, $"trial {t}: iterations");
+                Assert.AreEqual(reference.LastMeanProbability, fast.LastMeanProbability, 0f, $"trial {t}: mean probability");
+            }
+
+            // The interpolation alone, over and past the whole submap (the edge falls back to the reference path).
+            float cell = grid.CellSizeMeters;
+            for (float y = grid.AnchorWorld.y + (grid.minRow - 3) * cell; y < grid.AnchorWorld.y + (grid.minRow + grid.rows + 3) * cell; y += 0.73f * cell)
+                for (float x = grid.AnchorWorld.x + (grid.minCol - 3) * cell; x < grid.AnchorWorld.x + (grid.minCol + grid.cols + 3) * cell; x += 0.81f * cell)
+                {
+                    double p = fast.Interpolate(x, y, out double dx, out double dy);
+                    double q = fast.InterpolateReference(x, y, out double rx, out double ry);
+                    Assert.AreEqual(q, p, 0.0, $"value at ({x}, {y})");
+                    Assert.AreEqual(rx, dx, 0.0, $"d/dx at ({x}, {y})");
+                    Assert.AreEqual(ry, dy, 0.0, $"d/dy at ({x}, {y})");
+                }
+        }
+
+        [Test]
         public void TheSameInput_GivesTheSameFit()
         {
             var world = SlamWorld.Apartment();
@@ -251,6 +297,60 @@ namespace RobotVacuum.Tests
 
             slam.Track(world.Scan(pose, null), pose, 6f);
             Assert.AreEqual(2, slam.ScansInserted, "and one after 5 s still");
+        }
+
+        [Test]
+        public void ReplayingAScanIntoTheNewerSubmap_IsExactlyInsertingIt()
+        {
+            // The speed pass traces each scan once and replays its cells into the second active submap. Run the same
+            // noisy scans through a LocalSlam doing that and one inserting into each submap separately: every pose,
+            // every changed-cell list (in order) and every grid, bit for bit, must match.
+            var world = SlamWorld.Apartment();
+            var centre = new Vector2(-2f, -0.5f);
+            var random = new RandomProvider(11);
+            var replayed = new LocalSlam(centre, 0.05f, PoseCorrectionQuality.Balanced, 1f);
+            var separate = new LocalSlam(centre, 0.05f, PoseCorrectionQuality.Balanced, 1f);
+            var start = new RobotPose(centre + new Vector2(0.6f, 0f), 90f);
+            LocalSlam.ScansPerSubmapOverride = 30; // several submap hand-overs
+            try
+            {
+                replayed.Begin(start);
+                separate.Begin(start);
+                for (int k = 0; k < 200; k++)
+                {
+                    float angle = 6f * k;
+                    var truth = new RobotPose(centre + RobotPose.DirectionOf(angle - 90f) * 0.6f, angle);
+                    var frame = world.Scan(truth, random);
+
+                    LocalSlam.ReplayInserts = true;
+                    var a = replayed.Track(frame, truth, 0.1f * k);
+                    LocalSlam.ReplayInserts = false;
+                    var b = separate.Track(frame, truth, 0.1f * k);
+
+                    Assert.AreEqual(b.position.x, a.position.x, 0f, $"scan {k}: x");
+                    Assert.AreEqual(b.position.y, a.position.y, 0f, $"scan {k}: y");
+                    Assert.AreEqual(b.heading, a.heading, 0f, $"scan {k}: heading");
+                    CollectionAssert.AreEqual(separate.ChangedCells.ToArray(), replayed.ChangedCells.ToArray(), $"scan {k}: changed cells");
+                }
+
+                Assert.AreEqual(separate.Submaps.Count, replayed.Submaps.Count);
+                Assert.Greater(replayed.Submaps.Count, 4, "the run crossed several submaps");
+                for (int s = 0; s < replayed.Submaps.Count; s++)
+                {
+                    var x = replayed.Submaps[s].grid;
+                    var y = separate.Submaps[s].grid;
+                    Assert.AreEqual((y.minRow, y.minCol, y.rows, y.cols, y.ScanCount), (x.minRow, x.minCol, x.rows, x.cols, x.ScanCount), $"submap {s}: extent");
+                    CollectionAssert.AreEqual(y.probability, x.probability, $"submap {s}: probabilities");
+                    CollectionAssert.AreEqual(y.hitCount, x.hitCount, $"submap {s}: hit counts");
+                    CollectionAssert.AreEqual(y.hitSumX, x.hitSumX, $"submap {s}: hit sums x");
+                    CollectionAssert.AreEqual(y.hitSumY, x.hitSumY, $"submap {s}: hit sums y");
+                }
+            }
+            finally
+            {
+                LocalSlam.ScansPerSubmapOverride = 0;
+                LocalSlam.ReplayInserts = true;
+            }
         }
 
         [Test]

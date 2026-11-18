@@ -60,6 +60,69 @@ namespace RobotVacuum.Sim.Control
             double tx0 = guess.position.x, ty0 = guess.position.y, th0 = guess.heading * Math.PI / 180.0;
             double tx = tx0, ty = ty0, th = th0;
 
+            // Levenberg–Marquardt. Each trial step is evaluated with its gradient (JᵀJ, Jᵀr), so when the step is
+            // accepted the next iteration already has them: the trial pose IS the next pose, and evaluating it again
+            // (as the reference version below does) gives the same numbers. Same iterations, same result, about half
+            // the evaluations.
+            double lambda = 1e-3;
+            double cost = Cost(points, tx, ty, th, tx0, ty0, th0, occupiedScale, translationWeight, rotationWeight, H, g);
+
+            int iteration = 0;
+            for (; iteration < S.MaxIterations; iteration++)
+            {
+                // (H + λ·diag(H)) δ = −g
+                A[0] = H[0] * (1 + lambda); A[1] = H[1]; A[2] = H[2];
+                A[3] = H[3]; A[4] = H[4] * (1 + lambda); A[5] = H[5];
+                A[6] = H[6]; A[7] = H[7]; A[8] = H[8] * (1 + lambda);
+                if (!Solve3(A, -g[0], -g[1], -g[2], out double dx, out double dy, out double dth)) break;
+
+                double nextCost = Cost(points, tx + dx, ty + dy, th + dth, tx0, ty0, th0, occupiedScale, translationWeight, rotationWeight, trialH, trialG);
+                if (nextCost < cost)
+                {
+                    tx += dx;
+                    ty += dy;
+                    th += dth;
+                    cost = nextCost;
+                    (H, trialH) = (trialH, H);
+                    (g, trialG) = (trialG, g);
+                    lambda = Math.Max(1e-9, lambda * 0.1);
+                    if (Math.Abs(dx) < S.ConvergedStep && Math.Abs(dy) < S.ConvergedStep && Math.Abs(dth) < S.ConvergedStep) break;
+                }
+                else
+                {
+                    lambda *= 10;
+                    if (lambda > 1e6) break;
+                }
+            }
+
+            LastIterations = iteration;
+            LastMeanProbability = MeanProbability(points, tx, ty, th);
+            return new RobotPose(new Vector2((float)tx, (float)ty), Mathf.DeltaAngle(0f, (float)(th * 180.0 / Math.PI)));
+        }
+
+        // The current pose's JᵀJ and Jᵀr, the trial pose's, and the damped system (kept, so a fit allocates nothing).
+        double[] H = new double[9], g = new double[3], trialH = new double[9], trialG = new double[3];
+        readonly double[] A = new double[9];
+
+        /// <summary>
+        /// Tests only: the original fit, which evaluates the current pose again at the start of every iteration (and
+        /// reads the map through <see cref="InterpolateReference"/>), kept so <see cref="Match(ProbabilityGrid, List{Vector2}, RobotPose, float, float, float)"/>
+        /// can be checked against it bit for bit.
+        /// </summary>
+        internal RobotPose MatchReference(ProbabilityGrid map, List<Vector2> points, RobotPose guess, float occupiedWeight,
+            float translationWeight, float rotationWeight)
+        {
+            grid = map;
+            inverseCell = 1f / map.CellSizeMeters;
+            ax = map.AnchorWorld.x;
+            ay = map.AnchorWorld.y;
+
+            int n = points.Count;
+            double occupiedScale = occupiedWeight / Math.Sqrt(Math.Max(1, n));
+            double tx0 = guess.position.x, ty0 = guess.position.y, th0 = guess.heading * Math.PI / 180.0;
+            double tx = tx0, ty = ty0, th = th0;
+
+            referenceInterpolation = true;
             double lambda = 1e-3;
             double cost = Cost(points, tx, ty, th, tx0, ty0, th0, occupiedScale, translationWeight, rotationWeight, null, null);
             var H = new double[9];
@@ -96,6 +159,7 @@ namespace RobotVacuum.Sim.Control
                 }
             }
 
+            referenceInterpolation = false;
             LastIterations = iteration;
             LastMeanProbability = MeanProbability(points, tx, ty, th);
             return new RobotPose(new Vector2((float)tx, (float)ty), Mathf.DeltaAngle(0f, (float)(th * 180.0 / Math.PI)));
@@ -225,6 +289,44 @@ namespace RobotVacuum.Sim.Control
         }
 
         internal double Interpolate(double wx, double wy, out double dpdx, out double dpdy)
+        {
+            if (referenceInterpolation) return InterpolateReference(wx, wy, out dpdx, out dpdy);
+
+            // Continuous index with cell centres at whole numbers.
+            double u = (wx - ax) * inverseCell - 0.5, v = (wy - ay) * inverseCell - 0.5;
+            int c0 = (int)Math.Floor(u), r0 = (int)Math.Floor(v);
+            double fu = u - c0, fv = v - r0;
+
+            // The 4 × 4 cells around the point, read straight from the grid's array when they all lie inside it (nearly
+            // always: the grid is padded); otherwise as the reference does. The same values in the same splines.
+            int top = r0 - 1 - grid.minRow, left = c0 - 1 - grid.minCol;
+            if (top < 0 || left < 0 || top + 4 > grid.rows || left + 4 > grid.cols)
+                return InterpolateReference(wx, wy, out dpdx, out dpdy);
+
+            var p = grid.probability;
+            int cols = grid.cols, i = top * cols + left;
+            Spline(Known(p[i]), Known(p[i + 1]), Known(p[i + 2]), Known(p[i + 3]), fu, out double f0, out double d0);
+            i += cols;
+            Spline(Known(p[i]), Known(p[i + 1]), Known(p[i + 2]), Known(p[i + 3]), fu, out double f1, out double d1);
+            i += cols;
+            Spline(Known(p[i]), Known(p[i + 1]), Known(p[i + 2]), Known(p[i + 3]), fu, out double f2, out double d2);
+            i += cols;
+            Spline(Known(p[i]), Known(p[i + 1]), Known(p[i + 2]), Known(p[i + 3]), fu, out double f3, out double d3);
+
+            Spline(f0, f1, f2, f3, fv, out double value, out double dv);
+            Spline(d0, d1, d2, d3, fv, out double du, out _);
+            dpdx = du * inverseCell;
+            dpdy = dv * inverseCell;
+            return value;
+        }
+
+        /// <summary>A cell's probability as the interpolation reads it (unknown = <see cref="UnknownProbability"/>), as <see cref="Value"/> does.</summary>
+        static double Known(float p) => p > 0f ? p : UnknownProbability;
+
+        bool referenceInterpolation; // MatchReference: read the map the original way throughout
+
+        /// <summary>The original interpolation, a cell at a time through <see cref="ProbabilityGrid.Probability"/> (and for points at the grid's edge).</summary>
+        internal double InterpolateReference(double wx, double wy, out double dpdx, out double dpdy)
         {
             // Continuous index with cell centres at whole numbers.
             double u = (wx - ax) * inverseCell - 0.5, v = (wy - ay) * inverseCell - 0.5;

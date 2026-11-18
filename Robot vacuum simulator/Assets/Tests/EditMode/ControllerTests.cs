@@ -13,6 +13,30 @@ using Object = UnityEngine.Object;
 
 namespace RobotVacuum.Tests
 {
+    public class FloorEaseMemoryTests
+    {
+        [Test]
+        public void Ease_IsOneUntilSet_KeepsEachCell_AndGrowsWithoutLosingAny()
+        {
+            var writer = new InternalModelWriter(new InternalModelGrid(Vector2.zero, 0.05f));
+            Assert.AreEqual(1f, writer.EaseAt(0, 0), "unknown floor drives normally");
+
+            writer.SetEase(3, -4, 0.6f);
+            writer.SetEase(-200, 150, 0.3f);   // far away: the dense memory grows
+            writer.SetEase(500, 500, 1f);      // a 1 far outside needs no room
+            writer.SetEase(90, -90, 0.8f);
+
+            Assert.AreEqual(0.6f, writer.EaseAt(3, -4));
+            Assert.AreEqual(0.3f, writer.EaseAt(-200, 150));
+            Assert.AreEqual(0.8f, writer.EaseAt(90, -90));
+            Assert.AreEqual(1f, writer.EaseAt(500, 500));
+            Assert.AreEqual(1f, writer.EaseAt(3, -3), "a neighbour is untouched");
+
+            writer.SetEase(3, -4, 1f);
+            Assert.AreEqual(1f, writer.EaseAt(3, -4), "set back to normal");
+        }
+    }
+
     public class BeliefRuleTests
     {
         [Test]

@@ -31,7 +31,6 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public const int MaxPendingChanges = 100_000;
 
-        readonly Dictionary<long, float> ease = new Dictionary<long, float>();
         readonly HashSet<long> permanent = new HashSet<long>();
         readonly List<CellIndex> pending = new List<CellIndex>();
         readonly HashSet<long> pendingKeys = new HashSet<long>();
@@ -212,7 +211,35 @@ namespace RobotVacuum.Sim.Control
         // ---- Floor-ease memory -----------------------------------------------
 
         /// <summary>How easily the robot believes this floor cell drives: 1 unless something told it otherwise.</summary>
-        public float EaseAt(int row, int col) => ease.TryGetValue(CellIndex.Pack(row, col), out float value) ? value : 1f;
+        public float EaseAt(int row, int col)
+        {
+            int r = row - easeMinRow, c = col - easeMinCol;
+            return r >= 0 && c >= 0 && r < easeRows && c < easeCols ? easeMap[r * easeCols + c] : 1f;
+        }
+
+        // Dense, 1 everywhere not told otherwise (it was a hash map of the cells whose ease isn't 1; EaseAt is asked on
+        // nearly every map write, and the hash lookup was a large share of mapping's cost). Grows on a write that isn't 1.
+        float[] easeMap = System.Array.Empty<float>();
+        int easeMinRow, easeMinCol, easeRows, easeCols;
+        const int EasePad = 32;
+
+        void GrowEase(int row, int col)
+        {
+            int minRow = easeRows == 0 ? row - EasePad : Mathf.Min(easeMinRow, row - EasePad);
+            int minCol = easeCols == 0 ? col - EasePad : Mathf.Min(easeMinCol, col - EasePad);
+            int maxRow = easeRows == 0 ? row + EasePad : Mathf.Max(easeMinRow + easeRows - 1, row + EasePad);
+            int maxCol = easeCols == 0 ? col + EasePad : Mathf.Max(easeMinCol + easeCols - 1, col + EasePad);
+            int rows = maxRow - minRow + 1, cols = maxCol - minCol + 1;
+            var grown = new float[rows * cols];
+            for (int i = 0; i < grown.Length; i++) grown[i] = 1f;
+            for (int r = 0; r < easeRows; r++)
+                System.Array.Copy(easeMap, r * easeCols, grown, (easeMinRow + r - minRow) * cols + (easeMinCol - minCol), easeCols);
+            easeMap = grown;
+            easeMinRow = minRow;
+            easeMinCol = minCol;
+            easeRows = rows;
+            easeCols = cols;
+        }
 
         public void SetEase(int row, int col, float value)
         {
@@ -221,9 +248,15 @@ namespace RobotVacuum.Sim.Control
             bool shaded = traversability > 0f && traversability < 1f;
             bool wasWall = shaded && IsWall(row, col, traversability);
 
-            long key = CellIndex.Pack(row, col);
-            if (value == 1f) ease.Remove(key);
-            else ease[key] = value;
+            int r = row - easeMinRow, c = col - easeMinCol;
+            if (r < 0 || c < 0 || r >= easeRows || c >= easeCols)
+            {
+                if (value == 1f) return; // already 1 there (and nothing can flip)
+                GrowEase(row, col);
+                r = row - easeMinRow;
+                c = col - easeMinCol;
+            }
+            easeMap[r * easeCols + c] = value;
 
             if (shaded && wasWall != IsWall(row, col, traversability)) LogWallChange(row, col);
         }

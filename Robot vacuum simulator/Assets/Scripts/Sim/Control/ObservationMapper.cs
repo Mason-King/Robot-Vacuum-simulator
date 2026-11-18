@@ -53,10 +53,24 @@ namespace RobotVacuum.Sim.Control
         public int FaceHitsIgnored { get; private set; }
         public int FaceBumpsIgnored { get; private set; }
 
+        /// <summary>SLAM: real ms in the per-scan sync from the submaps and the cells it read; redraws after loop closure and their real ms; the footprint update's real ms.</summary>
+        public double SyncMs { get; private set; }
+        public long SyncCells { get; private set; }
+        public int Redraws { get; private set; }
+        public double RedrawMs { get; private set; }
+        public double FootprintMs { get; private set; }
+
+        static double MsSince(long started) =>
+            (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
         void CountFlips(FlipSource source, int versionBefore) => flips[(int)source] += writer.TopologyVersion - versionBefore;
 
-        /// <summary>SLAM: every Internal Model cell drawn from the submaps (so a redraw can clear the ones no longer drawn).</summary>
-        HashSet<long> drawn = new HashSet<long>();
+        /// <summary>
+        /// SLAM: every Internal Model cell drawn from the submaps (so a redraw can clear the ones no longer drawn), in the
+        /// order each was first drawn. Membership is the dense <see cref="drawnMap"/>. (This was a HashSet; one that is only
+        /// added to and cleared lists its cells in exactly this order, so the redraw writes cells in the same order.)
+        /// </summary>
+        readonly List<long> drawn = new List<long>();
         HashSet<long> drawing = new HashSet<long>();
 
         /// <param name="localSlam">SLAM only: the submaps the lidar is mapped into (by <see cref="LocalSlam.Track"/>, before <see cref="Apply"/>).</param>
@@ -86,7 +100,6 @@ namespace RobotVacuum.Sim.Control
 
         void MarkDrawn(int row, int col)
         {
-            drawn.Add(CellIndex.Pack(row, col));
             int r = row - drawnMapMinRow, c = col - drawnMapMinCol;
             if (r < 0 || c < 0 || r >= drawnMapRows || c >= drawnMapCols)
             {
@@ -94,7 +107,10 @@ namespace RobotVacuum.Sim.Control
                 r = row - drawnMapMinRow;
                 c = col - drawnMapMinCol;
             }
-            drawnMap[r * drawnMapCols + c] = true;
+            int index = r * drawnMapCols + c;
+            if (drawnMap[index]) return;
+            drawnMap[index] = true;
+            drawn.Add(CellIndex.Pack(row, col));
         }
 
         void GrowDrawnMap(int row, int col)
@@ -116,8 +132,13 @@ namespace RobotVacuum.Sim.Control
 
         void ClearDrawn()
         {
+            // Only the drawn cells are set in the dense map, so clear just those.
+            for (int i = 0; i < drawn.Count; i++)
+            {
+                long key = drawn[i];
+                drawnMap[((int)(key >> 32) - drawnMapMinRow) * drawnMapCols + ((int)key - drawnMapMinCol)] = false;
+            }
             drawn.Clear();
-            System.Array.Clear(drawnMap, 0, drawnMap.Length);
         }
 
         public void Apply(SensorFrame frame, RobotPose pose)
@@ -237,7 +258,15 @@ namespace RobotVacuum.Sim.Control
         void SyncFromSubmaps()
         {
             if (localSlam == null) return;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            SyncFromSubmapsCells();
+            SyncMs += MsSince(started);
+        }
+
+        void SyncFromSubmapsCells()
+        {
             var cells = localSlam.ChangedCells;
+            SyncCells += cells.Count;
             bool corrected = globalSlam != null && globalSlam.SubmapGlobalPoses.Count > 0;
             float cos = 1f, sin = 0f;
             Vector2 localOrigin = Vector2.zero, globalOrigin = Vector2.zero;
@@ -272,9 +301,12 @@ namespace RobotVacuum.Sim.Control
         public void RedrawFromSubmaps()
         {
             if (localSlam == null || globalSlam == null) return;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
             int flipVersion = writer.TopologyVersion;
             RedrawWindow();
             CountFlips(FlipSource.Redraw, flipVersion);
+            Redraws++;
+            RedrawMs += MsSince(started);
         }
 
         void RedrawWindow()
@@ -347,6 +379,7 @@ namespace RobotVacuum.Sim.Control
 
         // The redraw window: the newest probability for each global cell (0 = not drawn).
         float[] window = new float[0];
+        float[] centreX = new float[0]; // DrawIntoWindow: each column's cell-centre x, less the submap's local origin
         int windowMinRow, windowMinCol, windowRows, windowCols;
 
         float WindowValue(int row, int col)
@@ -362,14 +395,38 @@ namespace RobotVacuum.Sim.Control
             globalSlam.Transform(submap.index, out float cos, out float sin, out Vector2 localOrigin, out Vector2 globalOrigin);
             var grid = submap.grid;
             var probability = grid.probability;
+
+            // ToGlobalCell, written out (it is called for every known cell of every submap, and the calls and Vector2
+            // copies were most of the cost). The arithmetic is the same operations in the same order, each Vector2
+            // component that ToGlobalCell rounds to a float kept as a float here, so every cell lands where it did.
+            // A cell centre's x depends only on its column and y only on its row, so those are worked out once.
+            var lattice = writer.Grid;
+            float anchorX = lattice.AnchorWorld.x, anchorY = lattice.AnchorWorld.y, size = lattice.CellSizeMeters;
+            int limit = lattice.MaxIndex;
+            if (centreX.Length < grid.cols) centreX = new float[grid.cols];
+            for (int c = 0; c < grid.cols; c++)
+            {
+                float worldX = anchorX + (grid.minCol + c + 0.5f) * size; // GridIndexToWorldCenter
+                centreX[c] = worldX - localOrigin.x;                       // - localOrigin
+            }
+
             for (int r = 0; r < grid.rows; r++)
             {
                 int rowStart = r * grid.cols;
+                float worldY = anchorY + (grid.minRow + r + 0.5f) * size;
+                float cy = worldY - localOrigin.y;
                 for (int c = 0; c < grid.cols; c++)
                 {
                     float p = probability[rowStart + c];
                     if (p <= 0f) continue;
-                    if (!ToGlobalCell(grid.minRow + r, grid.minCol + c, cos, sin, localOrigin, globalOrigin, out int gRow, out int gCol)) continue;
+                    float cx = centreX[c];
+                    float turnedX = cos * cx - sin * cy, turnedY = sin * cx + cos * cy; // the rotation
+                    float gx = turnedX + globalOrigin.x, gy = turnedY + globalOrigin.y;  // + globalOrigin
+                    float relativeX = gx - anchorX, relativeY = gy - anchorY;             // TryWorldToGridIndex
+                    float fc = relativeX / size, fr = relativeY / size;
+                    if (float.IsNaN(fc) || float.IsNaN(fr) || float.IsInfinity(fc) || float.IsInfinity(fr)) continue;
+                    if (Mathf.Abs(fc) > limit || Mathf.Abs(fr) > limit) continue;
+                    int gCol = Mathf.FloorToInt(fc), gRow = Mathf.FloorToInt(fr);
                     int wr = gRow - windowMinRow, wc = gCol - windowMinCol;
                     if (wr < 0 || wc < 0 || wr >= windowRows || wc >= windowCols) continue; // cannot happen: the window holds every corner
                     int index = wr * windowCols + wc;
@@ -490,6 +547,13 @@ namespace RobotVacuum.Sim.Control
         /// so on easier floors (0.7–0.8) the robot credited itself 25–40% less cleaning than it did and cleaned on.
         /// </summary>
         public void ApplyFootprint(RobotPose pose, float radius, float dt, float vacuumPower)
+        {
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            ApplyFootprintCells(pose, radius, dt, vacuumPower);
+            FootprintMs += MsSince(started);
+        }
+
+        void ApplyFootprintCells(RobotPose pose, float radius, float dt, float vacuumPower)
         {
             var grid = writer.Grid;
             Vector2 p = pose.position;

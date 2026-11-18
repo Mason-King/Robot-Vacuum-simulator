@@ -257,6 +257,7 @@ namespace RobotVacuum.Sim
             }
             AppendPlanner();
             AppendFlips();
+            AppendMapping();
             AppendSensorsAndAnalysis();
             AppendSlam();
             Print(line.ToString());
@@ -338,6 +339,23 @@ namespace RobotVacuum.Sim
                 .Append(". Normal settled floor: ray cells skipped ").Append((observations.SettledSkips / seconds).ToString("F0"))
                 .Append(", face hits ignored ").Append((observations.FaceHitsIgnored / seconds).ToString("F1"))
                 .Append(", face bumps ignored ").Append(observations.FaceBumpsIgnored).Append(" in the run.");
+        }
+
+        /// <summary>Mapping (observations into the Internal Model) by part, ms per simulated second.</summary>
+        static void AppendMapping()
+        {
+            if (observations == null || lastSimTime <= 0f) return;
+            double seconds = lastSimTime;
+            double mapping = partTotal[(int)Part.Mapping] + partTotal[(int)Part.Redraw];
+            double known = observations.SyncMs + observations.RedrawMs + observations.FootprintMs;
+            line.Append("\n  Mapping (ms per sim second): ").Append((mapping / seconds).ToString("F2"))
+                .Append(" = SLAM sync ").Append((observations.SyncMs / seconds).ToString("F2"))
+                .Append(" (").Append((observations.SyncCells / seconds).ToString("F0")).Append(" cells/s)")
+                .Append(", redraw ").Append((observations.RedrawMs / seconds).ToString("F2"))
+                .Append(" (").Append(observations.Redraws).Append(" redraws, ")
+                .Append((observations.Redraws > 0 ? observations.RedrawMs / observations.Redraws : 0.0).ToString("F1")).Append(" ms each)")
+                .Append(", footprint ").Append((observations.FootprintMs / seconds).ToString("F2"))
+                .Append(", rest ").Append((System.Math.Max(0.0, mapping - known) / seconds).ToString("F2")).Append('.');
         }
 
         /// <summary>The planner's work over the run: counts per simulated second, and real ms per simulated second.</summary>
