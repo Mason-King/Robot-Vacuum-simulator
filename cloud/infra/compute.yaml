@@ -157,6 +157,13 @@ Resources:
 
   NodeSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    # cfn-lint W1030 checks the ExistingVpc branch with the parameters' empty defaults. Those are only used when
+    # NetworkMode = ExistingVpc, and both validators (vacuumctl/connection.py, CloudConnection.cs) require real
+    # vpc-/subnet- IDs then, so the empty value can never reach AWS. Only W1030, only on this resource.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
     Properties:
       GroupDescription: Headless simulator nodes - outbound only (S3, ECR, ECS, CloudWatch). No inbound access.
       VpcId: !If [CreateVpc, !Ref Vpc, !Ref ExistingVpcId]
@@ -302,6 +309,13 @@ Resources:
   # ------------------------------------------------------------------ AWS Batch
   ComputeEnvironment:
     Type: AWS::Batch::ComputeEnvironment
+    # cfn-lint W1030 checks the ExistingVpc branch with the parameters' empty defaults. Those are only used when
+    # NetworkMode = ExistingVpc, and both validators (vacuumctl/connection.py, CloudConnection.cs) require real
+    # vpc-/subnet- IDs then, so the empty value can never reach AWS. Only W1030, only on this resource.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
     Properties:
       Type: MANAGED
       State: ENABLED
