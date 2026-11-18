@@ -145,8 +145,8 @@ namespace RobotVacuum.LevelEditor
 
             Ui.Div(header, "le-topbar__spacer");
 
-            // Settings holds the cloud connection for batch campaigns (5.5). Opening it touches no network (1.1.1).
-            Ui.Button(header, "Settings", IconKind.Sliders, () => Show(StartPage.Settings), "le-btn--ghost");
+            // Network Settings holds the cloud connection for batch campaigns (5.5). Opening it touches no network (1.1.1).
+            Ui.Button(header, "Network Settings", IconKind.Sliders, () => Show(StartPage.Settings), "le-btn--ghost");
 
             // Quitting does nothing inside the Unity Editor, so only offer it in builds.
             if (!Application.isEditor)

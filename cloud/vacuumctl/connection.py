@@ -1,6 +1,6 @@
 """The cloud connection: which cloud account and network campaigns use (5.5, 4.8, C.12).
 
-One small JSON file, shared by the simulator's Settings page (CloudConnection.cs) and this tool, so both always
+One small JSON file, shared by the simulator's Network Settings page (CloudConnection.cs) and this tool, so both always
 use the same account, region, resource prefix and network. It holds **no secrets**: only the *name* of an AWS
 profile or the *path* of a credentials file. The credentials themselves stay where AWS keeps them
 (~/.aws/credentials, the AWS SSO cache, or a credential_process such as a Windows Credential Manager helper).

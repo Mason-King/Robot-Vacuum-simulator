@@ -24,7 +24,7 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 | Container | `cloud/docker/` | Ubuntu + the Linux build + `entrypoint.py` (fetch job, run shard, stream results to S3, resume after retry). |
 | Infrastructure | `cloud/infra/base.yaml`, `compute.yaml` | CloudFormation. *base*: ECR, results bucket, budget alert, GitHub OIDC role. *compute*: VPC, AWS Batch (EC2/Spot), job queue/definition, IAM, logs — created per campaign, deleted after. |
 | Control CLI | `cloud/vacuumctl/` | `validate`, `local`, `compare`, `connection`, `test-connection`, `sso-login`, `admin-policy`, `backends`, `bootstrap`, `push-image`, `up`, `submit`, `status`, `logs`, `retry`, `fetch`, `run`, `down`, `destroy`. |
-| Settings page | `Assets/Scripts/Level/SettingsView.cs`, `Assets/Scripts/LevelEditor/Cloud/` | Start screen › **Settings**: the cloud connection (account, sign-in, region, prefix, network, compute limits), Test connection, Set up / Remove cloud resources, Save admin policy. Runs `vacuumctl`; holds no credentials. |
+| Network Settings page | `Assets/Scripts/Level/SettingsView.cs`, `Assets/Scripts/LevelEditor/Cloud/` | Start screen › **Network Settings**: the cloud connection (account, sign-in, region, prefix, network, compute limits), Test connection, Set up / Remove cloud resources, Save admin policy. Runs `vacuumctl`; holds no credentials. |
 | Admin policy | `cloud/infra/vacuum-sim-user-policy.template.json` | Least-privilege IAM policy for the user or role that runs campaigns (`vacuumctl admin-policy` fills it in). |
 | CI | `.github/workflows/cloud-headless.yml` | Tests → Linux server build artifact → Docker image + 4-run smoke test in the container → push to ECR on `main`. |
 | Job format | `cloud/docs/job-format.md` | Every configuration, vacuum, battery, floor-covering and floor-plan field, with defaults and ranges. |
@@ -51,7 +51,7 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 
 Campaigns run in **your organisation's own AWS account**. The templates set up the resources there, your data
 stays in your account, and AWS bills you directly; there is no service of ours in between. Everything is set on
-the start screen's **Settings** page, or with `python -m vacuumctl connection set ...`; both edit the same file:
+the start screen's **Network Settings** page, or with `python -m vacuumctl connection set ...`; both edit the same file:
 
 | | |
 |---|---|
@@ -64,7 +64,7 @@ the start screen's **Settings** page, or with `python -m vacuumctl connection se
 
 **No secrets are stored** (C.12): the file holds a profile *name* or a file *path*, never keys or passwords. Keys stay
 where AWS keeps them: `~/.aws`, the SSO cache, or a `credential_process` (which is how a Windows Credential Manager
-helper plugs in). The simulator itself never talks to AWS: the Settings page runs `vacuumctl`, and nothing touches
+helper plugs in). The simulator itself never talks to AWS: the Network Settings page runs `vacuumctl`, and nothing touches
 the network until a button there is pressed (1.1.1).
 
 Precedence for each setting: command-line flag > connection file > environment (`AWS_PROFILE`, `AWS_REGION`) > default.
@@ -103,7 +103,7 @@ doesn't overlap a network you peer or VPN with. **HTTPS proxy:** for corporate n
 
 `vacuumctl/backends.py` is the interface every place a campaign can run implements (test the connection, set up,
 remove, run). Shipped: **local** (this computer) and **aws**. Azure, Google Cloud and SSH clusters are listed as
-planned (C.4). Adding one is a new backend class plus its own settings section on the Settings page; campaign
+planned (C.4). Adding one is a new backend class plus its own settings section on the Network Settings page; campaign
 files, results, statistics and reports stay the same.
 
 ## One-time setup (starting from an empty AWS account)
@@ -114,7 +114,7 @@ files, results, statistics and reports stay the same.
    (only for signing in), and Docker Desktop (only if you push images from your PC instead of CI).
 3. **Sign in:** `aws configure sso --profile vacuum` and pick a region (e.g. `us-east-2`). Credentials stay in
    your AWS config — nothing is stored in this repo or the build (C.12). Then set the connection, either on the
-   simulator's **Settings** page or with
+   simulator's **Network Settings** page or with
    `python -m vacuumctl connection set --sign-in sso --profile vacuum --region us-east-2`, and press **Test connection**
    (`python -m vacuumctl test-connection`).
 4. **Python deps:** `cd cloud && pip install -r vacuumctl/requirements.txt`
@@ -236,9 +236,9 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
 
 ## Not done here / still open
 
-- **Starting campaigns from the GUI.** The Settings page sets up and checks the connection; campaigns still start
+- **Starting campaigns from the GUI.** The Network Settings page sets up and checks the connection; campaigns still start
   from `vacuumctl` (or the GUI's in-app batch). A "Run on: This computer / Cloud" choice in the batch dialog would
-  call `vacuumctl run` the way the Settings page calls `test-connection`; showing `campaign_results.json` in
+  call `vacuumctl run` the way the Network Settings page calls `test-connection`; showing `campaign_results.json` in
   Analysis covers 2.18.
 - **Not yet tried in AWS:** the private-network and existing-VPC options, and the admin policy in a non-admin
   account. Test connection checks what it can without changing anything; do one `run examples/smoke.json` with each

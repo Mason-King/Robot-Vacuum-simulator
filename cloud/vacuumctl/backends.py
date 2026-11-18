@@ -1,7 +1,7 @@
 """Where campaigns run: the backend interface (5.5).
 
 The simulator and this tool talk to a backend only through these methods, so another provider (Azure, Google
-Cloud, an SSH cluster) is a new class here plus its own settings section in the simulator's Settings page;
+Cloud, an SSH cluster) is a new class here plus its own settings section in the simulator's Network Settings page;
 dispatch, results and reports don't change. Shipped: Local (this computer) and AWS. The rest are planned (C.4).
 """
 
@@ -222,7 +222,7 @@ def _permission_check(session, account, arn, project, region):
         result = check("Permissions", "fail", f"{len(actions)} needed action(s) aren't allowed: {shown}. The full list, with "
                                               "the reason for each, is in the log. If the admin policy was attached just now, "
                                               "wait a minute and test again (IAM changes take a moment to apply); otherwise "
-                                              "ask your AWS admin to attach it (Settings > Save admin policy).")
+                                              "ask your AWS admin to attach it (Network Settings > Save admin policy).")
     elif unsure:
         keys = sorted({k for _, _, why in unsure for k in why.split("needs ")[-1].rstrip(")").split(", ") if "needs " in why})
         result = check("Permissions", "warn", f"{len({a for a, _, _ in unsure})} action(s) couldn't be confirmed: your "

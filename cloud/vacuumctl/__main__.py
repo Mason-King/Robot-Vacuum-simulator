@@ -8,7 +8,7 @@ Typical use
   python -m vacuumctl run      examples/campaign.example.json --nodes 8      # provision, run, fetch, tear down
 
 Account, region, resource prefix, network and compute limits come from the cloud connection file that the
-simulator's Settings page edits (see `connection path`). A command-line flag overrides the file for one command.
+simulator's Network Settings page edits (see `connection path`). A command-line flag overrides the file for one command.
 """
 
 import argparse
@@ -29,7 +29,7 @@ DEFAULT_PROJECT = "robot-vacuum-sim"
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="vacuumctl", description="Run Robot Vacuum Simulator campaigns headless on AWS Batch.")
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--connection", help="cloud connection file (default: the one the simulator's Settings page uses)")
+    parser.add_argument("--connection", help="cloud connection file (default: the one the simulator's Network Settings page uses)")
     parser.add_argument("--profile", help="AWS profile name (credentials stay in your AWS config)")
     parser.add_argument("--region")
     parser.add_argument("--project", help="prefix of every AWS resource name (the connection's resource prefix)")
@@ -51,7 +51,7 @@ def main(argv=None):
     p.add_argument("run_folder_a")
     p.add_argument("run_folder_b")
 
-    # ---- the cloud connection (Settings page)
+    # ---- the cloud connection (Network Settings page)
     p = sub.add_parser("connection", help="show or change the cloud connection settings")
     csub = p.add_subparsers(dest="action", required=True)
     q = csub.add_parser("show", help="print the settings in use")
@@ -151,7 +151,7 @@ def main(argv=None):
     sub.add_parser("list", help="list campaigns in the results bucket")
 
     p = sub.add_parser("destroy", help="delete EVERYTHING: compute, results bucket contents, registry, budget")
-    p.add_argument("--confirm", metavar="PREFIX", help="the resource prefix, typed out (for scripts and the Settings page); "
+    p.add_argument("--confirm", metavar="PREFIX", help="the resource prefix, typed out (for scripts and the Network Settings page); "
                                                        "without it you are asked to type it")
 
     args = parser.parse_args(argv)
@@ -167,7 +167,7 @@ def main(argv=None):
         print("The cloud connection settings have problems:", file=sys.stderr)
         for line in error.errors:
             print(f"  - {line}", file=sys.stderr)
-        print(f"Fix them in the simulator's Settings page or with `python -m vacuumctl connection set`.", file=sys.stderr)
+        print(f"Fix them in the simulator's Network Settings page or with `python -m vacuumctl connection set`.", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
@@ -447,7 +447,7 @@ def dispatch(args):
     elif args.command == "list":
         cloud.list_campaigns()
     elif args.command == "destroy":
-        # C.9: the prefix must always be typed, here or (for the Settings page and scripts) in --confirm.
+        # C.9: the prefix must always be typed, here or (for the Network Settings page and scripts) in --confirm.
         answer = args.confirm
         if answer is None:
             answer = input(f"This deletes every '{args.project}' AWS resource and ALL stored results in {cloud.region}. "

@@ -15,7 +15,7 @@ def plain_error(error, profile=None):
     kind = type(error).__name__
     who = f" --profile {profile}" if profile else ""
     if kind in ("UnauthorizedSSOTokenError", "SSOTokenLoadError", "TokenRetrievalError"):
-        return (f"Your AWS SSO sign-in has expired ({kind}). Press \"Sign in (SSO)\" in Settings, "
+        return (f"Your AWS SSO sign-in has expired ({kind}). Press \"Sign in (SSO)\" in Network Settings, "
                 f"or run `aws sso login{who}`.")
     if kind == "ProfileNotFound":
         return f"There is no AWS profile{who.replace(' --profile', '')} on this computer. Check the profile name, or set it up with `aws configure{who}`."
