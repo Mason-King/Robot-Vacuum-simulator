@@ -62,6 +62,7 @@ namespace RobotVacuum.LevelEditor
         float measuredSince;
         float measuredSimTime;
         float achievedSpeed;
+        float offFloorSince = -1f;
 
         Label statusLabel;
         Label detailLabel;
@@ -114,13 +115,26 @@ namespace RobotVacuum.LevelEditor
             if (world.Robot == null) return "No vacuum in the scene";
             if (SimTime >= spec.maxMinutes * 60f) return "Time limit";
             if (world.Coverage >= 99.95f) return "Fully clean";
-            if (world.OffFloor) return "Escaped through an open wall";
+            if (Escaped()) return "Escaped through an open wall";
             return null;
+        }
+
+        /// <summary>Off the floor plan for <see cref="SimWorld.EscapeGraceSeconds"/> in a row, the same rule as an interactive run.</summary>
+        bool Escaped()
+        {
+            if (!world.OffFloor)
+            {
+                offFloorSince = -1f;
+                return false;
+            }
+            if (offFloorSince < 0f) offFloorSince = SimTime;
+            return SimTime - offFloorSince >= SimWorld.EscapeGraceSeconds;
         }
 
         void StartTrial()
         {
             pendingEnd = null;
+            offFloorSince = -1f;
             var settings = SimConfig.ToRunSettings(spec.algorithmIds[patternIndex], spec.baseSeed + trial);
             if (!SimulationSession.TryStart(level, settings, spec.headless, OnRunBegan, out session, out string error))
             {

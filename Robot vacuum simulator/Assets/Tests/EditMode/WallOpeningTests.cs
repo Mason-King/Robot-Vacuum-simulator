@@ -114,5 +114,33 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(LevelGeometry.IsOffFloor(level, new Vector2(4.03f, 2f)), "inside the wall's thickness");
             Assert.IsTrue(LevelGeometry.IsOffFloor(level, new Vector2(6f, 2f)), "out in empty space");
         }
+
+        // Two rooms whose shared side misses by `gap`, with a doorway through it (as hand-placed corners can).
+        void RoomsWithSeam(float gap)
+        {
+            level = TestLevels.NewLevel(l =>
+            {
+                l.Rooms.Add(Square("Living", Vector2.zero));
+                l.Rooms.Add(Square("Hall", new Vector2(4f + gap, 0f)));
+                l.Doorways.Add(new Doorway { roomA = 0, roomB = 1, center = new Vector2(4f + gap * 0.5f, 2f), width = 1f });
+            });
+        }
+
+        [Test]
+        public void HairlineSeamInADoorway_IsStillFloor()
+        {
+            RoomsWithSeam(0.005f); // 5 mm: the gap found in a saved sample apartment
+
+            Assert.IsFalse(LevelGeometry.IsOffFloor(level, new Vector2(4.0025f, 2f)), "driving through the doorway is not an escape");
+            Assert.IsEmpty(LevelGeometry.FindOpenings(level), "and the plan has no opening to the outside");
+        }
+
+        [Test]
+        public void RealGapBetweenRooms_IsStillOffFloor()
+        {
+            RoomsWithSeam(0.3f);
+
+            Assert.IsTrue(LevelGeometry.IsOffFloor(level, new Vector2(4.15f, 2f)), "15 cm from either room is empty space");
+        }
     }
 }

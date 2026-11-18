@@ -90,9 +90,30 @@ namespace RobotVacuum.Level
             return openings;
         }
 
+        /// <summary>
+        /// Gaps narrower than this between neighbouring rooms count as floor. Hand-placed corners often miss each
+        /// other by a few millimetres, leaving a hairline seam that is in no room; where a doorway cuts the wall
+        /// away, a point on that seam would otherwise look like empty space outside the building. Well under
+        /// <see cref="OpeningProbeDistances"/>, so real openings in an outside wall are still found.
+        /// </summary>
+        public const float SeamTolerance = 0.03f;
+
         /// <summary>True when <paramref name="point"/> is past every room's floor and every wall: the vacuum has escaped.</summary>
         public static bool IsOffFloor(LevelData level, Vector2 point) =>
-            level != null && level.RoomIndexAt(point) < 0 && !IsInsideWall(level, point);
+            level != null && level.RoomIndexAt(point) < 0 && !IsInsideWall(level, point) && !IsNearAnyRoom(level, point, SeamTolerance);
+
+        /// <summary>True when <paramref name="point"/> is within <paramref name="distance"/> of some room's outline.</summary>
+        static bool IsNearAnyRoom(LevelData level, Vector2 point, float distance)
+        {
+            foreach (var room in level.Rooms)
+            {
+                if (room == null || !room.IsValid) continue;
+                for (int edge = 0; edge < room.EdgeCount; edge++)
+                    if (Poly2D.DistanceToSegment(point, room.EdgeStart(edge), room.EdgeEnd(edge), out _) <= distance)
+                        return true;
+            }
+            return false;
+        }
 
         /// <summary>Whether the edge point at <paramref name="point"/> is unwalled with nothing on its far side.</summary>
         static bool LeaksAt(LevelData level, Room room, Vector2 point, Vector2 normal)

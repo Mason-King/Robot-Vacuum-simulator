@@ -23,7 +23,7 @@ namespace RobotVacuum.LevelEditor
         const float MinRecordedSeconds = 2f;
 
         /// <summary>How long the vacuum must be off the floor plan before the run is stopped.</summary>
-        const float EscapeGraceSeconds = 0.5f;
+        const float EscapeGraceSeconds = SimWorld.EscapeGraceSeconds;
 
         /// <summary>
         /// Optional. When set, the Restart button calls this instead of only moving the robot back, so the

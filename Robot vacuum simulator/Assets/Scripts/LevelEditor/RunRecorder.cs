@@ -107,6 +107,9 @@ namespace RobotVacuum.LevelEditor
 
         public bool OffFloor => Robot != null && Level != null && LevelGeometry.IsOffFloor(Level, Robot.LevelPosition);
 
+        /// <summary>How long the vacuum must stay off the floor plan before a run counts it as escaped, seconds (one stray step is not an escape).</summary>
+        public const float EscapeGraceSeconds = 0.5f;
+
         /// <summary>Applies the shared vacuum settings to the current run's robot, beyond the four the session sets.</summary>
         public void ApplyVacuumSettings() => SimConfig.Vacuum.ApplyTo(Robot, Battery);
 
