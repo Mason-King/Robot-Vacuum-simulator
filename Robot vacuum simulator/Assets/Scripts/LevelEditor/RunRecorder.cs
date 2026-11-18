@@ -39,6 +39,9 @@ namespace RobotVacuum.LevelEditor
         public Rect mapRect;
         public float robotRadius;
 
+        /// <summary>The body's outline (3.3), for drawing it on the replay. Older replays have none: Round.</summary>
+        public VacuumShapeKind robotShape;
+
         public int SampleCount => x.Count;
 
         public float Duration => Mathf.Max(0f, (SampleCount - 1) * sampleInterval);
@@ -135,6 +138,7 @@ namespace RobotVacuum.LevelEditor
         readonly SimWorld world;
         readonly RunReport report;
         readonly float telemetryInterval;
+        readonly VacuumSettings vacuumOverride;
         readonly StringBuilder telemetry = new StringBuilder();
         readonly List<CellEvent> cellEvents = new List<CellEvent>();
         readonly RunReplay replay = new RunReplay();
@@ -179,11 +183,15 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>Starts recording the session's current run. Call it as the run begins, before it moves.</summary>
-        public RunRecorder(SimWorld world, string batchId = null, int trial = 0, bool headless = false)
+        /// <param name="telemetryIntervalOverride">Simulated seconds between telemetry samples; 0 or less uses the GUI's SimConfig.</param>
+        /// <param name="vacuumOverride">The vacuum settings to record in the summary; null uses the GUI's SimConfig.</param>
+        public RunRecorder(SimWorld world, string batchId = null, int trial = 0, bool headless = false,
+            float telemetryIntervalOverride = 0f, VacuumSettings vacuumOverride = null)
         {
             this.world = world;
             int seed = world.Seed;
-            telemetryInterval = SimConfig.TelemetryInterval;
+            telemetryInterval = telemetryIntervalOverride > 0f ? telemetryIntervalOverride : SimConfig.TelemetryInterval;
+            this.vacuumOverride = vacuumOverride;
 
             report = new RunReport
             {
@@ -206,6 +214,7 @@ namespace RobotVacuum.LevelEditor
 
             replay.sampleInterval = telemetryInterval;
             replay.robotRadius = world.Robot != null ? world.Robot.Radius : 0.17f;
+            replay.robotShape = world.Robot != null ? world.Robot.ShapeKind : VacuumShapeKind.Round;
             if (world.Level != null)
                 replay.levelJson = LevelSnapshot.FromLevel(world.Level, report.levelName).ToJson(false);
 
@@ -456,7 +465,8 @@ namespace RobotVacuum.LevelEditor
             report.endReason = reason;
             report.durationSeconds = time;
             report.coveragePercent = world.Coverage;
-            report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(SimConfig.Vacuum));
+            report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(vacuumOverride ?? SimConfig.Vacuum));
+            if (robot != null) report.vacuum.shape = robot.ShapeKind; // the body the run actually had
             report.distanceMeters = robot != null ? robot.DistanceTravelled : 0f;
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;

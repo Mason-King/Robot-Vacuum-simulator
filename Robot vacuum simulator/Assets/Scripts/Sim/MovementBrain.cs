@@ -372,7 +372,7 @@ namespace RobotVacuum.Sim
             stopwatch.Restart();
             frame.Clear();
             bool collided = robot.TakeCollision(out Vector2 contact);
-            var context = new SensorContext(body.position, body.rotation, robot.Radius, body, levelRenderer,
+            var context = new SensorContext(body.position, body.rotation, robot.Shape, body, levelRenderer,
                 collided, contact, simTime, settings.slam,
                 settings.slam ? settings.noiseScale : ControllerSettings.NormalNoiseScale, random);
 
@@ -414,7 +414,7 @@ namespace RobotVacuum.Sim
             stopwatch.Restart();
             if (redraw) observations.RedrawFromSubmaps(); // the submaps moved: redraw before this step's updates
             observations.Apply(frame, believedPose);
-            observations.ApplyFootprint(believedPose, robot.Radius, dt, vacuumPower);
+            observations.ApplyFootprint(believedPose, robot.Shape, dt, vacuumPower);
             stepMs += stopwatch.Elapsed.TotalMilliseconds;
             msMapping += stopwatch.Elapsed.TotalMilliseconds;
 
@@ -531,14 +531,19 @@ namespace RobotVacuum.Sim
         float SweepSpeedHere()
         {
             float resistance = 1f;
-            float radius = robot.Radius;
+            var shape = robot.Shape;
+            float radius = shape.IsRound ? robot.Radius : shape.TurnRadius;
             Vector2 p = believedPose.position;
             if (view.TryWorldToCell(p - new Vector2(radius, radius), out var low) && view.TryWorldToCell(p + new Vector2(radius, radius), out var high))
             {
                 for (int row = low.row; row <= high.row; row++)
                     for (int col = low.col; col <= high.col; col++)
-                        if ((view.CellCenter(row, col) - p).sqrMagnitude <= radius * radius)
-                            resistance = Mathf.Max(resistance, view.GetCell(row, col).vacuumResistanceBelief);
+                    {
+                        bool under = shape.IsRound
+                            ? (view.CellCenter(row, col) - p).sqrMagnitude <= radius * radius
+                            : shape.Contains(VacuumShape.ToLocal(view.CellCenter(row, col) - p, believedPose.heading));
+                        if (under) resistance = Mathf.Max(resistance, view.GetCell(row, col).vacuumResistanceBelief);
+                    }
             }
             float speed = CoverageMath.SweepSpeed(goalExposure, vacuumPower, resistance, targetCleanliness) / ControllerConstants.SweepSpeedSafety;
             return Mathf.Max(ControllerConstants.SweepSpeedFloor, speed);

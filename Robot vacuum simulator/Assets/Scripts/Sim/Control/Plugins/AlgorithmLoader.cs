@@ -74,7 +74,7 @@ namespace RobotVacuum.Sim.Control
     /// in the editor. In it:
     ///   * each .cs file is compiled on its own;
     ///   * each subfolder is one algorithm project: all the .cs files in it (and below) are compiled together;
-    ///   * each .dll is loaded as it is (it may reference only the API and base .NET);
+    ///   * each .dll is checked against the plugin sandbox (AlgorithmSandbox, 4.8) without loading it, then loaded;
     ///   * anything whose name starts with '_' or '.' is skipped (the template is _Template.cs for this reason).
     ///
     /// A scan happens only between runs, never during one (see <see cref="AlgorithmCatalog.Rescan"/>). Each unit
@@ -215,6 +215,15 @@ namespace RobotVacuum.Sim.Control
         {
             var loaded = new Loaded { errors = new List<string>(), warnings = new List<string>() };
             var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            // 4.8: check what the DLL reaches for before any of it is loaded (AlgorithmSandbox).
+            AlgorithmSandbox.CheckDll(bytes, loaded.errors);
+            if (loaded.errors.Count > 0)
+            {
+                loaded.milliseconds = clock.Elapsed.TotalMilliseconds;
+                return loaded;
+            }
+
             Assembly assembly;
             try
             {
