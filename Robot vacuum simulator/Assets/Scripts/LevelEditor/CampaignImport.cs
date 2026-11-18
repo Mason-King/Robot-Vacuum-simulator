@@ -108,7 +108,7 @@ namespace RobotVacuum.LevelEditor
 
         /// <summary>
         /// Where vacuumctl writes results by default: cloud-results (fetch, run) and local-results (local) in the
-        /// repository's cloud folder, found the same way the Network Settings page finds vacuumctl.
+        /// repository's cloud folder, found the same way the Settings page finds vacuumctl.
         /// </summary>
         public static List<string> DefaultRoots()
         {

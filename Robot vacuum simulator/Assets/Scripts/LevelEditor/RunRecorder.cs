@@ -39,6 +39,9 @@ namespace RobotVacuum.LevelEditor
         public Rect mapRect;
         public float robotRadius;
 
+        /// <summary>The body's outline (3.3), for drawing it on the replay. Older replays have none: Round.</summary>
+        public VacuumShapeKind robotShape;
+
         public int SampleCount => x.Count;
 
         public float Duration => Mathf.Max(0f, (SampleCount - 1) * sampleInterval);
@@ -211,6 +214,7 @@ namespace RobotVacuum.LevelEditor
 
             replay.sampleInterval = telemetryInterval;
             replay.robotRadius = world.Robot != null ? world.Robot.Radius : 0.17f;
+            replay.robotShape = world.Robot != null ? world.Robot.ShapeKind : VacuumShapeKind.Round;
             if (world.Level != null)
                 replay.levelJson = LevelSnapshot.FromLevel(world.Level, report.levelName).ToJson(false);
 
@@ -462,6 +466,7 @@ namespace RobotVacuum.LevelEditor
             report.durationSeconds = time;
             report.coveragePercent = world.Coverage;
             report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(vacuumOverride ?? SimConfig.Vacuum));
+            if (robot != null) report.vacuum.shape = robot.ShapeKind; // the body the run actually had
             report.distanceMeters = robot != null ? robot.DistanceTravelled : 0f;
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;

@@ -50,6 +50,7 @@ Stock values: see `STOCK_FLOOR_TYPES` in `vacuumctl/campaign.py` (copied from `F
 | `vacuum.reverseSpeed` | 0.35 m/s | 0.01-5 | |
 | `vacuum.turnSpeed` | 320 deg/s | 1-2000 | |
 | `vacuum.vacuumPower` | 1 | 0.01-100 | SDD 4.3 / 5.2 cleaning power |
+| `vacuum.shape` | `Round` | `Round`, `DShaped`, `Rectangular` (any case; `D`, `D-shaped`, `Rectangle` also accepted) | 3.3 body outline. Round: the original 34 cm disc. DShaped: round back, square front, 34 × 34 cm. Rectangular: 34 × 40 cm, long axis front to back. All are 34 cm wide. Missing = `Round`, so older job files run exactly as before |
 | `battery.capacity` | 300 units | 1-10000 | 1.3.4 |
 | `battery.distanceEnergyPerMeter` | 1 | 0-1000 | 3.6 |
 | `battery.turnEnergyPerDegree` | 0.01 | 0-100 | 3.6 |

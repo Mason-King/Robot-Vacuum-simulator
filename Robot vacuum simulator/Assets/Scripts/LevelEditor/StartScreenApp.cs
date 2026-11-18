@@ -31,6 +31,9 @@ namespace RobotVacuum.LevelEditor
 
         FloorPalette Palette => palette != null ? palette : runtimePalette;
 
+        /// <summary>The program's name as shown on screen.</summary>
+        public const string AppName = "VACSim Vacuum Autonomous Controller";
+
         void Start()
         {
             if (palette == null) runtimePalette = FloorPalette.CreateDefault();
@@ -140,7 +143,7 @@ namespace RobotVacuum.LevelEditor
             mark.AddToClassList("le-start__mark");
             hero.Add(mark);
 
-            Ui.Text(hero, "Robot Vacuum Simulator", "le-start__title");
+            Ui.Text(hero, AppName, "le-start__title");
             Ui.Text(hero, "Configure the vacuum, draw a floor plan, run it and compare how well each algorithm cleans.", "le-start__text");
 
             int levels = LevelLibrary.LoadAll().Count;
@@ -172,12 +175,12 @@ namespace RobotVacuum.LevelEditor
             brand.Add(mark);
 
             var titles = Ui.Div(brand, "le-library__title-block");
-            Ui.Text(titles, "Robot Vacuum Simulator", "le-library__title");
+            Ui.Text(titles, AppName, "le-library__title");
 
             Ui.Div(header, "le-topbar__spacer");
 
-            // Network Settings holds the cloud connection for batch campaigns (5.5). Opening it touches no network (1.1.1).
-            Ui.Button(header, "Network Settings", IconKind.Sliders, () => Show(StartPage.Settings), "le-btn--ghost");
+            // Settings: network workers (3.9), the cloud connection (5.5) and program-wide options. Opening it touches no network (1.1.1).
+            Ui.Button(header, "Settings", IconKind.Sliders, () => Show(StartPage.Settings), "le-btn--ghost");
 
             // Quitting does nothing inside the Unity Editor, so only offer it in builds.
             if (!Application.isEditor)
@@ -369,7 +372,7 @@ namespace RobotVacuum.LevelEditor
             UpdateRunOn();
 
             Ui.Text(body, "Every algorithm runs on the same seeds, so they're compared like for like. Results open in Analysis." +
-                          (workers.Count == 0 ? " To split batches across other computers, pair them in Network Settings." : ""), "le-empty-hint");
+                          (workers.Count == 0 ? " To split batches across other computers, pair them in Settings." : ""), "le-empty-hint");
 
             overlay.ShowDialog("Batch experiment", level.name, body, null,
                 new DialogButton("Cancel", ButtonStyle.Ghost, null),

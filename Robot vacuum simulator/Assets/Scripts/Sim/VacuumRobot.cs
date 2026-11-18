@@ -38,6 +38,9 @@ namespace RobotVacuum.Sim
 
         [Header("Chassis")]
         [SerializeField] float radius = 0.17f;
+
+        [Tooltip("The body's outline (requirement 3.3): Round (the original disc), D-shaped or Rectangular. All are as wide as the disc. Chosen before a run; SimulationRunner sets it from the run settings.")]
+        [SerializeField] VacuumShapeKind shape = VacuumShapeKind.Round;
         [SerializeField] Color bodyColor = new Color(0.93f, 0.94f, 0.96f);
         [SerializeField] Color noseColor = new Color(0.2f, 0.72f, 0.95f);
 
@@ -67,6 +70,7 @@ namespace RobotVacuum.Sim
 
         Rigidbody2D body;
         CircleCollider2D circle;
+        BoxCollider2D box; // the square part of a D-shaped or rectangular body; never added to a round one
         Battery battery;
         MovementBrain brain;
 
@@ -211,7 +215,27 @@ namespace RobotVacuum.Sim
         public Vector2 LevelPosition =>
             levelRenderer != null ? levelRenderer.WorldToLevel(WorldPosition) : (Vector2)WorldPosition;
 
+        /// <summary>Half the body's width (for Round, its radius). The same for every shape, so lanes and clearances don't change with it.</summary>
         public float Radius => radius;
+
+        /// <summary>
+        /// The body's outline. Choose it before the run starts: setting it rebuilds the colliders and the drawing. A
+        /// round body turns as it always has; the others turn through the physics solver (see <see cref="ApplyMotion"/>).
+        /// </summary>
+        public VacuumShapeKind ShapeKind
+        {
+            get => shape;
+            set
+            {
+                if (shape == value) return;
+                shape = value;
+                ConfigureComponents();
+                if (transform.Find("Visual") != null) BuildVisual();
+            }
+        }
+
+        /// <summary>The body's geometry, in its own frame: what the colliders, footprints, sensors and drawings use.</summary>
+        public VacuumShape Shape => VacuumShape.For(shape, radius);
 
         /// <summary>Width of floor cleaned in one pass, in metres.</summary>
         public float CleaningWidth => radius * 2f;
@@ -259,7 +283,23 @@ namespace RobotVacuum.Sim
             turnAngleRange.x = Mathf.Max(5f, turnAngleRange.x);
             turnAngleRange.y = Mathf.Max(turnAngleRange.x, turnAngleRange.y);
 
-            if (!Application.isPlaying) ConfigureComponents();
+            if (!Application.isPlaying)
+            {
+                ConfigureComponents(addMissing: false);
+#if UNITY_EDITOR
+                // Components can't be added during OnValidate, so a shape newly picked in the Inspector is applied
+                // just after. Nothing is scheduled when the shape hasn't changed (OnValidate also runs on every load).
+                if (shape != drawnShape)
+                {
+                    EditorApplication.delayCall += () =>
+                    {
+                        if (this == null || Application.isPlaying) return;
+                        ConfigureComponents();
+                        BuildVisual();
+                    };
+                }
+#endif
+            }
         }
 
         void Awake()
@@ -293,10 +333,11 @@ namespace RobotVacuum.Sim
             return true;
         }
 
-        void ConfigureComponents()
+        void ConfigureComponents(bool addMissing = true)
         {
             body = GetComponent<Rigidbody2D>();
             circle = GetComponent<CircleCollider2D>();
+            box = GetComponent<BoxCollider2D>();
             battery = GetComponent<Battery>();
 
             if (body != null)
@@ -309,6 +350,52 @@ namespace RobotVacuum.Sim
             }
 
             if (circle != null) circle.radius = radius;
+            ApplyShape(addMissing);
+        }
+
+        /// <summary>
+        /// Builds the hitbox for <see cref="Shape"/> on the one rigidbody:
+        ///   Round: the disc alone, rotation frozen, exactly the original body.
+        ///   D-shaped: the disc plus a box over the front half whose rounded back corners sit inside the disc, so the
+        ///     two together are exactly the D (see <see cref="VacuumShape.FrontBox"/>).
+        ///   Rectangular: the box alone (the disc is switched off; it stays because it is a required component).
+        /// A non-round body may rotate under the solver, about its turning centre: the centre of mass is pinned there
+        /// (an automatic one would sit forward of the axle for a D) and nothing damps the commanded turn rate.
+        /// </summary>
+        void ApplyShape(bool addMissing)
+        {
+            var outline = Shape;
+
+            if (circle != null) circle.enabled = outline.kind != VacuumShapeKind.Rectangular;
+
+            if (outline.FrontBox(out Vector2 centre, out Vector2 halfExtents))
+            {
+                if (box == null && addMissing) box = gameObject.AddComponent<BoxCollider2D>();
+                if (box != null)
+                {
+                    box.enabled = true;
+                    box.edgeRadius = outline.corner;
+                    box.size = new Vector2(2f * (halfExtents.x - outline.corner), 2f * (halfExtents.y - outline.corner));
+                    box.offset = centre;
+                }
+            }
+            else if (box != null)
+            {
+                box.enabled = false;
+            }
+
+            if (body == null) return;
+
+            if (outline.IsRound)
+            {
+                body.freezeRotation = true; // a disc's centre of mass is its centre already
+            }
+            else
+            {
+                body.freezeRotation = false;
+                body.angularDamping = 0f;
+                body.centerOfMass = Vector2.zero;
+            }
         }
 
         // ---------------------------------------------------------------- commands
@@ -353,7 +440,7 @@ namespace RobotVacuum.Sim
 
             if (!battery.CanOperate || stuckReason != null)
             {
-                body.linearVelocity = Vector2.zero;
+                Halt();
                 return;
             }
 
@@ -365,18 +452,50 @@ namespace RobotVacuum.Sim
             WatchProgress(dt);
             if (stuckReason != null)
             {
-                body.linearVelocity = Vector2.zero;
+                Halt();
                 return;
             }
 
             forward = Mathf.Clamp(forward, -reverseSpeed, DriveSpeedNow);
             turn = Mathf.Clamp(turn, -turnSpeed, turnSpeed);
 
-            body.linearVelocity = Forward * forward;
-            if (Mathf.Abs(turn) > CommandEpsilon) body.MoveRotation(body.rotation + turn * dt);
+            ApplyMotion(forward, turn, dt);
 
             lastForward = forward;
             lastTurn = turn;
+        }
+
+        /// <summary>
+        /// Puts this step's (already clamped) drive command on the body. Both rates are set every step, as wheels with
+        /// grip hold them; contacts change them only within the step the solver resolves.
+        ///
+        /// Round: the turn is a MoveRotation, as it always was. A disc turning about its own centre sweeps nothing, so
+        /// this can never push it into a wall, and round runs stay exactly what they were.
+        /// D-shaped and Rectangular: the turn is an angular velocity, which the solver integrates together with the
+        /// contacts (continuous collision included). A corner that meets a wall mid-turn stops the turn, or the
+        /// contact pushes the body off the wall, instead of the body rotating through it; and a contact's torque turns
+        /// the body as it would a real one (requirement 3.3). Box2D is deterministic, so the same run repeats exactly.
+        /// </summary>
+        internal void ApplyMotion(float forward, float turn, float dt)
+        {
+            body.linearVelocity = Forward * forward;
+            if (shape == VacuumShapeKind.Round)
+            {
+                if (Mathf.Abs(turn) > CommandEpsilon) body.MoveRotation(body.rotation + turn * dt);
+            }
+            else
+            {
+                // Turn about the axle, not wherever the colliders would put an automatic centre of mass.
+                if (body.centerOfMass != Vector2.zero) body.centerOfMass = Vector2.zero;
+                body.angularVelocity = turn;
+            }
+        }
+
+        /// <summary>Stops the wheels: no drive, no turn.</summary>
+        void Halt()
+        {
+            body.linearVelocity = Vector2.zero;
+            if (shape != VacuumShapeKind.Round) body.angularVelocity = 0f;
         }
 
         float lastForward;
@@ -469,14 +588,17 @@ namespace RobotVacuum.Sim
             var filter = ContactFilter2D.noFilter;
             filter.useTriggers = false;
 
-            int count = Physics2D.Raycast(body.position, direction.normalized, filter, probeHits, maxDistance + radius);
+            // From the body's edge along that direction: the radius for a round body.
+            float edge = shape == VacuumShapeKind.Round ? radius : Shape.EdgeDistance(Vector2.SignedAngle(Forward, direction));
+
+            int count = Physics2D.Raycast(body.position, direction.normalized, filter, probeHits, maxDistance + edge);
             float nearest = float.PositiveInfinity;
 
             for (int i = 0; i < count; i++)
             {
                 var hit = probeHits[i];
                 if (hit.collider == null || hit.collider.attachedRigidbody == body) continue;
-                nearest = Mathf.Min(nearest, Mathf.Max(0f, hit.distance - radius));
+                nearest = Mathf.Min(nearest, Mathf.Max(0f, hit.distance - edge));
             }
 
             return nearest;
@@ -535,7 +657,7 @@ namespace RobotVacuum.Sim
 
         // ---------------------------------------------------------------- visual
 
-        /// <summary>Generates the disc-and-nose mesh so the robot is visible without any art assets.</summary>
+        /// <summary>Generates the body-and-nose mesh (in the body's shape) so the robot is visible without any art assets.</summary>
         public void BuildVisual()
         {
             var existing = transform.Find("Visual");
@@ -547,8 +669,10 @@ namespace RobotVacuum.Sim
 
             var visual = new GameObject("Visual");
             visual.transform.SetParent(transform, false);
+            drawnShape = shape;
 
-            CreatePart(visual.transform, "Body", BuildDisc(radius, 32), bodyColor, 0f);
+            var bodyMesh = shape == VacuumShapeKind.Round ? BuildDisc(radius, 32) : BuildOutline(Shape);
+            CreatePart(visual.transform, "Body", bodyMesh, bodyColor, 0f);
             CreatePart(visual.transform, "Nose", BuildNose(radius), noseColor, -0.01f);
         }
 
@@ -570,6 +694,9 @@ namespace RobotVacuum.Sim
             block.SetColor("_Color", color);
             renderer.SetPropertyBlock(block);
         }
+
+        /// <summary>The shape the current drawing shows.</summary>
+        [System.NonSerialized] VacuumShapeKind drawnShape;
 
         static Material sharedVisualMaterial;
 
@@ -611,6 +738,30 @@ namespace RobotVacuum.Sim
                 triangles[i * 3] = 0;
                 triangles[i * 3 + 1] = i + 1;
                 triangles[i * 3 + 2] = (i + 1) % segments + 1;
+            }
+
+            var mesh = new Mesh { name = "VacuumBody" };
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        /// <summary>A triangle fan from the turning centre over the shape's outline (every shape is convex around it).</summary>
+        static Mesh BuildOutline(VacuumShape outline)
+        {
+            var points = outline.Outline(8);
+            var vertices = new Vector3[points.Count + 1];
+            var triangles = new int[points.Count * 3];
+
+            vertices[0] = Vector3.zero;
+            for (int i = 0; i < points.Count; i++)
+            {
+                vertices[i + 1] = new Vector3(points[i].x, points[i].y, 0f);
+                triangles[i * 3] = 0;
+                triangles[i * 3 + 1] = i + 1;
+                triangles[i * 3 + 2] = (i + 1) % points.Count + 1;
             }
 
             var mesh = new Mesh { name = "VacuumBody" };

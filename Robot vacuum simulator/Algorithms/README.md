@@ -78,6 +78,11 @@ detected (disclosed limitation).
   takes a few milliseconds, and an unchanged file is not compiled again.
 - .NET cannot unload code, so each changed version of a file stays in memory until the simulator closes. Harmless
   for normal use; restart after many edit-and-rescan cycles.
+- The body can be Round (the default), D-shaped or Rectangular (Configuration › Vacuum › Body shape, or `vacuum.shape`
+  in a job file). Every shape is 34 cm wide, so `robotRadius` (half the width) and `cleaningWidth` are the same for all
+  three and lane spacing needs no change. The D and the rectangle need more room to turn in place (about 46 and 51 cm
+  across, against 34 cm), and their corners can catch a wall mid-turn; the controller handles that (it backs off and
+  re-routes), so an algorithm doesn't have to.
 
 ## Map analysis
 

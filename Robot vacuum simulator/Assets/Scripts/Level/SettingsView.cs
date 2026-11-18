@@ -10,7 +10,7 @@ using UnityEngine.UIElements;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
-    /// The start screen's Network Settings page. Its first two sections are the network workers (3.9,
+    /// The start screen's Settings page. Its first two sections are the network workers (3.9,
     /// <see cref="NetworkWorkersView"/>): this PC as a worker, and the workers this PC can split batches across.
     /// Its Cloud connection section is "bring your own cloud" (5.5): the user connects
     /// their own organisation's AWS account, picks the network campaigns run in, sets up the resources there from the
@@ -26,6 +26,13 @@ namespace RobotVacuum.LevelEditor
         static VacuumctlProcess running;
         static readonly List<string> output = new List<string>();
         static TestReport lastReport;
+
+        // The tabs. The last one chosen is kept while the program runs.
+        static int selectedTab;
+        static readonly string[] TabNames = { "General", "Data & storage", "Network", "About" };
+        static readonly IconKind[] TabIcons = { IconKind.Sliders, IconKind.Save, IconKind.Grid, IconKind.Help };
+        const int NetworkTab = 2;
+        readonly List<VisualElement> tabs = new List<VisualElement>();
 
         readonly OverlayLayer overlay;
         readonly ScrollView content;
@@ -48,8 +55,9 @@ namespace RobotVacuum.LevelEditor
             AddToClassList("le-screen");
             AddToClassList("le-settings");
 
-            Ui.PageHeader(this, "Network Settings", "Start screen", () => BackRequested?.Invoke(), out var subtitle);
-            subtitle.text = "Network workers and the cloud connection for batch campaigns";
+            Ui.PageHeader(this, "Settings", "Start screen", () => BackRequested?.Invoke(), out var subtitle);
+            subtitle.text = "Display, data and storage, network workers and the cloud connection";
+            BuildTabs();
 
             content = new ScrollView(ScrollViewMode.Vertical);
             content.AddToClassList("le-page__content");
@@ -66,11 +74,60 @@ namespace RobotVacuum.LevelEditor
             RegisterCallback<AttachToPanelEvent>(_ => pump?.Resume());
         }
 
+        void BuildTabs()
+        {
+            var bar = Ui.Div(this, "le-tabs");
+            for (int i = 0; i < TabNames.Length; i++)
+            {
+                int index = i;
+                var tab = Ui.Div(bar, "le-tabs__tab");
+                tab.Add(new IconElement(TabIcons[i]));
+                Ui.Text(tab, TabNames[i], "le-tabs__label");
+                tab.AddManipulator(new Clickable(() =>
+                {
+                    if (selectedTab == index) return;
+                    selectedTab = index;
+                    UpdateTabs();
+                    Rebuild();
+                    content.scrollOffset = Vector2.zero;
+                }));
+                Ui.RepaintIconsOnInteraction(tab);
+                tabs.Add(tab);
+            }
+            UpdateTabs();
+        }
+
+        void UpdateTabs()
+        {
+            for (int i = 0; i < tabs.Count; i++) Ui.SetClass(tabs[i], "le-tabs__tab--selected", i == selectedTab);
+            foreach (var tab in tabs) IconElement.RepaintAll(tab);
+        }
+
         void Rebuild()
         {
             content.Clear();
             actionButtons.Clear();
+            problemsLabel = null;
+            runningLabel = null;
+            cancelButton = null;
+            checksBox = null;
+            outputBox = null;
             var column = Ui.Div(content, "le-page__column");
+
+            switch (selectedTab)
+            {
+                case 0:
+                    column.Add(new GeneralSettingsView(overlay));
+                    return;
+                case 1:
+                    column.Add(new DataStorageView(overlay));
+                    return;
+                case 3:
+                    column.Add(new AboutView(overlay));
+                    return;
+            }
+
+            // Network: the network workers (3.9), then the cloud connection (5.5).
 
             column.Add(new NetworkWorkersView(overlay));
             BuildAccount(Ui.Div(column, "le-panel"));
@@ -225,9 +282,12 @@ namespace RobotVacuum.LevelEditor
                 "The Settings page runs the vacuumctl tool for everything that talks to AWS. It needs Python 3.10+ with boto3.");
 
             TextRow(panel, "Python command", tool.python, value => tool.python = value.Trim(),
-                $"Empty = {VacuumctlProcess.PythonCommand(new CloudConnection())}.", rebuild: true);
+                $"A command (py, python3) or the full path of python.exe. Empty = {VacuumctlProcess.PythonCommand(new CloudConnection())}.", 1024, rebuild: true,
+                browse: () => FileDialogs.PickFile("Choose python.exe", tool.python, "Programs", "*.exe"));
             TextRow(panel, "Cloud folder", tool.cloudFolder, value => tool.cloudFolder = value.Trim(),
-                "The repository's cloud folder. Empty = found automatically.", 1024, rebuild: true);
+                "The repository's cloud folder (the one holding vacuumctl). Empty = found automatically.", 1024, rebuild: true,
+                browse: () => FileDialogs.PickFolder("Choose the repository's cloud folder", string.IsNullOrEmpty(tool.cloudFolder)
+                    ? VacuumctlProcess.FindCloudFolder(connection, out _) : tool.cloudFolder));
 
             string folder = VacuumctlProcess.FindCloudFolder(connection, out string problem);
             Ui.Text(panel, folder != null ? $"Using {folder}" : problem, folder != null ? "le-empty-hint" : "le-empty-hint le-settings__warn");
@@ -461,8 +521,9 @@ namespace RobotVacuum.LevelEditor
             Ui.SetVisible(problemsLabel, problems.Count > 0);
         }
 
+        /// <param name="browse">Optional: opens a Windows folder or file window and returns the chosen path (null if cancelled).</param>
         void TextRow(VisualElement panel, string label, string value, Action<string> store, string hint, int maxLength = 128,
-            bool rebuild = false)
+            bool rebuild = false, Func<string> browse = null)
         {
             var row = Ui.Div(panel, "le-settings__row le-panel__gap");
             Ui.Text(row, label, "le-field-label le-settings__label");
@@ -472,6 +533,14 @@ namespace RobotVacuum.LevelEditor
                 Changed(rebuild);
             }, "le-settings__grow");
             field.maxLength = maxLength;
+            if (browse != null && FileDialogs.Available)
+                Ui.Button(row, "Browse...", null, () =>
+                {
+                    string picked = browse();
+                    if (string.IsNullOrEmpty(picked)) return;
+                    store(picked);
+                    Changed(rebuild: true); // shows the new path in the box
+                }, "le-btn--ghost le-settings__browse");
             if (!string.IsNullOrEmpty(hint)) Ui.Text(panel, hint, "le-empty-hint");
         }
 

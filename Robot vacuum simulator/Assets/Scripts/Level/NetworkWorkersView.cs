@@ -11,7 +11,7 @@ using UnityEngine.UIElements;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
-    /// The Network Settings page's network worker sections (requirement 3.9). "This PC as a worker" starts and controls
+    /// The Settings page's network worker sections (requirement 3.9). "This PC as a worker" starts and controls
     /// this computer's own worker (a separate headless process) and shows its pairing code; "Network workers" lists
     /// the workers this PC can send batches to, adds one with its address and pairing code, and removes one. Nothing
     /// here needs any other tool: only the simulator on each computer.
@@ -121,7 +121,7 @@ namespace RobotVacuum.LevelEditor
                     if (pairing)
                     {
                         Ui.Text(localStatus, status.pairingCode, "le-network__code");
-                        Ui.Text(localStatus, $"Pairing code. On the other PC: Network Settings > Network workers > Add worker. Valid for {remaining}, for one PC.", "le-empty-hint");
+                        Ui.Text(localStatus, $"Pairing code. On the other PC: Settings > Network workers > Add worker. Valid for {remaining}, for one PC.", "le-empty-hint");
                         Ui.Button(localActions, "Stop pairing", null, () => LocalWorker.Send("close-pairing"), "le-btn--ghost");
                     }
                     else Ui.Button(localActions, "Allow a new PC to pair", IconKind.Plus, () => LocalWorker.Send("open-pairing", minutes: WorkerProtocol.PairingMinutes), "le-btn--primary");
@@ -215,7 +215,7 @@ namespace RobotVacuum.LevelEditor
             Ui.Button(actions, "Add worker", IconKind.Plus, ShowAddWorker, "le-btn--primary");
             Ui.Button(actions, "Check all", IconKind.Check, CheckAll, "le-btn--ghost");
 
-            Ui.Text(panel, "To add a computer: install the same version of the simulator on it, open its Network Settings, choose Start worker and then " +
+            Ui.Text(panel, "To add a computer: install the same version of the simulator on it, open its Settings, choose Start worker and then " +
                            "'Allow a new PC to pair'. Press Add worker here and enter the address and code it shows.", "le-empty-hint");
             if (Application.isEditor)
                 Ui.Text(panel, "This simulator is running in the Unity editor. A worker refuses a different version number, but it can't tell whether a " +

@@ -50,6 +50,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Battery capacity in work units. 0 = the battery's own default.")]
         public float batteryCapacity;
 
+        [Tooltip("The body's outline (3.3): Round (the original disc, the default), D-shaped or Rectangular. Fixed for the run.")]
+        public VacuumShapeKind shape = VacuumShapeKind.Round;
+
         [Header("Sensing")]
         [Tooltip("SLAM on: the robot starts with no map, its sensors and odometry are noisy, and it must build its map and track its own position. SLAM off (Normal): the map is preloaded and readings are exact.")]
         public bool slam;
@@ -167,6 +170,7 @@ namespace RobotVacuum.Sim
                 driveSpeed = robot.DriveSpeedMetersPerSecond;
                 reverseSpeed = robot.ReverseSpeedMetersPerSecond;
                 turnSpeed = robot.TurnSpeedDegreesPerSecond;
+                shape = robot.ShapeKind;
             }
 
             if (battery != null) batteryCapacity = battery.Capacity;

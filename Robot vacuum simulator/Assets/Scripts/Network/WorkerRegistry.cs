@@ -206,7 +206,7 @@ namespace RobotVacuum.Network
             }
             catch (WorkerException exception)
             {
-                note = $"{worker.name} could not be told ({exception.Message}); it can remove this PC from its own Network Settings.";
+                note = $"{worker.name} could not be told ({exception.Message}); it can remove this PC from its own Settings.";
             }
             Secrets.Delete(KeyName(worker.workerId));
             lock (gate)
@@ -241,7 +241,7 @@ namespace RobotVacuum.Network
     }
 
     /// <summary>
-    /// The worker on THIS computer, as Network Settings sees it: started as a separate headless process of this
+    /// The worker on THIS computer, as Settings sees it: started as a separate headless process of this
     /// simulator (so it keeps the GUI responsive and is the same component as a worker started by hand), followed
     /// through Worker/worker-status.json and told what to do through Worker/worker-control.json.
     /// </summary>

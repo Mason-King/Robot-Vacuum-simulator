@@ -36,7 +36,7 @@ namespace RobotVacuum.Sim.Sensors
         /// <summary>Bearings of the points along the front edge, degrees CCW from straight ahead.</summary>
         static readonly float[] PointBearings = { -45f, -15f, 15f, 45f };
 
-        /// <summary>How far in from the body's edge the points sit, as a fraction of the radius.</summary>
+        /// <summary>How far in from the body's edge the points sit, as a fraction of the distance to the edge along each bearing.</summary>
         const float EdgeFraction = 0.9f;
 
         public CliffSensor(bool enabled) => Enabled = enabled;
@@ -49,7 +49,8 @@ namespace RobotVacuum.Sim.Sensors
 
             foreach (float bearing in PointBearings)
             {
-                Vector2 point = context.truePosition + context.WorldDirection(bearing) * (context.robotRadius * EdgeFraction);
+                // Under the body's own edge along each bearing: the radius for a round body, the flat front for a D or a box (3.3).
+                Vector2 point = context.truePosition + context.WorldDirection(bearing) * (context.shape.EdgeDistance(bearing) * EdgeFraction);
                 frame.cliffPoints.Add(new CliffPoint { bearing = bearing, floorPresent = !IsDropAt(context, point) });
             }
         }

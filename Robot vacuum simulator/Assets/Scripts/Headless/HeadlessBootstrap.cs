@@ -130,7 +130,7 @@ namespace RobotVacuum.Headless
         public bool worker;
         public int workerPort;
         public int workerProcesses;
-        public int workerPairMinutes = -1; // -1: open pairing for 10 minutes when started by hand, not when started from Network Settings
+        public int workerPairMinutes = -1; // -1: open pairing for 10 minutes when started by hand, not when started from Settings
         public int workerParentPid;
 
         public static HeadlessArgs Parse(string[] argv)

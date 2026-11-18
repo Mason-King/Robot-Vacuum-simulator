@@ -268,6 +268,8 @@ namespace RobotVacuum.Headless
                 Range(errors, $"{at}.vacuum.reverseSpeed", c.vacuum.reverseSpeed, 0.01f, 5f);
                 Range(errors, $"{at}.vacuum.turnSpeed", c.vacuum.turnSpeed, 1f, 2000f);
                 Range(errors, $"{at}.vacuum.vacuumPower", c.vacuum.vacuumPower, 0.01f, 100f);
+                if (!c.vacuum.TryShape(out _))
+                    errors.Add($"{at}.vacuum.shape: \"{c.vacuum.shape}\" is not one of Round, DShaped, Rectangular.");
 
                 Range(errors, $"{at}.battery.capacity", c.battery.capacity, 1f, Battery.MaxCapacity);
                 Range(errors, $"{at}.battery.distanceEnergyPerMeter", c.battery.distanceEnergyPerMeter, 0f, 1000f);
@@ -591,6 +593,7 @@ namespace RobotVacuum.Headless
             turnSpeed = vacuum.turnSpeed,
             batteryCapacity = battery.capacity,
             useFeet = false,
+            shape = vacuum.TryShape(out var kind) ? kind : VacuumShapeKind.Round,
         };
     }
 
@@ -604,6 +607,11 @@ namespace RobotVacuum.Headless
 
         /// <summary>Cleanliness gained per second of dwell on a floor with cleaning effort 1 (SDD 5.2).</summary>
         public float vacuumPower = 1f;
+
+        /// <summary>The body's outline (3.3): Round, DShaped or Rectangular, any case. Missing or empty = Round, the original body.</summary>
+        public string shape = nameof(VacuumShapeKind.Round);
+
+        public bool TryShape(out VacuumShapeKind kind) => VacuumShape.TryParse(shape, out kind);
     }
 
     /// <summary>Battery size and its work-based drain (1.3.4, 3.6). Defaults match the Battery component.</summary>

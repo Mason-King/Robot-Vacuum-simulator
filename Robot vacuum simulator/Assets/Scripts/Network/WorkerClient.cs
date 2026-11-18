@@ -59,7 +59,7 @@ namespace RobotVacuum.Network
         {
             string code = SecureChannel.NormalizePairingCode(pairingCode);
             if (code.Length != SecureChannel.PairingCodeLength)
-                throw new WorkerException($"A pairing code has {SecureChannel.PairingCodeLength} letters and digits, like ABCDE-FGHJK. Copy it from the worker's Network Settings page or its window.");
+                throw new WorkerException($"A pairing code has {SecureChannel.PairingCodeLength} letters and digits, like ABCDE-FGHJK. Copy it from the worker's Settings page or its window.");
 
             using (var tcp = Open(host, port))
             {

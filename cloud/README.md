@@ -24,7 +24,7 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 | Container | `cloud/docker/` | Ubuntu + the Linux build + `entrypoint.py` (fetch job, run shard, stream results to S3, resume after retry). |
 | Infrastructure | `cloud/infra/base.yaml`, `compute.yaml` | CloudFormation. *base*: ECR, results bucket, budget alert, GitHub OIDC role. *compute*: VPC, AWS Batch (EC2/Spot), job queue/definition, IAM, logs — created per campaign, deleted after. |
 | Control CLI | `cloud/vacuumctl/` | `validate`, `local`, `compare`, `connection`, `test-connection`, `sso-login`, `admin-policy`, `backends`, `bootstrap`, `push-image`, `up`, `submit`, `status`, `logs`, `retry`, `fetch`, `run`, `down`, `destroy`. |
-| Network Settings page | `Assets/Scripts/Level/SettingsView.cs`, `Assets/Scripts/LevelEditor/Cloud/` | Start screen › **Network Settings**: the cloud connection (account, sign-in, region, prefix, network, compute limits), Test connection, Set up / Remove cloud resources, Save admin policy. Runs `vacuumctl`; holds no credentials. |
+| Settings page | `Assets/Scripts/Level/SettingsView.cs`, `Assets/Scripts/LevelEditor/Cloud/` | Start screen › **Settings**: the cloud connection (account, sign-in, region, prefix, network, compute limits), Test connection, Set up / Remove cloud resources, Save admin policy. Runs `vacuumctl`; holds no credentials. |
 | Admin policy | `cloud/infra/vacuum-sim-user-policy.template.json` | Least-privilege IAM policy for the user or role that runs campaigns (`vacuumctl admin-policy` fills it in). |
 | CI | `.github/workflows/cloud-headless.yml` | Tests → Linux server build artifact → Docker image + 4-run smoke test in the container → push to ECR on `main`. |
 | Job format | `cloud/docs/job-format.md` | Every configuration, vacuum, battery, floor-covering and floor-plan field, with defaults and ranges. |
@@ -51,7 +51,7 @@ automated provisioning and teardown). SDD sections 2.1, 2.2, 8 and 12.
 
 Campaigns run in **your organisation's own AWS account**. The templates set up the resources there, your data
 stays in your account, and AWS bills you directly; there is no service of ours in between. Everything is set on
-the start screen's **Network Settings** page, or with `python -m vacuumctl connection set ...`; both edit the same file:
+the start screen's **Settings** page, or with `python -m vacuumctl connection set ...`; both edit the same file:
 
 | | |
 |---|---|
@@ -64,7 +64,7 @@ the start screen's **Network Settings** page, or with `python -m vacuumctl conne
 
 **No secrets are stored** (C.12): the file holds a profile *name* or a file *path*, never keys or passwords. Keys stay
 where AWS keeps them: `~/.aws`, the SSO cache, or a `credential_process` (which is how a Windows Credential Manager
-helper plugs in). The simulator itself never talks to AWS: the Network Settings page runs `vacuumctl`, and nothing touches
+helper plugs in). The simulator itself never talks to AWS: the Settings page runs `vacuumctl`, and nothing touches
 the network until a button there is pressed (1.1.1).
 
 Precedence for each setting: command-line flag > connection file > environment (`AWS_PROFILE`, `AWS_REGION`) > default.
@@ -103,7 +103,7 @@ doesn't overlap a network you peer or VPN with. **HTTPS proxy:** for corporate n
 
 `vacuumctl/backends.py` is the interface every place a campaign can run implements (test the connection, set up,
 remove, run). Shipped: **local** (this computer) and **aws**. Azure, Google Cloud and SSH clusters are listed as
-planned (C.4). Adding one is a new backend class plus its own settings section on the Network Settings page; campaign
+planned (C.4). Adding one is a new backend class plus its own settings section on the Settings page; campaign
 files, results, statistics and reports stay the same.
 
 ## One-time setup (starting from an empty AWS account)
@@ -114,7 +114,7 @@ files, results, statistics and reports stay the same.
    (only for signing in), and Docker Desktop (only if you push images from your PC instead of CI).
 3. **Sign in:** `aws configure sso --profile vacuum` and pick a region (e.g. `us-east-2`). Credentials stay in
    your AWS config — nothing is stored in this repo or the build (C.12). Then set the connection, either on the
-   simulator's **Network Settings** page or with
+   simulator's **Settings** page or with
    `python -m vacuumctl connection set --sign-in sso --profile vacuum --region us-east-2`, and press **Test connection**
    (`python -m vacuumctl test-connection`).
 4. **Python deps:** `cd cloud && pip install -r vacuumctl/requirements.txt`
@@ -209,14 +209,15 @@ run and the statistics in the same columns, for checking by hand.
 | AT-2.8-1 | A batch of 20+ seeds for one algorithm: in the app (Start simulation › batch, 20 seeds), or a campaign with `"sweep": {"algorithms": ["BoustrophedonSweep"], "seedStart": 1, "seedCount": 20}` run with `vacuumctl run`/`local` and imported. Analysis shows mean, variance, SD and 95% CI for coverage, time and battery. |
 | AT-2.8-2 | Analysis › the batch › **Export CSV** (or `campaign_runs.csv`). In Excel, for each measure: `=AVERAGE(...)`, `=VAR.S(...)`, and the CI half-width `=T.INV.2T(0.05, n-1)*SQRT(VAR.S(...)/n)`; they match the table. |
 | AT-2.18 | Import a cloud campaign: it is listed in Analysis as a batch, with the averaged heat map, mean coverage curve and statistics, the same view as a single run's results but marked *Cloud campaign*. |
-| AT-3.9 | **Network workers (main demonstration, same network, nothing to install but the simulator):** on PC B, Network Settings › *Start worker* › *Allow a new PC to pair*. On PC A, Network Settings › Network workers › *Add worker* with B's address and code. On A, Start simulation › a floor plan › Batch, switch on B under **Run on**, Run batch. The bar at the bottom shows both computers' progress; Details lists each; the batch then appears in Analysis marked *Network campaign*. The interface is specified in `docs/worker-protocol.md`. Also: the Windows PC (vacuumctl) and AWS nodes, on different networks, through the job/results interface. |
+| AT-3.3 | Automated: Unity Test Runner › EditMode › `AT_3_3_Rectangle_PassesTheGapAligned_ButNotAcross` (a 38 cm gap; the 34 × 40 cm body held side-on is stopped at the gap and never overlaps the walls, then drives through lined up). The rest of `BodyShapePhysicsTests` covers turning against a wall, full speed and full turn rate without tunnelling, and identical repeats. By hand: Configuration › Vacuum › **Body shape** › Rectangular (or D-shaped), then run a floor plan with a narrow doorway. In a job file: `"vacuum": { "shape": "Rectangular" }`. |
+| AT-3.9 | **Network workers (main demonstration, same network, nothing to install but the simulator):** on PC B, Settings › *Start worker* › *Allow a new PC to pair*. On PC A, Settings › Network workers › *Add worker* with B's address and code. On A, Start simulation › a floor plan › Batch, switch on B under **Run on**, Run batch. The bar at the bottom shows both computers' progress; Details lists each; the batch then appears in Analysis marked *Network campaign*. The interface is specified in `docs/worker-protocol.md`. Also: the Windows PC (vacuumctl) and AWS nodes, on different networks, through the job/results interface. |
 | AT-3.12 | After a network batch: Details › Show folder. `network.log` (this PC: connections, shards sent and moved, downloads) and `shards/shard-NNNN/logs/unity.log` from every computer that ran a shard are side by side in the campaign folder; each worker also keeps `Worker/worker.log`. Cloud: `vacuumctl.log` plus `vacuumctl logs`. |
 | AT-3.10 | GitHub › Actions › *Cloud headless node*: a run per commit with test stages and the `linux-server-<sha>` artifact (and image in ECR on `main`). |
 | AT-5.5 | `vacuumctl run examples/campaign.example.json --nodes 8`. While it runs, EC2 › Instances shows nodes tagged `robot-vacuum-sim-node`; afterwards they are gone and CloudFormation shows no `robot-vacuum-sim-compute` stack. |
 
 ## Network workers (3.9)
 
-Any copy of the simulator can be a **worker** for others on the same network: Network Settings › *This PC as a worker*,
+Any copy of the simulator can be a **worker** for others on the same network: Settings › *This PC as a worker*,
 or `RobotVacuum.exe -batchmode -nographics -worker` on an unattended lab PC (it prints its address and a pairing code).
 A researcher pairs once (address + the 10-character code; nothing else to install), then picks workers under **Run on**
 in the batch dialog. The batch is split in proportion to each computer's simulation slots, a computer that drops out has
@@ -281,9 +282,9 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
 
 ## Not done here / still open
 
-- **Starting campaigns from the GUI.** The Network Settings page sets up and checks the connection, and Analysis
+- **Starting campaigns from the GUI.** The Settings page sets up and checks the connection, and Analysis
   imports the results; campaigns still start from `vacuumctl` (or the GUI's in-app batch). A "Run on: This computer /
-  Cloud" choice in the batch dialog could call `vacuumctl run` the way the Network Settings page calls
+  Cloud" choice in the batch dialog could call `vacuumctl run` the way the Settings page calls
   `test-connection`, then import the results automatically.
 - **4.6 pairwise comparison.** Confidence intervals are shown for every measure. A paired comparison between
   algorithms on the same seeds (mean difference with CI, paired t-test, effect size) would strengthen AT-4.6-1.

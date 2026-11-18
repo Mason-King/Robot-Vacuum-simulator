@@ -240,22 +240,34 @@ namespace RobotVacuum.LevelEditor
             Ui.Text(panel, "PER-ALGORITHM STATISTICS · IDENTICAL SEEDS", "le-section__title");
             BuildStatsTable(panel, summaries);
 
-            // Coverage bars with the confidence interval as a whisker, so overlaps read at a glance.
+            // Coverage bars with the confidence interval as an error bar (|—|), so overlaps read at a glance. No error bar
+            // when there is no interval: one run, or every run identical (a deterministic algorithm on fixed seeds).
             Ui.Text(panel, "COVERAGE", "le-section__title le-analysis__chart-title");
             foreach (var summary in summaries)
             {
                 var row = Ui.Div(panel, "le-compare-row");
-                Ui.Text(row, summary.Label, "le-compare-row__label");
+                var name = Ui.Text(row, summary.Label, "le-compare-row__label");
+                Ui.Tooltip(name, summary.Label);
                 var track = Ui.Div(row, "le-compare-row__track le-compare-row__track--ci");
                 var fill = Ui.Div(track, "le-compare-row__fill");
-                fill.style.width = Length.Percent(Mathf.Clamp((float)summary.coverage.mean, 0f, 100f));
-                var whisker = Ui.Div(track, "le-compare-row__ci");
-                float low = Mathf.Clamp((float)(summary.coverage.mean - summary.coverage.ci95), 0f, 100f);
-                float high = Mathf.Clamp((float)(summary.coverage.mean + summary.coverage.ci95), 0f, 100f);
-                whisker.style.left = Length.Percent(low);
-                whisker.style.width = Length.Percent(Mathf.Max(0.4f, high - low));
-                Ui.Text(row, $"{summary.coverage.mean:0.0}%", "le-compare-row__value");
+                double mean = summary.coverage.mean, ci = summary.coverage.ci95;
+                fill.style.width = Length.Percent(Mathf.Clamp((float)mean, 0f, 100f));
+
+                bool hasInterval = summary.coverage.count >= 2 && !double.IsNaN(ci) && !double.IsInfinity(ci) && ci >= 0.05;
+                if (hasInterval)
+                {
+                    var whisker = Ui.Div(track, "le-compare-row__ci");
+                    Ui.Div(whisker, "le-compare-row__ci-line");
+                    float low = Mathf.Clamp((float)(mean - ci), 0f, 100f);
+                    float high = Mathf.Clamp((float)(mean + ci), 0f, 100f);
+                    whisker.style.left = Length.Percent(low);
+                    whisker.style.width = Length.Percent(Mathf.Max(0.4f, high - low));
+                }
+
+                Ui.Text(row, hasInterval ? $"{mean:0.0}% ± {ci:0.0}" : $"{mean:0.0}%", "le-compare-row__value le-compare-row__value--ci");
             }
+            Ui.Text(panel, "Bar: mean coverage. |—|: its 95% confidence interval (none when every run came out the same). Few seeds give wide intervals.",
+                "le-empty-hint le-analysis__chart-note");
 
             // Averaged heatmap and coverage curve for one algorithm at a time.
             var mapPanel = Ui.Div(column, "le-panel");
@@ -493,7 +505,7 @@ namespace RobotVacuum.LevelEditor
             {
                 var v = run.vacuum;
                 Ui.Text(log,
-                    $"Final settings: drive {v.FormatSpeed(v.driveSpeed)} · reverse {v.FormatSpeed(v.reverseSpeed)} · turn {v.turnSpeed:0} °/s · " +
+                    $"Final settings: {VacuumShape.Label(v.shape).ToLowerInvariant()} body · drive {v.FormatSpeed(v.driveSpeed)} · reverse {v.FormatSpeed(v.reverseSpeed)} · turn {v.turnSpeed:0} °/s · " +
                     $"battery {VacuumSettings.FormatCapacity(v.batteryCapacity)} · grid {Ui.FormatSmallLength(run.cellSize)} · " +
                     $"telemetry every {run.telemetryInterval:0.##} s",
                     "le-empty-hint");
@@ -891,7 +903,7 @@ namespace RobotVacuum.LevelEditor
             slider.SetValueWithoutNotify(time);
 
             int index = Mathf.Clamp(Mathf.RoundToInt(time / Mathf.Max(1e-4f, replay.sampleInterval)), 0, replay.SampleCount - 1);
-            map.SetPath(path, index + 1, replay.heading[index], replay.robotRadius);
+            map.SetPath(path, index + 1, replay.heading[index], replay.robotRadius, replay.robotShape);
 
             var keyframe = replay.KeyframeAt(time);
             if (keyframe != null && keyframe != shownKeyframe)

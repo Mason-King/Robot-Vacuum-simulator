@@ -10,7 +10,7 @@ using Debug = UnityEngine.Debug;
 
 namespace RobotVacuum.Network
 {
-    /// <summary>worker-status.json: what the worker is doing, for the Network Settings page of the same computer.</summary>
+    /// <summary>worker-status.json: what the worker is doing, for the Settings page of the same computer.</summary>
     [Serializable]
     public sealed class WorkerStatusFile
     {
@@ -41,7 +41,7 @@ namespace RobotVacuum.Network
         public int totalRuns;
     }
 
-    /// <summary>worker-control.json: a command from the Network Settings page to the worker on the same computer.</summary>
+    /// <summary>worker-control.json: a command from the Settings page to the worker on the same computer.</summary>
     [Serializable]
     public sealed class WorkerControlFile
     {
@@ -88,7 +88,7 @@ namespace RobotVacuum.Network
     /// Worker mode (requirement 3.9): <c>RobotVacuum -batchmode -nographics -worker [-workerPort 47815]
     /// [-workerProcesses N] [-workerPairMinutes 10]</c>. The process shows no window; it listens for paired PCs, runs
     /// their jobs as headless child processes, and keeps running until it is stopped (Ctrl+C, closing its window,
-    /// or Stop on the Network Settings page). Started from Network Settings, it also stops when that simulator closes.
+    /// or Stop on the Settings page). Started from Settings, it also stops when that simulator closes.
     /// Everything it does is logged to Worker/worker.log (the dedicated network log, SDD 8; 3.12).
     /// </summary>
     public sealed class WorkerHost : MonoBehaviour
@@ -161,7 +161,7 @@ namespace RobotVacuum.Network
             if (pairMinutes > 0)
             {
                 string code = server.OpenPairing(TimeSpan.FromMinutes(pairMinutes));
-                Log($"Pairing code: {SecureChannel.FormatPairingCode(code)}. On the researcher's PC: Network Settings > Network workers > Add worker, within {pairMinutes} minutes.");
+                Log($"Pairing code: {SecureChannel.FormatPairingCode(code)}. On the researcher's PC: Settings > Network workers > Add worker, within {pairMinutes} minutes.");
             }
 
             var addresses = WorkerServer.LocalAddresses();
@@ -198,7 +198,7 @@ namespace RobotVacuum.Network
                     if (!string.IsNullOrEmpty(control.clientId)) server.Unpair(control.clientId);
                     break;
                 case "stop":
-                    Stop("Stopped from Network Settings.");
+                    Stop("Stopped from Settings.");
                     break;
             }
         }

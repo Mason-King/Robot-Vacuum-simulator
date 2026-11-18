@@ -241,6 +241,7 @@ namespace RobotVacuum.Headless
                     reverseSpeed = currentConfig.vacuum.reverseSpeed,
                     turnSpeed = currentConfig.vacuum.turnSpeed,
                     batteryCapacity = currentConfig.battery.capacity,
+                    shape = currentConfig.vacuum.TryShape(out var shapeKind) ? shapeKind : VacuumShapeKind.Round,
                     cellSizeMeters = currentConfig.simulation.cellSizeMeters,
                     vacuumPower = currentConfig.vacuum.vacuumPower,
                     maxSimulatedSeconds = currentConfig.simulation.maxSimulatedSeconds,

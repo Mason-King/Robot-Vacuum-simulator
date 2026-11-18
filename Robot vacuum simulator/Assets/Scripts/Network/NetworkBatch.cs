@@ -88,6 +88,7 @@ namespace RobotVacuum.Network
             if (RunSettings.IsSet(settings.reverseSpeed)) config.vacuum.reverseSpeed = settings.reverseSpeed;
             if (RunSettings.IsSet(settings.turnSpeed)) config.vacuum.turnSpeed = settings.turnSpeed;
             if (RunSettings.IsSet(settings.vacuumPower)) config.vacuum.vacuumPower = settings.vacuumPower;
+            config.vacuum.shape = settings.shape.ToString();
             if (RunSettings.IsSet(settings.batteryCapacity)) config.battery.capacity = settings.batteryCapacity;
 
             if (RunSettings.IsSet(settings.cellSizeMeters)) config.simulation.cellSizeMeters = settings.cellSizeMeters;

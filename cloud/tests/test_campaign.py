@@ -96,6 +96,27 @@ class CampaignTests(unittest.TestCase):
         self.assertTrue(any("SLAM" in e and "Spiral" in e for e in errors), errors)
         self.assertEqual(job["configurations"][0]["sensing"]["lidarRayCount"], 360, "sensing defaults are filled")
 
+    def test_vacuum_shape_defaults_to_round_and_is_checked(self):
+        job = c.normalise(minimal())
+        self.assertEqual(job["configurations"][0]["vacuum"]["shape"], "Round")
+        self.assertEqual(c.validate(job), [])
+
+        for name in ("Round", "DShaped", "Rectangular", "d", "D-shaped", "rectangle", "RECTANGULAR", ""):
+            job = c.normalise(minimal(configurations=[{"vacuum": {"shape": name}}]))
+            self.assertEqual(c.validate(job), [], name)
+
+        job = c.normalise(minimal(configurations=[{"vacuum": {"shape": "triangle"}}]))
+        self.assertTrue(any("vacuum.shape" in e for e in c.validate(job)))
+
+    def test_vacuum_shapes_match_the_unity_source(self):
+        root = os.path.join(HERE, "..", "..", "Robot vacuum simulator", "Assets", "Scripts", "Sim")
+        source = open(os.path.join(root, "VacuumShape.cs"), encoding="utf-8-sig").read()
+        for name in c.VACUUM_SHAPES:
+            self.assertIn(f"        {name} = ", source)
+        for alias in c._SHAPE_ALIASES:
+            self.assertIn(f'case "{alias}":', source)
+        self.assertIn("shape = VacuumShapeKind.Round", open(os.path.join(root, "VacuumSettings.cs"), encoding="utf-8-sig").read())
+
     def test_bad_sensing_values_are_reported(self):
         job = c.normalise(minimal(configurations=[{"sensing": {"noiseScale": 11, "lidarRayCount": 4, "slamCorrectionQuality": "Turbo"}}]))
         errors = c.validate(job)

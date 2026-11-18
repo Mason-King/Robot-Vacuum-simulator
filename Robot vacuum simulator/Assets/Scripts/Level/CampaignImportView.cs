@@ -22,7 +22,7 @@ namespace RobotVacuum.LevelEditor
             var body = Ui.Div(null, "le-batch-setup");
             if (campaigns.Count == 0)
             {
-                string where = roots.Count > 0 ? string.Join(" or ", roots) : "the repository's cloud folder (set it under Network Settings › Command-line tool)";
+                string where = roots.Count > 0 ? string.Join(" or ", roots) : "the repository's cloud folder (set it under Settings › Command-line tool)";
                 Ui.Text(body, $"No campaign results found in {where}. Fetch a cloud campaign with python -m vacuumctl fetch <campaign id>, " +
                               "or run one on this computer with python -m vacuumctl local; its results land there.", "le-empty-hint");
             }
@@ -37,15 +37,14 @@ namespace RobotVacuum.LevelEditor
                 foreach (var campaign in campaigns) list.Add(Row(overlay, campaign, imported));
             }
 
-#if UNITY_EDITOR
-            Ui.Button(body, "Browse for a campaign folder…", IconKind.Plus, () =>
-            {
-                string folder = UnityEditor.EditorUtility.OpenFolderPanel("Campaign results folder", roots.Count > 0 ? roots[0] : string.Empty, string.Empty);
-                if (string.IsNullOrEmpty(folder)) return;
-                overlay.CancelDialog();
-                Run(overlay, folder, imported);
-            }, "le-btn--ghost le-panel__gap");
-#endif
+            if (FileDialogs.Available)
+                Ui.Button(body, "Browse for a campaign folder…", IconKind.Plus, () =>
+                {
+                    string folder = FileDialogs.PickFolder("Campaign results folder", roots.Count > 0 ? roots[0] : string.Empty);
+                    if (string.IsNullOrEmpty(folder)) return;
+                    overlay.CancelDialog();
+                    Run(overlay, folder, imported);
+                }, "le-btn--ghost le-panel__gap");
 
             overlay.ShowDialog("Import campaign results", null, body, null, new DialogButton("Close", ButtonStyle.Ghost, null));
         }

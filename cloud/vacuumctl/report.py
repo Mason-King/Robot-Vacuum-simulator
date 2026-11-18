@@ -354,6 +354,7 @@ def configurations_card(job):
     fields = [
         ("Drive speed (m/s)", "vacuum", "driveSpeed"), ("Reverse speed (m/s)", "vacuum", "reverseSpeed"),
         ("Turn speed (°/s)", "vacuum", "turnSpeed"), ("Vacuum power", "vacuum", "vacuumPower"),
+        ("Body shape", "vacuum", "shape"),
         ("Battery capacity", "battery", "capacity"), ("Energy per metre", "battery", "distanceEnergyPerMeter"),
         ("Energy per degree", "battery", "turnEnergyPerDegree"), ("Energy per second (on)", "battery", "operatingEnergyPerSecond"),
         ("Energy per second (stalled)", "battery", "stalledEnergyPerSecond"), ("Cell size (m)", "simulation", "cellSizeMeters"),

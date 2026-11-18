@@ -32,7 +32,8 @@ namespace RobotVacuum.LevelEditor
             settings.screenMatchMode = PanelScreenMatchMode.MatchWidthOrHeight;
             settings.match = 0.5f; // split the difference, so neither a wide nor a tall window crops the UI
             settings.fallbackDpi = 96f;
-            settings.scale = scale;
+            settings.scale = scale * InterfaceSize.Value; // Settings > General > Interface size (C.7)
+            InterfaceSize.Track(settings, scale);
 
             if (settings.themeStyleSheet == null)
                 Debug.LogWarning($"UI: theme not found at Resources/{ThemePath}. Text fields may look unstyled.");

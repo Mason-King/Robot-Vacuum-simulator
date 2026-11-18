@@ -57,6 +57,7 @@ namespace RobotVacuum.Sim
 
         Rigidbody2D robotBody;
         CircleCollider2D robotCollider;
+        VacuumRobot robot; // for the body's shape; null on a bare test body, which is then treated as round
 
         // The grid itself. Public so the heatmap renderer (or anything else
         // that wants to read coverage state) can get at it without this
@@ -146,6 +147,7 @@ namespace RobotVacuum.Sim
         {
             robotBody = GetComponent<Rigidbody2D>();
             robotCollider = GetComponent<CircleCollider2D>();
+            robot = GetComponent<VacuumRobot>();
 
             if (levelRenderer == null)
                 levelRenderer = FindAnyObjectByType<LevelRenderer>(FindObjectsInactive.Include);
@@ -214,11 +216,20 @@ namespace RobotVacuum.Sim
         // robot's footprint size, not total grid size -- matches the
         // "per-tick cost scales with footprint-cells" note already in the
         // SDD (4.6) about grid resolution.
+        //
+        // A D-shaped or rectangular body (3.3): the cells inside its outline at
+        // the body's TRUE heading instead (VacuumShape, the same outline its
+        // colliders are built from), searched over the circle it can reach.
         // ------------------------------------------------------------------
         void CleanCellsUnderFootprint(float dt)
         {
             Vector2 position = robotBody.position;
             float radius = robotCollider.radius;
+
+            bool shaped = robot != null && robot.ShapeKind != VacuumShapeKind.Round;
+            VacuumShape outline = shaped ? robot.Shape : default;
+            float heading = robotBody.rotation;
+            if (shaped) radius = outline.TurnRadius;
 
             Vector2 origin = Grid.OriginWorld;
             float cellSize = Grid.CellSizeMeters;
@@ -238,7 +249,11 @@ namespace RobotVacuum.Sim
                 for (int col = minCol; col <= maxCol; col++)
                 {
                     Vector2 cellCenter = Grid.GridIndexToWorldCenter(row, col);
-                    if (Vector2.Distance(cellCenter, position) > radius) continue; // square box, circular footprint -- corners get skipped here
+                    if (shaped)
+                    {
+                        if (!outline.Contains(VacuumShape.ToLocal(cellCenter - position, heading))) continue;
+                    }
+                    else if (Vector2.Distance(cellCenter, position) > radius) continue; // square box, circular footprint -- corners get skipped here
 
                     CellState cell = Grid.GetCell(row, col);
                     if (!cell.CountsTowardCoverage) continue; // under blocking furniture or off the floor -- see ExternalModelGrid.PopulateFromLevelObject

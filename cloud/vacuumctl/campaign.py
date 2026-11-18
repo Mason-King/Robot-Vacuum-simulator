@@ -41,6 +41,22 @@ SHIPPED_ALGORITHMS_FOLDER = os.path.normpath(os.path.join(os.path.dirname(os.pat
                                                           "Robot vacuum simulator", "Algorithms"))
 HEATMAP_MODES = ["FloorCleanliness", "FloorCoverage", "FloorOverCoverage"]
 
+# The vacuum's body outline (requirement 3.3), as VacuumShape.TryParse reads it: the names, plus the same aliases.
+VACUUM_SHAPES = ["Round", "DShaped", "Rectangular"]
+_SHAPE_ALIASES = {"round": "Round", "circle": "Round", "circular": "Round",
+                  "d": "DShaped", "dshaped": "DShaped", "dshape": "DShaped",
+                  "rectangular": "Rectangular", "rectangle": "Rectangular", "rect": "Rectangular"}
+
+
+def vacuum_shape(text):
+    """The shape a job-file value names (None or empty = Round), or None if it names none. Mirrors VacuumShape.TryParse."""
+    if text is None or (isinstance(text, str) and not text.strip()):
+        return "Round"
+    if not isinstance(text, str):
+        return None
+    key = text.strip().replace("-", "").replace("_", "").replace(" ", "").lower()
+    return _SHAPE_ALIASES.get(key)
+
 # The app's stock floor coverings (FloorPalette.DefaultPresets), in palette order.
 STOCK_FLOOR_TYPES = [
     {"name": "Hardwood", "speedMultiplier": 1.00, "energyCostMultiplier": 1.00, "cleaningEffort": 0.8, "soilingRate": 1.0, "stepHeight": 0.000},
@@ -56,7 +72,7 @@ FLOOR_TYPE_DEFAULTS = {"speedMultiplier": 1.0, "energyCostMultiplier": 1.0, "cle
 # Same defaults as the GUI (VacuumSettings.Defaults, Battery, SimDefaults, HeatmapDefaults, SimConfig).
 CONFIGURATION_DEFAULTS = {
     "name": "default",
-    "vacuum": {"driveSpeed": 0.65, "reverseSpeed": 0.35, "turnSpeed": 320.0, "vacuumPower": 1.0},
+    "vacuum": {"driveSpeed": 0.65, "reverseSpeed": 0.35, "turnSpeed": 320.0, "vacuumPower": 1.0, "shape": "Round"},
     "battery": {
         "capacity": 300.0,
         "distanceEnergyPerMeter": 1.0,
@@ -457,6 +473,9 @@ def validate(job):
             errors.append(f'{at}.sensing.slamCorrectionQuality: "{quality}" is not one of {", ".join(CORRECTION_QUALITIES)}.')
         if not isinstance((config.get("sensing") or {}).get("lidarRayCount"), int):
             errors.append(f"{at}.sensing.lidarRayCount must be a whole number.")
+        shape = (config.get("vacuum") or {}).get("shape")
+        if vacuum_shape(shape) is None:
+            errors.append(f'{at}.vacuum.shape: "{shape}" is not one of {", ".join(VACUUM_SHAPES)}.')
         mode = (config.get("simulation") or {}).get("heatmapMode")
         if str(mode).lower() not in (m.lower() for m in HEATMAP_MODES):
             errors.append(f'{at}.simulation.heatmapMode: "{mode}" is not one of {", ".join(HEATMAP_MODES)}.')

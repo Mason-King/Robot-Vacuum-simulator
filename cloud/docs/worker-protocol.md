@@ -4,7 +4,7 @@ The interface between the simulator on a researcher's PC (the **client**) and th
 computer (the **worker**). Requirement **3.9**: two independently executable components over a defined interface, one
 across a network boundary. Security: **4.8**, **C.12**. Code: `Robot vacuum simulator/Assets/Scripts/Network/`.
 
-Both sides are the same simulator build. The worker is started from Network Settings › *Use this PC as a worker*, or
+Both sides are the same simulator build. The worker is started from Settings › *Use this PC as a worker*, or
 by hand:
 
 ```
@@ -16,8 +16,8 @@ RobotVacuum.exe -batchmode -nographics -worker [-workerPort 47815] [-workerProce
 | `-worker` | | Worker mode instead of the GUI or a single job. Can't be combined with `-configPath`. |
 | `-workerPort` | 47815 | TCP port to listen on (all network interfaces). |
 | `-workerProcesses` | CPU cores - 1 | Most simulations run at once, across all clients. |
-| `-workerPairMinutes` | 10 by hand, 0 from Network Settings | Opens pairing at start and prints the code. |
-| `-workerParentPid` | | Set by Network Settings: the worker stops when that simulator closes. |
+| `-workerPairMinutes` | 10 by hand, 0 from Settings | Opens pairing at start and prints the code. |
+| `-workerParentPid` | | Set by Settings: the worker stops when that simulator closes. |
 
 ## What goes where
 
@@ -72,7 +72,7 @@ Neither message contains anything secret.
 
 ## Pairing
 
-1. The person at the worker opens pairing (Network Settings › *Allow a new PC to pair*, or `-workerPairMinutes`). The
+1. The person at the worker opens pairing (Settings › *Allow a new PC to pair*, or `-workerPairMinutes`). The
    worker shows a code such as `K7QFM-2X9RT`: 10 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (about 49 bits).
 2. On the client the researcher enters the worker's address and the code. The code is **never sent**. Both sides
    compute `pairingKey = PBKDF2-HMAC-SHA256(code, "robot-vacuum-sim/pair/v1" ‖ clientNonce ‖ serverNonce, 100 000, 32 bytes)`
