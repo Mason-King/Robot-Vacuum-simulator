@@ -96,6 +96,9 @@ namespace RobotVacuum.Sim
         float nextGoalTime;
         float vacuumPower;
         bool ready;
+        AlgorithmSandbox sandbox;
+        readonly WayHomeWait wayHome = new WayHomeWait();
+        readonly SandboxLog algorithmLog = new SandboxLog();
 
         // ---- Public read-outs (the debug overlay, a future HUD, tests) ----------------------------------
 
@@ -107,6 +110,9 @@ namespace RobotVacuum.Sim
 
         /// <summary>Why the algorithm failed, or null.</summary>
         public string Failure { get; private set; }
+
+        /// <summary>What kind of runtime failure stopped the algorithm (crash, hang, invalid move); None for a refusal at start.</summary>
+        public AlgorithmFault FailureKind { get; private set; }
 
         /// <summary>The settings this run uses.</summary>
         public ControllerSettings Settings => settings;
@@ -138,6 +144,9 @@ namespace RobotVacuum.Sim
 
         /// <summary>True while the robot is driving back to the dock (finished, or battery low).</summary>
         public bool ReturningToDock => homing != Homing.None && !parked;
+
+        /// <summary>True while the robot is stopped on its way home, waiting for a temporary obstacle (a cat) to move.</summary>
+        public bool WaitingForWayHome => homing != Homing.None && !parked && wayHome.Waiting;
 
         /// <summary>The body planner (clearance = radius + margin), or null before the run starts.</summary>
         public PathPlanner Planner => planner;
@@ -232,6 +241,7 @@ namespace RobotVacuum.Sim
 
             Failed = false;
             Failure = null;
+            FailureKind = AlgorithmFault.None;
             simTime = 0f;
             nextGoalTime = 0f;
             driver.Reset();
@@ -247,6 +257,7 @@ namespace RobotVacuum.Sim
             battery = GetComponent<Battery>();
             homing = Homing.None;
             parked = false;
+            wayHome.Reset();
             Outcome = RunOutcome.None;
             OutcomeMessage = null;
             nextBatteryCheckTime = 0f;
@@ -324,25 +335,38 @@ namespace RobotVacuum.Sim
                 return;
             }
 
-            try
+            // The algorithm's own code runs in a sandbox: a crash, a hang or a bad answer ends this run, not the simulator.
+            sandbox?.Dispose();
+            sandbox = new AlgorithmSandbox(AlgorithmCatalog.NameOf(id));
+            drive = new DriveRequests();
+            goalMode = DriveMode.Travel;
+            // Log lines are queued on the sandbox's thread and written here, on the main thread, after each call.
+            System.Action<string> log = settings.logAlgorithmDecisions ? algorithmLog.Add : (System.Action<string>)null;
+            var context = new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
+                writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
+                targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log);
+
+            bool created = sandbox.TryRun("Creating the algorithm", activeEntry.Create, AlgorithmSandbox.InitializeBudgetSeconds, out algorithm);
+            if (created && algorithm == null) sandbox.SetFault(AlgorithmFault.Crash, "Creating the algorithm returned nothing.");
+            if (created && algorithm != null)
             {
-                algorithm = activeEntry.Create();
-                drive = new DriveRequests();
-                goalMode = DriveMode.Travel;
-                System.Action<string> log = null;
-                if (settings.logAlgorithmDecisions)
-                {
-                    string name = AlgorithmCatalog.NameOf(id);
-                    log = message => Debug.Log($"[{name} {simTime:F1} s] {message}", this);
-                }
-                algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
-                    writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
-                    targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log));
+                var instance = algorithm;
+                sandbox.TryRun("Initialize", () => instance.Initialize(context), AlgorithmSandbox.InitializeBudgetSeconds);
             }
-            catch (System.Exception exception)
-            {
-                Fail($"Initialize failed: {exception.GetType().Name}: {exception.Message}");
-            }
+            FlushAlgorithmLog();
+            if (sandbox.Faulted) Fail(sandbox.FaultMessage, sandbox.Fault);
+        }
+
+        void FlushAlgorithmLog()
+        {
+            string name = AlgorithmCatalog.NameOf(activeAlgorithmId);
+            algorithmLog.Flush(message => Debug.Log($"[{name} {simTime:F1} s] {message}", this));
+        }
+
+        void OnDestroy()
+        {
+            sandbox?.Dispose();
+            sandbox = null;
         }
 
         // ---- The step ------------------------------------------------------------------------------------
@@ -364,6 +388,7 @@ namespace RobotVacuum.Sim
 
             float dt = Time.fixedDeltaTime;
             simTime += dt;
+            if (writer != null) writer.Clock = simTime; // stamps temporary obstacles as they are seen
 
             if (robot.AlgorithmId != activeAlgorithmId) SwitchAlgorithm(robot.AlgorithmId);
             if (Failed) return;
@@ -459,10 +484,19 @@ namespace RobotVacuum.Sim
                 float speed = robot.DriveSpeedMetersPerSecond;
                 if (homing == Homing.None && goalMode == DriveMode.Sweep) speed = Mathf.Min(speed, SweepSpeedHere());
 
-                var input = new DriveInput(believedPose, simTime, dt, frame.bumped, frame.bumpBearing, view,
-                    robot.Radius, speed, robot.ReverseSpeedMetersPerSecond, robot.TurnSpeedDegreesPerSecond);
-                driver.Step(input, out forward, out turn);
-                if (homing != Homing.None) CheckHomeArrival();
+                if (homing != Homing.None && wayHome.Waiting)
+                {
+                    // Stopped on the way home while a temporary obstacle (a cat) clears; the sensors keep watching.
+                    forward = turn = 0f;
+                    if (wayHome.ReplanDue(simTime)) ReplanHome();
+                }
+                else
+                {
+                    var input = new DriveInput(believedPose, simTime, dt, frame.bumped, frame.bumpBearing, view,
+                        robot.Radius, speed, robot.ReverseSpeedMetersPerSecond, robot.TurnSpeedDegreesPerSecond);
+                    driver.Step(input, out forward, out turn);
+                    if (homing != Homing.None) CheckHomeArrival();
+                }
                 if (parked) forward = turn = 0f;
                 msControl += stopwatch.Elapsed.TotalMilliseconds;
             }
@@ -479,34 +513,28 @@ namespace RobotVacuum.Sim
             if (simTime < nextGoalTime && !goalEnded) return;
             nextGoalTime = simTime + ControllerConstants.GoalPeriodSeconds;
 
-            Vector2? next;
-            try
+            var pose = believedPose.ToApi();
+            var instance = algorithm;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool answered = sandbox.TryRun("NextGoal", () => instance.NextGoal(map, pose, status), AlgorithmSandbox.NextGoalBudgetSeconds, out Vec2? picked);
+            msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            FlushAlgorithmLog();
+            if (!answered)
             {
-                long started = System.Diagnostics.Stopwatch.GetTimestamp();
-                Vec2? picked;
-                try
-                {
-                    picked = algorithm.NextGoal(map, believedPose.ToApi(), status);
-                }
-                finally
-                {
-                    msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                }
-                next = picked.HasValue ? picked.Value.ToUnity() : (Vector2?)null;
-            }
-            catch (System.Exception exception)
-            {
-                Fail($"NextGoal failed: {exception.GetType().Name}: {exception.Message}");
+                Fail(sandbox.FaultMessage, sandbox.Fault);
                 return;
             }
 
             driver.StatusReported = true;
 
-            if (next.HasValue && !IsFinite(next.Value))
+            string invalid = AlgorithmSandbox.CheckMove(picked, pose, drive);
+            if (invalid != null)
             {
-                Fail($"NextGoal returned an invalid waypoint: {next.Value}.");
+                sandbox.SetFault(AlgorithmFault.InvalidMove, invalid);
+                Fail(invalid, AlgorithmFault.InvalidMove);
                 return;
             }
+            Vector2? next = picked.HasValue ? picked.Value.ToUnity() : (Vector2?)null;
 
             var current = driver.Goal;
             bool same = next.HasValue && current.HasValue && (next.Value - current.Value).sqrMagnitude < 1e-8f;
@@ -566,6 +594,7 @@ namespace RobotVacuum.Sim
         {
             homing = why;
             homeAttempts = 0;
+            wayHome.Reset();
             goalMode = DriveMode.Travel;
             driver.Reset();
             driver.SetGoal(dockPosition, believedPose, simTime, view);
@@ -590,12 +619,34 @@ namespace RobotVacuum.Sim
 
                 case GoalStatus.Blocked:
                 case GoalStatus.Unreachable:
+                    // Something temporary (a cat) may be in the way: stop and wait for it to move, rather than give up.
+                    bool firstWait = !wayHome.EverWaited;
+                    if (wayHome.TryWait(simTime, writer.HasTransientBlocks))
+                    {
+                        if (firstWait)
+                            Debug.Log($"The way to the dock is {(driver.Status == GoalStatus.Unreachable ? "cut off" : "blocked")} by a moving obstacle " +
+                                      $"({writer.TransientCount} cell(s)) at {simTime:F0} s: waiting for it to clear.", this);
+                        break;
+                    }
+
                     var at = believedPose.position;
+                    string waited = wayHome.EverWaited ? $" after waiting {wayHome.WaitedSeconds(simTime):F0} s for a moving obstacle to clear" : string.Empty;
                     Park(RunOutcome.DockUnreachable,
                         $"The dock could not be reached ({(homing == Homing.Finished ? "job finished" : "battery low")}): " +
-                        $"{(driver.Status == GoalStatus.Unreachable ? "no path" : "blocked")} from ({at.x:F2}, {at.y:F2}) to ({dockPosition.x:F2}, {dockPosition.y:F2}).");
+                        $"{(driver.Status == GoalStatus.Unreachable ? "no path" : "blocked")} from ({at.x:F2}, {at.y:F2}) to ({dockPosition.x:F2}, {dockPosition.y:F2}){waited}.");
                     break;
             }
+        }
+
+        /// <summary>Done waiting a moment: forget temporary obstacles not seen lately, and plan the way home again.</summary>
+        void ReplanHome()
+        {
+            int cleared = writer.ForgetTransients(simTime - ControllerConstants.TransientForgetSeconds);
+            if (cleared > 0 && settings.logAlgorithmDecisions)
+                Debug.Log($"[Dock {simTime:F1} s] {cleared} cell(s) of a moving obstacle not seen for {ControllerConstants.TransientForgetSeconds:0} s: re-planning the way home.", this);
+            homeAttempts = 0;
+            driver.Reset();
+            driver.SetGoal(dockPosition, believedPose, simTime, view);
         }
 
         void Park(RunOutcome outcome, string message)
@@ -621,12 +672,13 @@ namespace RobotVacuum.Sim
             BuildAlgorithm(id);
         }
 
-        void Fail(string failure)
+        void Fail(string failure, AlgorithmFault kind = AlgorithmFault.None)
         {
             if (Failed) return;
 
             Failed = true;
             Failure = failure;
+            FailureKind = kind;
             if (robot != null) robot.Command(0f, 0f);
             Debug.LogError($"Movement algorithm '{AlgorithmCatalog.NameOf(activeAlgorithmId)}' stopped: {failure}", this);
         }
@@ -650,7 +702,5 @@ namespace RobotVacuum.Sim
             ? new RobotPose(body.position, body.rotation)
             : new RobotPose(transform.position, transform.eulerAngles.z);
 
-        static bool IsFinite(Vector2 v) =>
-            !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsInfinity(v.x) && !float.IsInfinity(v.y);
     }
 }

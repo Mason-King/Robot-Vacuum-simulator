@@ -202,6 +202,19 @@ namespace RobotVacuum.LevelEditor
                 telemetryInterval = telemetryInterval,
             };
             report.algorithmName = AlgorithmCatalog.NameOf(report.algorithmId);
+
+            var settings = world.Session.Settings;
+            if (settings != null)
+            {
+                report.conditionsRecorded = true;
+                report.slam = settings.slam;
+                report.noiseScale = settings.slam ? settings.noiseScale : 0f;
+                report.lidarEnabled = settings.lidarEnabled;
+                report.lidarRangeMeters = settings.lidarRangeMeters;
+                report.lidarHalfAngleDegrees = settings.lidarHalfAngleDegrees;
+                report.lidarRayCount = settings.lidarRayCount;
+                report.floorSensorEnabled = settings.floorSensorEnabled;
+            }
             report.dataFolder = world.Session.RunFolder ?? RunHistory.DataFolderFor(report.id);
 
             replay.sampleInterval = telemetryInterval;
@@ -461,6 +474,7 @@ namespace RobotVacuum.LevelEditor
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;
             report.failure = robot != null ? robot.FailureReason : null;
+            report.failureKind = robot != null && robot.FailureKind != AlgorithmFault.None ? robot.FailureKind.ToString() : null;
             report.floorArea = world.Level != null ? world.Level.TotalFloorArea() : 0f;
 
             var cleaning = world.Cleaning;

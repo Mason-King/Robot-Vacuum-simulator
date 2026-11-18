@@ -18,6 +18,11 @@ namespace RobotVacuum.Sim
         // Fastest the cat's body swings round to face where it is walking, in degrees per second.
         const float FacingTurnSpeed = 360f;
 
+        // The floor fence: how far ahead the cat checks it is still over the floor plan, metres, and how many
+        // tries it gets to pick a roaming target that is on the floor.
+        const float FenceLookAhead = 0.3f;
+        const int TargetTries = 8;
+
         Rigidbody2D body;
         Vector2 spawnPosition;
         Vector2 direction;
@@ -31,6 +36,8 @@ namespace RobotVacuum.Sim
         bool initialized;
         bool herded;
         VacuumRobot vacuum;
+        LevelRenderer floor;
+        Vector2 lastOnFloor;
         Mesh[] catMeshes;
         Material[] catMaterials;
 
@@ -43,6 +50,24 @@ namespace RobotVacuum.Sim
             _ => Speed * 0.8f,
         };
         public Behavior CurrentBehavior { get; private set; }
+
+        /// <summary>True when the cat is fenced in to the floor plan (placed cats are; see <see cref="ConfineTo"/>).</summary>
+        public bool Confined => floor != null && floor.Level != null;
+
+        /// <summary>
+        /// Keeps the cat on <paramref name="renderer"/>'s floor plan: it turns back before stepping off the floor
+        /// (an open wall, a gap to the outside), only roams towards points on the floor, and is put back where it
+        /// last stood on the floor if something (the vacuum) shoves it off.
+        /// </summary>
+        public void ConfineTo(LevelRenderer renderer)
+        {
+            floor = renderer;
+            if (body != null) lastOnFloor = body.position;
+        }
+
+        /// <summary>Whether <paramref name="world"/> is over the floor plan (a room or a wall), or the cat isn't fenced.</summary>
+        public bool IsOnFloor(Vector2 world) =>
+            !Confined || !LevelGeometry.IsOffFloor(floor.Level, floor.WorldToLevel(world));
         public PolygonCollider2D CollisionShape { get; private set; }
 
         void Awake()
@@ -82,6 +107,7 @@ namespace RobotVacuum.Sim
             body.position = position;
             body.linearVelocity = Vector2.zero;
             transform.position = position;
+            lastOnFloor = position;
             direction = RandomDirection();
             body.rotation = HeadingDegrees(direction);
             transform.rotation = Quaternion.Euler(0f, 0f, body.rotation);
@@ -112,6 +138,22 @@ namespace RobotVacuum.Sim
             if (vacuum == null) vacuum = FindAnyObjectByType<VacuumRobot>();
 
             Vector2 position = body.position;
+
+            // Shoved off the floor plan (through a gap, by the vacuum): back to where it last stood on the floor.
+            if (Confined)
+            {
+                if (IsOnFloor(position)) lastOnFloor = position;
+                else
+                {
+                    position = lastOnFloor;
+                    body.position = position;
+                    transform.position = position;
+                    body.linearVelocity = Vector2.zero;
+                    direction = -direction;
+                    target = position + direction * 0.5f;
+                }
+            }
+
             float vacuumDistance = vacuum != null
                 ? Vector2.Distance(position, (Vector2)vacuum.transform.position)
                 : float.PositiveInfinity;
@@ -160,6 +202,14 @@ namespace RobotVacuum.Sim
             {
                 float turn = Mathf.Clamp(Vector2.SignedAngle(direction, toTarget), -TurnSpeed * dt, TurnSpeed * dt);
                 direction = Rotate(direction, turn);
+            }
+
+            // The floor fence: about to walk off the floor plan, turn back into it.
+            if (Confined && direction.sqrMagnitude > Mathf.Epsilon && !IsOnFloor(position + direction.normalized * FenceLookAhead))
+            {
+                direction = Rotate(-direction, NextRange(-30f, 30f));
+                if (CurrentBehavior != Behavior.Startled) behaviorTimer = NextRange(2f, 4f);
+                target = position + direction * NextRange(0.6f, 1.2f);
             }
 
             Vector2 next = position + direction * MoveSpeed * dt;
@@ -217,9 +267,14 @@ namespace RobotVacuum.Sim
             float maxX = bounds.xMax - 0.18f;
             float minY = bounds.yMin + 0.18f;
             float maxY = bounds.yMax - 0.18f;
-            target = new Vector2(
-                NextRange(Mathf.Min(minX, maxX), Mathf.Max(minX, maxX)),
-                NextRange(Mathf.Min(minY, maxY), Mathf.Max(minY, maxY)));
+            // Somewhere on the floor plan: the bounds are a rectangle, the floor need not be (an L-shaped flat).
+            for (int attempt = 0; attempt < (Confined ? TargetTries : 1); attempt++)
+            {
+                target = new Vector2(
+                    NextRange(Mathf.Min(minX, maxX), Mathf.Max(minX, maxX)),
+                    NextRange(Mathf.Min(minY, maxY), Mathf.Max(minY, maxY)));
+                if (IsOnFloor(target)) break;
+            }
             if ((target - position).sqrMagnitude < 0.12f * 0.12f)
                 target = position + RandomDirection() * 0.5f;
         }
@@ -273,6 +328,7 @@ namespace RobotVacuum.Sim
                 var cat = catObject.AddComponent<MovingCat>();
                 cat.herded = true;
                 cat.Initialize(bounds, position, randomSource);
+                cat.ConfineTo(renderer);
                 herd.Add(cat);
                 spawned.Add(cat);
             }

@@ -22,11 +22,15 @@ namespace RobotVacuum.LevelEditor
         readonly VisualElement body;
         readonly Label subtitle;
         readonly VisualElement clearButton;
+        readonly VisualElement reportButton;
         List<RunReport> runs = new List<RunReport>();
         RunReport selectedRun;
         string selectedBatch;
         string batchAlgorithm;
         bool compareAllLevels;
+        int reportMetric;
+        ComparativeReport cachedReport;
+        string cachedReportKey;
 
         public event Action BackRequested;
         public event Action SimulateRequested;
@@ -46,6 +50,8 @@ namespace RobotVacuum.LevelEditor
             var folder = Ui.Button(header, "Data folder", IconKind.Save,
                 () => FloorPlanFiles.Reveal(Path.GetDirectoryName(RunHistory.DataFolderFor("x"))), "le-btn--ghost");
             Ui.Tooltip(folder, "Open the folder holding every run's telemetry CSVs, replays and summaries");
+            reportButton = Ui.Button(header, "Full report", IconKind.Chart, ExportFullReport, "le-btn--ghost");
+            Ui.Tooltip(reportButton, "Compare every recorded run across algorithms and conditions with significance tests, and save the report (Markdown + CSV)");
             clearButton = Ui.Button(header, "Clear history", IconKind.Trash, ConfirmClear, "le-btn--ghost");
             Ui.Button(header, "Start simulation", IconKind.Play, () => SimulateRequested?.Invoke(), "le-btn--primary");
 
@@ -75,6 +81,8 @@ namespace RobotVacuum.LevelEditor
             subtitle.text = $"{(runs.Count == 1 ? "1 recorded run" : $"{runs.Count} recorded runs")}" +
                             (batches > 0 ? $" · {batches} batch{(batches == 1 ? "" : "es")}" : string.Empty);
             Ui.SetVisible(clearButton, runs.Count > 0);
+            Ui.SetVisible(reportButton, runs.Count > 0);
+            cachedReport = null;
             Rebuild();
         }
 
@@ -215,6 +223,7 @@ namespace RobotVacuum.LevelEditor
 
             Ui.Text(panel, "ALGORITHMS ON IDENTICAL SEEDS · MEAN ± 95% CONFIDENCE INTERVAL", "le-section__title");
             BuildStatsTable(panel, summaries);
+            BuildSignificancePanel(column, members, first.levelName);
 
             // Coverage bars with the confidence interval as a whisker, so overlaps read at a glance.
             Ui.Text(panel, "COVERAGE", "le-section__title le-analysis__chart-title");
@@ -277,7 +286,7 @@ namespace RobotVacuum.LevelEditor
                 var text = Ui.Div(row, "le-run-row__text");
                 Ui.Text(text, $"Seed {run.seed}", "le-run-row__title");
                 Ui.Text(text, $"{VacuumSettings.FormatDuration(run.durationSeconds)} · {run.endReason}" +
-                              (string.IsNullOrEmpty(run.failure) ? string.Empty : " · algorithm failed"), "le-run-row__meta");
+                              (string.IsNullOrEmpty(run.failure) ? string.Empty : $" · algorithm failed{(string.IsNullOrEmpty(run.failureKind) ? "" : $" ({run.failureKind})")}"), "le-run-row__meta");
                 Ui.Text(row, $"{run.coveragePercent:0.0}%", $"le-run-row__value le-tone-text--{CoverageTone(run.coveragePercent)}");
                 var captured = run;
                 row.AddManipulator(new Clickable(() =>
@@ -313,6 +322,172 @@ namespace RobotVacuum.LevelEditor
 
             Ui.Text(parent, "± is the 95% confidence interval of the mean (Student's t). SD is the standard deviation across seeds; variance is its square. Battery used is in work units.",
                 "le-empty-hint");
+        }
+
+        // ---------------------------------------------------------------- comparative report
+
+        ComparativeReport BatchReport(List<RunReport> members, string levelName)
+        {
+            string key = $"{selectedBatch}|{members.Count}|{ComparativeReport.AssistedEnabled}";
+            if (cachedReport == null || cachedReportKey != key)
+            {
+                cachedReport = ComparativeReport.Build(members, ComparativeReport.BatchOptions(levelName));
+                cachedReportKey = key;
+            }
+            return cachedReport;
+        }
+
+        /// <summary>
+        /// Significance tests between the batch's algorithms on a chosen metric, the auto-generated summary and,
+        /// when switched on, the ML-assisted findings: anomalous trials and outcome clusters.
+        /// </summary>
+        void BuildSignificancePanel(VisualElement column, List<RunReport> members, string levelName)
+        {
+            var report = BatchReport(members, levelName);
+            string batchId = selectedBatch;
+
+            var panel = Ui.Div(column, "le-panel");
+            var header = Ui.Div(panel, "le-panel__header");
+            var titles = Ui.Div(header, "le-panel__titles");
+            Ui.Text(titles, "Statistical comparison", "le-panel__title");
+            Ui.Text(titles, "Rank tests on identical seeds (Wilcoxon signed-rank, Friedman), Holm-corrected, with effect sizes and bootstrap CIs of the median.",
+                "le-panel__text");
+            var export = Ui.Button(header, "Export report", IconKind.Save,
+                () => ExportReport(report, ComparativeReport.BatchFolder(batchId)), "le-btn--ghost");
+            export.style.flexShrink = 0;
+            Ui.Tooltip(export, "Save this batch's full report: report.md plus groups, pairwise, anomaly and cluster CSVs");
+
+            Ui.Text(panel, "SUMMARY", "le-section__title");
+            foreach (string line in report.summary)
+                Ui.Text(panel, "• " + line.Replace("**", string.Empty), "le-panel__text");
+
+            foreach (var section in report.conditions)
+            {
+                if (section.algorithms.Count < 2) continue;
+                if (report.conditions.Count > 1) Ui.Text(panel, section.label.ToUpperInvariant(), "le-section__title le-analysis__chart-title");
+
+                var metrics = ReportMetrics.All;
+                reportMetric = Mathf.Clamp(reportMetric, 0, metrics.Length - 1);
+                var picker = new Segmented(Array.ConvertAll(metrics, m => m.label), reportMetric);
+                picker.SelectionChanged += index =>
+                {
+                    reportMetric = index;
+                    Rebuild();
+                };
+                panel.Add(picker);
+
+                var comparison = section.For(metrics[reportMetric]);
+                var metric = comparison.metric;
+                Ui.Text(panel, $"{metric.label} ({(metric.higherIsBetter ? "higher" : "lower")} is better). Omnibus: {ComparativeReport.DescribeTest(comparison.omnibus)}",
+                    "le-panel__text");
+
+                var medians = Ui.Div(panel, "le-table");
+                var medianHead = Ui.Div(medians, "le-table__row le-table__row--head");
+                foreach (string heading in new[] { "Algorithm", "n", "Median", "95% CI of median", "IQR" })
+                    Ui.Text(medianHead, heading, "le-table__cell");
+                foreach (var group in comparison.ranking)
+                {
+                    var d = group[metric];
+                    var row = Ui.Div(medians, "le-table__row");
+                    Ui.Text(row, group.name, "le-table__cell le-table__cell--strong");
+                    Ui.Text(row, d.n.ToString(), "le-table__cell");
+                    Ui.Text(row, metric.Format(d.median), "le-table__cell");
+                    Ui.Text(row, $"{metric.Format(d.medianLow)} – {metric.Format(d.medianHigh)}", "le-table__cell");
+                    Ui.Text(row, $"{metric.Format(d.q1)} – {metric.Format(d.q3)}", "le-table__cell");
+                }
+
+                var table = Ui.Div(panel, "le-table");
+                var head = Ui.Div(table, "le-table__row le-table__row--head");
+                foreach (string heading in new[] { "Comparison", "Δ median", "Test", "p (Holm)", "Effect", "Verdict" })
+                    Ui.Text(head, heading, "le-table__cell");
+                foreach (var pair in comparison.pairs)
+                {
+                    var row = Ui.Div(table, "le-table__row");
+                    Ui.Text(row, $"{pair.a.name} vs {pair.b.name}", "le-table__cell le-table__cell--strong");
+                    Ui.Text(row, metric.FormatDifference(pair.difference), "le-table__cell");
+                    Ui.Text(row, pair.test.Valid ? $"{pair.test.test}{(pair.paired ? $", {pair.test.n} seeds" : string.Empty)}" : pair.test.note, "le-table__cell");
+                    Ui.Text(row, ComparativeReport.FormatP(pair.pAdjusted), "le-table__cell");
+                    Ui.Text(row, pair.test.Valid ? $"{pair.test.effect:0.00} ({pair.test.Magnitude})" : "–", "le-table__cell");
+                    Ui.Text(row, pair.Significant ? $"{pair.better.name} better" : pair.test.Valid ? "no clear difference" : "–",
+                        pair.Significant ? "le-table__cell le-tone-text--good" : "le-table__cell");
+                }
+                Ui.Text(panel, "Δ is A − B (median of per-seed differences when paired). p is adjusted for every comparison on this metric (Holm). " +
+                               "Effect is the rank-biserial r or Cliff's δ: around 0.15 small, 0.33 medium, 0.47 large.", "le-empty-hint");
+            }
+
+            BuildAssistedSection(panel, report);
+        }
+
+        void BuildAssistedSection(VisualElement panel, ComparativeReport report)
+        {
+            Ui.Text(panel, "ML-ASSISTED ANALYSIS", "le-section__title le-analysis__chart-title");
+            var toggle = new Segmented(new[] { "Off", "Anomalies + clustering" }, ComparativeReport.AssistedEnabled ? 1 : 0);
+            toggle.SelectionChanged += index =>
+            {
+                ComparativeReport.AssistedEnabled = index == 1;
+                cachedReport = null;
+                Rebuild();
+            };
+            panel.Add(toggle);
+
+            var findings = report.assisted;
+            if (findings == null)
+            {
+                Ui.Text(panel, "Optional. Switch on to flag trials that stand out from their algorithm's other seeds (robust z-scores) and to group runs by outcome (k-means).",
+                    "le-empty-hint");
+                return;
+            }
+
+            // The narrative lines are already in the summary above; here, the runs to look at.
+            if (findings.anomalies.Count == 0) Ui.Text(panel, "No anomalous trials.", "le-panel__text");
+            foreach (var anomaly in findings.anomalies.GetRange(0, Math.Min(6, findings.anomalies.Count)))
+            {
+                var row = Ui.Div(panel, "le-run-row");
+                var text = Ui.Div(row, "le-run-row__text");
+                Ui.Text(text, $"{anomaly.algorithm} · seed {anomaly.run.seed}", "le-run-row__title");
+                Ui.Text(text, double.IsNaN(anomaly.score)
+                    ? anomaly.reason
+                    : $"{anomaly.metric} {anomaly.value:0.##} vs median {anomaly.groupMedian:0.##} · robust z {anomaly.score:+0.0;-0.0} · {anomaly.reason}", "le-run-row__meta");
+                Ui.Text(row, $"{anomaly.run.coveragePercent:0.0}%", $"le-run-row__value le-tone-text--{CoverageTone(anomaly.run.coveragePercent)}");
+                var captured = anomaly.run;
+                row.AddManipulator(new Clickable(() =>
+                {
+                    selectedRun = captured;
+                    selectedBatch = null;
+                    Rebuild();
+                }));
+            }
+            if (findings.anomalies.Count > 6) Ui.Text(panel, $"…and {findings.anomalies.Count - 6} more in the exported report.", "le-empty-hint");
+
+            if (findings.clusters.Count == 0) Ui.Text(panel, findings.clusteringNote ?? "No clusters.", "le-empty-hint");
+            foreach (var cluster in findings.clusters)
+                Ui.Text(panel, $"Group {cluster.index + 1} · {cluster.description} · {cluster.runs.Count} runs · {cluster.centroid[0]:0.0}% mean coverage · " +
+                               AssistedAnalysis.Composition(cluster.algorithms, cluster.runs.Count), "le-panel__text");
+            Ui.Text(panel, "Exploratory: these point at runs worth replaying. They are not significance tests.", "le-empty-hint");
+        }
+
+        /// <summary>A report over every recorded run, comparing algorithms within and across conditions.</summary>
+        void ExportFullReport()
+        {
+            var report = ComparativeReport.Build(runs, new ReportOptions
+            {
+                title = "Comparative performance report · all recorded runs",
+                assisted = ComparativeReport.AssistedEnabled,
+            });
+            ExportReport(report, Path.Combine(ComparativeReport.ReportsFolder, $"all-{DateTime.Now:yyyyMMdd-HHmmss}"));
+        }
+
+        void ExportReport(ComparativeReport report, string folder)
+        {
+            try
+            {
+                report.WriteTo(folder);
+                overlay.Toast($"Report saved: {report.conditions.Count} condition(s), {report.runCount} runs", "Open folder", () => FloorPlanFiles.Reveal(folder));
+            }
+            catch (Exception exception)
+            {
+                overlay.Toast($"Could not write the report: {exception.Message}");
+            }
         }
 
         LevelSnapshot LoadLevelFor(IEnumerable<RunReport> group)
@@ -361,7 +536,7 @@ namespace RobotVacuum.LevelEditor
                     "le-btn--ghost le-btn--small");
 
             if (!string.IsNullOrEmpty(run.failure))
-                Ui.Text(panel, $"The algorithm was stopped: {run.failure}", "le-analysis__failure");
+                Ui.Text(panel, $"The algorithm was stopped{(string.IsNullOrEmpty(run.failureKind) ? "" : $" ({run.failureKind})")}: {run.failure}", "le-analysis__failure");
 
             // Headline numbers, each with a bar where a fraction makes sense.
             var kpis = Ui.Div(panel, "le-kpis");
@@ -603,7 +778,7 @@ namespace RobotVacuum.LevelEditor
             var titles = Ui.Div(header, "le-panel__titles");
             Ui.Text(titles, "Algorithm comparison", "le-panel__title");
             Ui.Text(titles, "Average coverage per movement algorithm over single runs. Runs that switched algorithm part-way are left out. " +
-                            "For a like-for-like test on identical seeds, run a batch experiment.", "le-panel__text");
+                            "For a like-for-like test on identical seeds, run a batch experiment. Full report (top right) tests these differences for significance.", "le-panel__text");
 
             string levelName = selectedRun != null ? selectedRun.levelName : null;
             if (levelName != null)

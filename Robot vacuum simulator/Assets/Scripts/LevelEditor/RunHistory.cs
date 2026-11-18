@@ -53,8 +53,22 @@ namespace RobotVacuum.LevelEditor
         /// <summary>True when the run was stepped headless, without drawing.</summary>
         public bool headless;
 
+        // The sensing setup the run used, so reports can compare like with like. Runs saved before these
+        // were recorded leave conditionsRecorded false and are grouped as "sensing not recorded".
+        public bool conditionsRecorded;
+        public bool slam;
+        public float noiseScale;
+        public bool lidarEnabled;
+        public float lidarRangeMeters;
+        public float lidarHalfAngleDegrees;
+        public int lidarRayCount;
+        public bool floorSensorEnabled;
+
         /// <summary>Why the algorithm was stopped, if it failed.</summary>
         public string failure;
+
+        /// <summary>The failure's kind when the algorithm failed: Crash, Hang, InvalidMove or Stalled.</summary>
+        public string failureKind;
 
         public float cellSize;
         public float telemetryInterval;

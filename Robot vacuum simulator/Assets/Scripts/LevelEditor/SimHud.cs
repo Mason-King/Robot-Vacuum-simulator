@@ -300,6 +300,16 @@ namespace RobotVacuum.LevelEditor
             if (!leaving) leaving = SimLauncher.OpenAnalysis(lastSavedId ?? recorder?.Report.id);
         }
 
+        /// <summary>True when this run has a recording to open on the Analysis page.</summary>
+        public bool CanViewAnalysis => lastSavedId != null || recorder != null;
+
+        /// <summary>Opens the Analysis page on this run (the run-end panel's "View analysis").</summary>
+        public void ViewAnalysis()
+        {
+            if (!saved) SaveIfWorthKeeping();
+            OpenAnalysis();
+        }
+
         void Leave()
         {
             if (leaving) return;

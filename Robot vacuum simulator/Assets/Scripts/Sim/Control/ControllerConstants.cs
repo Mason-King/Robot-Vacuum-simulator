@@ -92,6 +92,15 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Blocked on the way home: retries (turn away, sidestep, try again) before giving up.</summary>
         public const int HomeAttempts = 3;
 
+        /// <summary>Way home cut off by a temporary obstacle (a cat): re-plan this often while waiting, seconds.</summary>
+        public const float HomeReplanSeconds = 1f;
+
+        /// <summary>... forgetting temporary obstacles not seen for this long (whatever it was has moved on), seconds.</summary>
+        public const float TransientForgetSeconds = 5f;
+
+        /// <summary>... and giving up (the dock is unreachable) after waiting this long in all, seconds.</summary>
+        public const float HomeWaitMaxSeconds = 120f;
+
         // ---- Path planning and re-routing ----
 
         /// <summary>Switch for the planner: off = drive straight at the waypoint, as before the planner existed (for comparisons).</summary>

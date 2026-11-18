@@ -276,19 +276,21 @@ namespace RobotVacuum.Sim.Control
                     continue;
                 }
 
+                // Probed in a sandbox, so a constructor or property that loops forever skips this algorithm instead of freezing the load.
                 string name;
                 bool supportsSlam;
-                try
+                using (var sandbox = new AlgorithmSandbox(label))
                 {
-                    var probe = (ICleaningAlgorithm)constructor.Invoke(null);
-                    name = probe.Name?.Trim();
-                    supportsSlam = probe.SupportsSlam;
-                }
-                catch (Exception exception)
-                {
-                    var inner = exception is TargetInvocationException && exception.InnerException != null ? exception.InnerException : exception;
-                    unit.errors.Add($"{label}: creating it failed: {inner.GetType().Name}: {inner.Message}");
-                    continue;
+                    if (!sandbox.TryRun("Creating it and reading Name / SupportsSlam", () =>
+                        {
+                            var probe = (ICleaningAlgorithm)constructor.Invoke(null);
+                            return (probe.Name?.Trim(), probe.SupportsSlam);
+                        }, AlgorithmSandbox.ProbeBudgetSeconds, out var probed))
+                    {
+                        unit.errors.Add($"{label}: {sandbox.FaultMessage}");
+                        continue;
+                    }
+                    (name, supportsSlam) = probed;
                 }
 
                 if (string.IsNullOrEmpty(name))

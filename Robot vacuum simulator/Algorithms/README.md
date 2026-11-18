@@ -32,7 +32,18 @@ run is in progress, and the list stays as it was until the run is stopped.
 - **Return nearby waypoints** (a few metres at most), or `null` for "no goal right now".
 - `Name` must be non-empty and different from every other algorithm's. The class's full name (namespace + class) is its
   id, which `config.json` records; it must be unique too.
-- An exception thrown by the algorithm stops the run with an error message; it does not crash the simulator.
+- **Failures stop the run, not the simulator.** Algorithm code runs in a sandbox (a worker thread the simulation
+  waits on, so runs stay deterministic). The run ends with an error naming the kind of failure:
+  - **Crash:** any exception (including out-of-memory).
+  - **Hang:** a call that does not return in time (constructor and `Initialize`: 5 s; `NextGoal`: 2 s; `Name` /
+    `SupportsSlam` while loading: 2 s). That's an infinite loop or a deadlock. The worker is aborted where the
+    runtime allows it, and the algorithm is never called again. Time limits are lifted while a debugger is attached.
+  - **InvalidMove:** a non-finite waypoint, one more than 200 m from the robot, or invalid `DriveRequests`
+    (an undefined mode, or a sweep exposure that is negative or not finite).
+  - **Stalled:** the robot made no progress for a long time.
+
+  The one exception is a stack overflow (unbounded recursion), which .NET cannot recover from on any thread.
+  To try failures out, see `_FaultInjection/README.md`.
 
 ## Errors
 

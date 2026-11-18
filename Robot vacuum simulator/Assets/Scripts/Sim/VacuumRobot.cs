@@ -107,6 +107,10 @@ namespace RobotVacuum.Sim
         /// <summary>Why the algorithm was stopped, or null while it runs.</summary>
         public string FailureReason => stuckReason ?? (Brain != null && Brain.Failed ? Brain.Failure : null);
 
+        /// <summary>The kind of failure behind <see cref="FailureReason"/>: crash, hang, invalid move or stall.</summary>
+        public Control.AlgorithmFault FailureKind =>
+            Brain != null && Brain.Failed ? Brain.FailureKind : stuckReason != null ? Control.AlgorithmFault.Stalled : Control.AlgorithmFault.None;
+
         /// <summary>How the robot's job ended, if it has (finished and docked, docked on low battery, or the dock unreachable).</summary>
         public Control.RunOutcome Outcome => Brain != null ? Brain.Outcome : Control.RunOutcome.None;
 
@@ -388,7 +392,8 @@ namespace RobotVacuum.Sim
         /// </summary>
         void WatchProgress(float dt)
         {
-            if (Outcome != Control.RunOutcome.None || (Brain != null && Brain.Failed))
+            // Also not while it waits on purpose for a cat to clear its way home (that wait has its own limit).
+            if (Outcome != Control.RunOutcome.None || (Brain != null && (Brain.Failed || Brain.WaitingForWayHome)))
             {
                 progressTimer = 0f;
                 return;
