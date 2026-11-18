@@ -5,6 +5,7 @@ interval for the mean from Student's t. Every per-run value is kept in campaign_
 figures can be recomputed by hand (AT-2.8-2).
 """
 
+import csv
 import datetime
 import math
 
@@ -160,6 +161,46 @@ def format_table(results):
     for problem in results.get("problems") or []:
         lines.append(f"  ! {problem}")
     return "\n".join(lines)
+
+
+# Same columns as the simulator's Analysis > Export CSV (BatchStats.ToCsv), so one way of checking fits both.
+RUN_COLUMNS = ["section", "algorithm", "seed", "succeeded", "coverage_percent", "time_s", "battery_used", "distance_m",
+               "revisits", "time_to_90_s", "floor_plan", "configuration", "end_reason"]
+SUMMARY_COLUMNS = ["section", "algorithm", "measure", "n", "mean", "variance", "sd", "ci95_half_width", "ci95_low",
+                   "ci95_high", "t_critical", "floor_plan", "configuration"]
+CSV_MEASURES = [("coverage_percent", "coveragePercent"), ("time_s", "simulatedSeconds"), ("battery_used", "batteryUsed")]
+
+
+def write_runs_csv(results, path):
+    """campaign_runs.csv: every run, then each group's statistics for coverage, time and battery (AT-2.8-2)."""
+    def name(run_or_group):
+        return run_or_group.get("algorithmName") or run_or_group.get("algorithm") or ""
+
+    names = {r.get("algorithm"): name(r) for r in results.get("runs") or []}
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        out = csv.writer(handle)
+        out.writerow(RUN_COLUMNS)
+        runs = sorted(results.get("runs") or [], key=lambda r: (str(r.get("floorPlan")), str(r.get("configuration")),
+                                                                 str(r.get("algorithm")), r.get("seed", 0)))
+        for r in runs:
+            t90 = r.get("timeTo90")
+            out.writerow(["run", name(r), r.get("seed"), "true" if r.get("succeeded") else "false", r.get("coveragePercent"),
+                          r.get("simulatedSeconds"), r.get("batteryUsed"), r.get("distanceMeters"), r.get("revisitCount"),
+                          t90 if t90 is not None and t90 >= 0 else "", r.get("floorPlan"), r.get("configuration"),
+                          r.get("endReason")])
+        out.writerow([])
+        out.writerow(SUMMARY_COLUMNS)
+        for g in results.get("groups") or []:
+            for measure, key in CSV_MEASURES:
+                m = g["metrics"][key]
+                if not m["count"]:
+                    out.writerow(["summary", names.get(g["algorithm"], g["algorithm"]), measure, 0] + [""] * 7
+                                 + [g["floorPlan"], g["configuration"]])
+                    continue
+                out.writerow(["summary", names.get(g["algorithm"], g["algorithm"]), measure, m["count"], m["mean"], m["variance"],
+                              m["stdDev"], m["ci95HalfWidth"], m["ci95Low"], m["ci95High"], t_critical_95(m["count"] - 1),
+                              g["floorPlan"], g["configuration"]])
+    return path
 
 
 def _fmt(value):

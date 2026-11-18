@@ -76,9 +76,9 @@ namespace RobotVacuum.LevelEditor
             BuildTool(Ui.Div(column, "le-panel"));
             BuildActions(Ui.Div(column, "le-panel"));
 
-            var footer = Ui.Div(column, "le-settings__row le-page__footnote");
-            Ui.Text(footer, $"Saved automatically to {path}. vacuumctl reads the same file.", "le-empty-hint le-settings__grow");
-            Ui.Button(footer, "Show folder", null, () => FloorPlanFiles.Reveal(Path.GetDirectoryName(path)), "le-btn--ghost le-btn--small");
+            var footer = Ui.Div(column, "le-settings__row le-settings__footer");
+            Ui.Text(footer, $"Saved automatically to {path}. vacuumctl reads the same file.", "le-empty-hint le-settings__row-text");
+            Ui.Button(footer, "Show folder", null, () => FloorPlanFiles.Reveal(Path.GetDirectoryName(path)), "le-btn--ghost le-settings__inline-btn");
 
             RefreshProblems();
             RefreshRunning();
@@ -251,8 +251,8 @@ namespace RobotVacuum.LevelEditor
                 "le-empty-hint");
 
             var status = Ui.Div(panel, "le-settings__row le-panel__gap");
-            runningLabel = Ui.Text(status, string.Empty, "le-empty-hint le-settings__grow");
-            cancelButton = Ui.Button(status, "Stop", IconKind.Stop, () => running?.Kill(), "le-btn--ghost le-btn--small");
+            runningLabel = Ui.Text(status, string.Empty, "le-empty-hint le-settings__row-text");
+            cancelButton = Ui.Button(status, "Stop", IconKind.Stop, () => running?.Kill(), "le-btn--ghost le-settings__inline-btn");
 
             checksBox = Ui.Div(panel, "le-settings__checks");
             outputBox = Ui.Div(panel, "le-settings__output");

@@ -108,6 +108,8 @@ def heatmap_path(base_dir, run, shards):
 
 
 def image_data_uri(path):
+    if not path:
+        return None  # the run recorded no folder, so there is no image to show
     try:
         with open(path, "rb") as handle:
             return "data:image/png;base64," + base64.b64encode(handle.read()).decode("ascii")
@@ -190,6 +192,33 @@ def legend(groups):
                     for g in groups)
     return (f'<div class="legend">{items}<span class="key"><i class="ci-key"></i>95% confidence interval</span>'
             f'<span class="key"><i class="dot-key"></i>one run</span></div>')
+
+
+REQUIRED_MEASURES = [("Coverage (%)", "coveragePercent", 2), ("Time (s)", "simulatedSeconds", 1), ("Battery used", "batteryUsed", 1)]
+
+
+def summary_statistics_table(groups):
+    """Requirement 2.8: mean, sample variance, standard deviation and 95% CI of coverage, time and battery, per algorithm.
+    Same rows and columns as the simulator's Analysis batch view."""
+    head = ("<tr><th>Algorithm</th><th>Measure</th><th class=num>Runs</th><th class=num>Mean</th>"
+            "<th class=num>Variance</th><th class=num>SD</th><th class=num>95% CI</th></tr>")
+    rows = []
+    for g in groups:
+        for index, (label, key, digits) in enumerate(REQUIRED_MEASURES):
+            m = g["metrics"][key]
+            name = (f'<i class="sw s{slot_of(g["algorithm"])}"></i>{esc(label_of(g["algorithm"]))}') if index == 0 else ""
+            runs = (f'{g["succeeded"]}' + (f' <span class="badge bad">+{g["failed"]} failed</span>' if g["failed"] else "")) if index == 0 else ""
+            if m["count"]:
+                ci = f'{fmt(m["ci95Low"], digits)} – {fmt(m["ci95High"], digits)}' if m["count"] > 1 else "needs 2+ runs"
+                cells = (f'<td class=num><b>{fmt(m["mean"], digits)}</b></td><td class=num>{fmt(m["variance"], digits)}</td>'
+                         f'<td class=num>{fmt(m["stdDev"], digits)}</td><td class=num>{ci}</td>')
+            else:
+                cells = "<td class=num>—</td>" * 4
+            rows.append(f"<tr><td>{name}</td><td>{label}</td><td class=num>{runs}</td>{cells}</tr>")
+    note = ('<p class="note">Variance is the sample variance (n − 1) across seeds; SD is its square root. The 95% confidence '
+            "interval is for the mean (Student's t, n − 1 degrees of freedom). Failed runs are left out. "
+            "campaign_runs.csv in this folder has every run, to recompute these by hand.</p>")
+    return f'<div class="tablewrap"><table>{head}{"".join(rows)}</table></div>{note}'
 
 
 def stats_table(groups):
@@ -498,7 +527,8 @@ def build_html(results, job=None, base_dir="."):
         body.append(f'<section class="card" id="{anchor}"><h2>{esc(plan)} <span class="muted">·</span> {esc(config)}</h2>'
                     f'<p class="sub">{len(groups)} algorithm(s) on identical seeds · {seed_text}</p>'
                     f'<h3>Coverage</h3>{legend(groups)}{coverage_chart(groups, by_alg)}'
-                    f'<h3>Statistics</h3>{stats_table(groups)}{heatmaps}</section>')
+                    f'<h3>Statistics</h3>{summary_statistics_table(groups)}'
+                    f'<h3>All measures</h3>{stats_table(groups)}{heatmaps}</section>')
 
     extra = [problems_card(results), configurations_card(job), floor_plans_card(job), runs_card(results), nodes_card(results, job)]
     toc += ['<a href="#problems">Problems</a>', '<a href="#configurations">Configurations</a>',

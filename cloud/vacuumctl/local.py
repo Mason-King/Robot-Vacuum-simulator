@@ -66,8 +66,10 @@ def run_local(campaign_path, exe, out_dir, processes=1, open_report=True):
     results["wallClockSeconds"] = time.monotonic() - started
     path = os.path.join(out_dir, "campaign_results.json")
     campaigns.save(results, path)
+    stats.write_runs_csv(results, os.path.join(out_dir, "campaign_runs.csv"))
     print(stats.format_table(results))
     print(f"Wall-clock time: {results['wallClockSeconds']:.1f} s. Results: {path}")
+    print("To see it in the simulator: Analysis > Import results.")
     from .report import write_report
     write_report(path, open_browser=open_report, job=job)
     return results

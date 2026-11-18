@@ -22,6 +22,16 @@ DOCKER_DIR = os.path.join(CLOUD_DIR, "docker")
 
 TERMINAL = {"SUCCEEDED", "FAILED"}
 
+# Per-run files the simulator's Analysis page needs to show an imported campaign (heat maps, replays, curves, CSVs):
+# about 80 KB a run. external_model.json (2-20 MB) and the heatmap PNGs only come with --all-files.
+APP_RUN_FILES = {"summary.json", "replay.json", "result.json", "config.json", "telemetry.csv", "rooms.csv", "parameters.csv"}
+
+
+def is_app_run_file(relative_key):
+    """True for shards/shard-NNNN/runs/<guid>/<one of APP_RUN_FILES>, relative to the campaign's prefix."""
+    parts = relative_key.split("/")
+    return len(parts) == 5 and parts[0] == "shards" and parts[2] == "runs" and parts[4] in APP_RUN_FILES
+
 
 _log_path = None
 _quiet_stdout = False
@@ -391,15 +401,20 @@ class Cloud:
 
         if everything:
             self.download_prefix(bucket, self._key(campaign_id, ""), out_dir)
+        else:
+            # What the simulator needs to show this campaign in Analysis (Import results).
+            self.download_prefix(bucket, self._key(campaign_id, ""), out_dir, only=is_app_run_file, skip_existing=True)
 
         results = stats.aggregate(job, shard_results, shard_status)
         campaigns.save(job, os.path.join(out_dir, "job.json"))
         campaigns.save(manifest, os.path.join(out_dir, "manifest.json"))
         path = os.path.join(out_dir, "campaign_results.json")
         campaigns.save(results, path)
+        stats.write_runs_csv(results, os.path.join(out_dir, "campaign_runs.csv"))
         self._put_json(bucket, self._key(campaign_id, "campaign_results.json"), results)
         log(stats.format_table(results))
         log(f"Results: {path}")
+        log("To see it in the simulator: Analysis > Import results.")
 
         # The report shows each algorithm's median run as a heatmap: fetch just those few PNGs.
         from . import report
@@ -423,13 +438,19 @@ class Cloud:
             except ClientError:
                 pass  # images are optional (saveHeatmapImages may be off)
 
-    def download_prefix(self, bucket, prefix, out_dir):
+    def download_prefix(self, bucket, prefix, out_dir, only=None, skip_existing=False):
+        """Downloads every object under prefix (or those `only(relative_key)` accepts). skip_existing keeps a local
+        file of the same size, so fetching a campaign again only downloads what's new."""
         paginator = self.s3.get_paginator("list_objects_v2")
         count = 0
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for item in page.get("Contents", []):
                 relative = item["Key"][len(prefix):]
+                if only is not None and not only(relative):
+                    continue
                 target = os.path.join(out_dir, *relative.split("/"))
+                if skip_existing and os.path.isfile(target) and os.path.getsize(target) == item.get("Size"):
+                    continue
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 self.s3.download_file(bucket, item["Key"], target)
                 count += 1

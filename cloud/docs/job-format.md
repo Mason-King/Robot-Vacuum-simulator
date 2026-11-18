@@ -184,7 +184,8 @@ On your own computer, every AWS command also appends to **`cloud-results/<campai
 no campaign: `cloud-results/vacuumctl.log`): stack changes, uploads, status polls and every AWS or network error with
 its traceback. This is the dedicated network and infrastructure error log (SDD 8).
 
-`vacuumctl fetch` merges every node's file into **`campaign_results.json`**: totals (planned / returned /
+`vacuumctl fetch` (and `local`) downloads each run's small files and merges every node's file into **`campaign_results.json`**: totals (planned / returned /
 failed / missing run indices), one group per floor plan × configuration × algorithm with count, mean,
 sample variance, standard deviation and 95% confidence interval (Student's t) for each metric, and every
-individual run so the statistics can be recomputed by hand (AT-2.8-2).
+individual run so the statistics can be recomputed by hand (AT-2.8-2). **`campaign_runs.csv`** has the same in spreadsheet form, in the same columns as the
+simulator's Analysis › Export CSV. The simulator shows the campaign with Analysis › Import results.

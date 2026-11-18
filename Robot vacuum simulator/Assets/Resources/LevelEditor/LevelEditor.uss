@@ -2913,3 +2913,36 @@
     font-size: 11px;
     color: var(--text-2);
 }
+
+/* A wrapping line of text with a button to its right (the footer's "Show folder", the running command's "Stop"). */
+.le-settings__footer {
+    margin-top: 4px;
+    padding: 0 2px;
+}
+
+.le-settings__row .le-settings__row-text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+    margin: 0 12px 0 0;
+    white-space: normal;
+    -unity-text-align: middle-left;
+}
+
+/* A text button sized to its words; never squeezed by the text beside it. */
+.le-settings__inline-btn {
+    flex-shrink: 0;
+    height: 28px;
+    padding: 0 12px;
+}
+
+/* ---------------------------------------------------------------- Analysis: import campaign results */
+
+.le-import__list {
+    max-height: 340px;
+    margin-top: 8px;
+}
+
+.le-import__row {
+    align-items: center;
+}

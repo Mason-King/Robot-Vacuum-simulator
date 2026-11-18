@@ -175,12 +175,40 @@ python -m vacuumctl destroy                  # removes everything, including sto
 default; every node attempt has a hard timeout (`--node-timeout`, default 6 h); `--deadline-minutes` cancels a
 campaign that overruns; results expire from S3 after 90 days; the budget emails you at 50/80/100%.
 
+## Results in the simulator (Analysis) and the 2.8 statistics
+
+Cloud and local headless campaigns show in the simulator's **Analysis** page through the same results interface as
+batches run in the app (2.14, 2.18, 4.6, C.13):
+
+1. Get the results onto this computer: `vacuumctl run` and `vacuumctl fetch <id>` write `cloud-results/<id>/`;
+   `vacuumctl local` writes `local-results/<id>/`. `fetch` now also downloads each run's small files (summary,
+   replay, CSVs; about 80 KB a run) so heat maps and replays work; `--all-files` adds `external_model.json` and the PNGs.
+   Fetching again only downloads what's new.
+2. In the simulator: **Analysis › Import results**, then pick the campaign. It lists the campaigns in the cloud
+   folder's `cloud-results` and `local-results` (in the Unity Editor you can also browse to any folder).
+
+Each campaign becomes **one batch per floor plan × configuration**, labelled *Cloud* or *Headless*, so statistics never
+pool different conditions. Run ids come from the campaign and run index, so importing again replaces the earlier
+import. The run files are copied into the app's own data folder (without `external_model.json`), so deleting a batch
+in Analysis never touches the downloaded campaign. Import reads local files only: the simulator never contacts AWS
+(1.1.1). A run whose files weren't downloaded is still imported from its numbers, so the statistics stay complete.
+The run history keeps the newest 2000 runs; a larger import drops the oldest (the import says so).
+
+**Statistics (2.8).** Every batch, in Analysis and in `report.html`, has a table with, per algorithm, the **mean,
+sample variance (n − 1), standard deviation and 95% confidence interval** (Student's t) of **coverage, time and
+battery used**, over the runs that succeeded; failed runs are listed and counted but left out (the app and the cloud
+use the same rule). **Export CSV** on a batch in Analysis, and `campaign_runs.csv` beside every campaign, list each
+run and the statistics in the same columns, for checking by hand.
+
 ## Demonstrating the acceptance tests
 
 | Test | How |
 |---|---|
 | AT-2.17-1 | In the GUI, run a floor plan with a fixed seed (Random Seed off). Export that floor plan and put it, with the same settings and seed, in a campaign; run it with `vacuumctl local`. Set `simulation.maxSimulatedSeconds` to `86400` to match the GUI's single-run cap. Then `python -m vacuumctl compare <GUI run folder> <headless run folder>` — compares `result.json`, `summary.json` and the SHA-256 of `external_model.json`. GUI run folders are in `%USERPROFILE%\AppData\LocalLow\DefaultCompany\Robot vacuum simulator\Runs`. |
 | AT-2.17-2 | 100 runs: `vacuumctl local` (prints wall-clock) vs the GUI's batch with drawing on. |
+| AT-2.8-1 | A batch of 20+ seeds for one algorithm: in the app (Start simulation › batch, 20 seeds), or a campaign with `"sweep": {"algorithms": ["BoustrophedonSweep"], "seedStart": 1, "seedCount": 20}` run with `vacuumctl run`/`local` and imported. Analysis shows mean, variance, SD and 95% CI for coverage, time and battery. |
+| AT-2.8-2 | Analysis › the batch › **Export CSV** (or `campaign_runs.csv`). In Excel, for each measure: `=AVERAGE(...)`, `=VAR.S(...)`, and the CI half-width `=T.INV.2T(0.05, n-1)*SQRT(VAR.S(...)/n)`; they match the table. |
+| AT-2.18 | Import a cloud campaign: it is listed in Analysis as a batch, with the averaged heat map, mean coverage curve and statistics, the same view as a single run's results but marked *Cloud campaign*. |
 | AT-3.9 | The Windows PC (vacuumctl) and the AWS nodes are separate machines on different networks talking only through the job/results interface. `status` shows them communicating; `campaign_results.json` shows the outcome. |
 | AT-3.10 | GitHub › Actions › *Cloud headless node*: a run per commit with test stages and the `linux-server-<sha>` artifact (and image in ECR on `main`). |
 | AT-5.5 | `vacuumctl run examples/campaign.example.json --nodes 8`. While it runs, EC2 › Instances shows nodes tagged `robot-vacuum-sim-node`; afterwards they are gone and CloudFormation shows no `robot-vacuum-sim-compute` stack. |
@@ -236,10 +264,12 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
 
 ## Not done here / still open
 
-- **Starting campaigns from the GUI.** The Network Settings page sets up and checks the connection; campaigns still start
-  from `vacuumctl` (or the GUI's in-app batch). A "Run on: This computer / Cloud" choice in the batch dialog would
-  call `vacuumctl run` the way the Network Settings page calls `test-connection`; showing `campaign_results.json` in
-  Analysis covers 2.18.
+- **Starting campaigns from the GUI.** The Network Settings page sets up and checks the connection, and Analysis
+  imports the results; campaigns still start from `vacuumctl` (or the GUI's in-app batch). A "Run on: This computer /
+  Cloud" choice in the batch dialog could call `vacuumctl run` the way the Network Settings page calls
+  `test-connection`, then import the results automatically.
+- **4.6 pairwise comparison.** Confidence intervals are shown for every measure. A paired comparison between
+  algorithms on the same seeds (mean difference with CI, paired t-test, effect size) would strengthen AT-4.6-1.
 - **Not yet tried in AWS:** the private-network and existing-VPC options, and the admin policy in a non-admin
   account. Test connection checks what it can without changing anything; do one `run examples/smoke.json` with each
   network option before relying on it.
@@ -250,7 +280,7 @@ cloud nodes on Windows (AWS Batch on Fargate with a Windows container, or Window
   misbehaves, rename the folder or pass the path quoted. If the CI editor image lacks the Dedicated Server
   module, set `HEADLESS_SUBTARGET: Player` in the workflow (a normal Linux player run with `-nographics`).
 - Unity creates `.meta` files for the new scripts the first time the project is opened — commit them.
-- **CI runs only `HeadlessJobTests` and `CloudConnectionTests`** (`-testFilter` in `cloud-headless.yml`). Five other EditMode tests (level editor,
+- **CI runs only `HeadlessJobTests`, `CloudConnectionTests`, `CampaignImportTests` and `BatchStatsTests`** (`-testFilter` in `cloud-headless.yml`). Five other EditMode tests (level editor,
   LevelData, SimConfig) fail on `main` too; the team needs to fix or explain them before the presentation (C.14).
 - **Per-cell telemetry in batches (2.19):** batch runs keep the final per-cell state (`external_model.json`) but not
   the per-cell time series. If the team reads 2.19 as needing it, add a job flag that tells `RunRecorder` to write
