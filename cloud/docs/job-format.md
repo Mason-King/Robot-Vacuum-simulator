@@ -119,8 +119,10 @@ node. To use one that isn't in the image, list it in `algorithmFiles`:
 - A file is carried as is; a folder is carried with its name, so all its `.cs` files are compiled together as one
   algorithm project, the same as a subfolder of the desktop Algorithms folder.
 - Only `.cs` source is accepted (no DLLs): it is compiled on each node against the algorithm API and base .NET only, so
-  it cannot reach Unity, the simulator, the file system through the simulator, or the true robot position (2.3, 4.8).
-  C# 9 at most.
+  it cannot reach Unity, the simulator or the true robot position (2.3), and the plugin sandbox then refuses anything
+  that reaches files, the network, other programs, reflection, threads or clocks before the code is loaded (4.8; see
+  `Robot vacuum simulator/Algorithms/README.md` › The sandbox). A refused file rejects the job (exit code 2) with
+  `RV0048` errors. C# 9 at most.
 - Paths must stay inside the Algorithms folder (no `..`, drive letters or leading slash). Names starting with `_` or
   `.` are refused because the loader skips them. Limits: 64 files, 1 MB each, 4 MB in all.
 - The node writes a copy of the shipped folder plus your files to a temporary folder and loads that. A carried file

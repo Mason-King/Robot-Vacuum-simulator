@@ -10,7 +10,9 @@ using UnityEngine.UIElements;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
-    /// The start screen's Settings page. Its Cloud connection section is "bring your own cloud" (5.5): the user connects
+    /// The start screen's Network Settings page. Its first two sections are the network workers (3.9,
+    /// <see cref="NetworkWorkersView"/>): this PC as a worker, and the workers this PC can split batches across.
+    /// Its Cloud connection section is "bring your own cloud" (5.5): the user connects
     /// their own organisation's AWS account, picks the network campaigns run in, sets up the resources there from the
     /// templates, and can remove them all again. It edits <see cref="CloudConnection"/> (saved as it changes) and runs
     /// the vacuumctl tool for anything that talks to AWS, so the simulator itself never holds a credential (C.12) and
@@ -46,8 +48,8 @@ namespace RobotVacuum.LevelEditor
             AddToClassList("le-screen");
             AddToClassList("le-settings");
 
-            Ui.PageHeader(this, "Settings", "Start screen", () => BackRequested?.Invoke(), out var subtitle);
-            subtitle.text = "Cloud connection for batch campaigns";
+            Ui.PageHeader(this, "Network Settings", "Start screen", () => BackRequested?.Invoke(), out var subtitle);
+            subtitle.text = "Network workers and the cloud connection for batch campaigns";
 
             content = new ScrollView(ScrollViewMode.Vertical);
             content.AddToClassList("le-page__content");
@@ -70,6 +72,7 @@ namespace RobotVacuum.LevelEditor
             actionButtons.Clear();
             var column = Ui.Div(content, "le-page__column");
 
+            column.Add(new NetworkWorkersView(overlay));
             BuildAccount(Ui.Div(column, "le-panel"));
             BuildNetwork(Ui.Div(column, "le-panel"));
             BuildCompute(Ui.Div(column, "le-panel"));

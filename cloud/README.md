@@ -209,11 +209,28 @@ run and the statistics in the same columns, for checking by hand.
 | AT-2.8-1 | A batch of 20+ seeds for one algorithm: in the app (Start simulation › batch, 20 seeds), or a campaign with `"sweep": {"algorithms": ["BoustrophedonSweep"], "seedStart": 1, "seedCount": 20}` run with `vacuumctl run`/`local` and imported. Analysis shows mean, variance, SD and 95% CI for coverage, time and battery. |
 | AT-2.8-2 | Analysis › the batch › **Export CSV** (or `campaign_runs.csv`). In Excel, for each measure: `=AVERAGE(...)`, `=VAR.S(...)`, and the CI half-width `=T.INV.2T(0.05, n-1)*SQRT(VAR.S(...)/n)`; they match the table. |
 | AT-2.18 | Import a cloud campaign: it is listed in Analysis as a batch, with the averaged heat map, mean coverage curve and statistics, the same view as a single run's results but marked *Cloud campaign*. |
-| AT-3.9 | The Windows PC (vacuumctl) and the AWS nodes are separate machines on different networks talking only through the job/results interface. `status` shows them communicating; `campaign_results.json` shows the outcome. |
+| AT-3.9 | **Network workers (main demonstration, same network, nothing to install but the simulator):** on PC B, Network Settings › *Start worker* › *Allow a new PC to pair*. On PC A, Network Settings › Network workers › *Add worker* with B's address and code. On A, Start simulation › a floor plan › Batch, switch on B under **Run on**, Run batch. The bar at the bottom shows both computers' progress; Details lists each; the batch then appears in Analysis marked *Network campaign*. The interface is specified in `docs/worker-protocol.md`. Also: the Windows PC (vacuumctl) and AWS nodes, on different networks, through the job/results interface. |
+| AT-3.12 | After a network batch: Details › Show folder. `network.log` (this PC: connections, shards sent and moved, downloads) and `shards/shard-NNNN/logs/unity.log` from every computer that ran a shard are side by side in the campaign folder; each worker also keeps `Worker/worker.log`. Cloud: `vacuumctl.log` plus `vacuumctl logs`. |
 | AT-3.10 | GitHub › Actions › *Cloud headless node*: a run per commit with test stages and the `linux-server-<sha>` artifact (and image in ECR on `main`). |
 | AT-5.5 | `vacuumctl run examples/campaign.example.json --nodes 8`. While it runs, EC2 › Instances shows nodes tagged `robot-vacuum-sim-node`; afterwards they are gone and CloudFormation shows no `robot-vacuum-sim-compute` stack. |
 
+## Network workers (3.9)
+
+Any copy of the simulator can be a **worker** for others on the same network: Network Settings › *This PC as a worker*,
+or `RobotVacuum.exe -batchmode -nographics -worker` on an unattended lab PC (it prints its address and a pairing code).
+A researcher pairs once (address + the 10-character code; nothing else to install), then picks workers under **Run on**
+in the batch dialog. The batch is split in proportion to each computer's simulation slots, a computer that drops out has
+its shards moved to another (continuing from the runs already done), and the results are imported into Analysis. The
+listening process never runs job code; every shard is a headless child process behind the plugin sandbox. Pairing keys
+live in Windows Credential Manager. Specification, security design and trust boundaries: `docs/worker-protocol.md`.
+
 ## Trust boundaries (4.8, C.12)
+
+Plugin algorithms are checked against a deny-by-default sandbox before they are loaded, everywhere they load (GUI,
+headless, cloud node, worker): the algorithm API, maths, strings, collections and LINQ only, with no files, network,
+processes, reflection, threads or clocks (`Robot vacuum simulator/Algorithms/README.md` › The sandbox). Release builds
+must not be Development builds: the Unity Pipeline package opens a local HTTP command port only in the Editor and in
+Development builds.
 
 ```
  Your computer                       AWS (your account)                     Inside one container (uid 1000, not root)

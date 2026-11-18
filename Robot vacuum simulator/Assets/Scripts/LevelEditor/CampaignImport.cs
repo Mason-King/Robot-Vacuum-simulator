@@ -27,6 +27,7 @@ namespace RobotVacuum.LevelEditor
         public const string ResultsFileName = "campaign_results.json";
         public const string CloudSource = "cloud";
         public const string HeadlessSource = "headless";
+        public const string NetworkSource = "network";
 
         /// <summary>Files not copied into the app's data folder: the full per-cell model is large and Analysis doesn't use it.</summary>
         static readonly HashSet<string> SkippedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "external_model.json" };
@@ -84,7 +85,7 @@ namespace RobotVacuum.LevelEditor
             public DateTime generated;
             public bool imported;
 
-            public string SourceLabel => source == CloudSource ? "Cloud" : "Headless";
+            public string SourceLabel => source == CloudSource ? "Cloud" : source == NetworkSource ? "Network" : "Headless";
         }
 
         /// <summary>What an import did.</summary>
@@ -111,7 +112,8 @@ namespace RobotVacuum.LevelEditor
         /// </summary>
         public static List<string> DefaultRoots()
         {
-            var roots = new List<string>();
+            // Network batches (3.9) are written here by this app itself.
+            var roots = new List<string> { Path.Combine(Application.persistentDataPath, "NetworkCampaigns") };
             try
             {
                 var connection = CloudConnection.Load(CloudConnection.DefaultPath, out _, out _);
@@ -259,13 +261,27 @@ namespace RobotVacuum.LevelEditor
             return result;
         }
 
-        /// <summary>"cloud" when the campaign ran on AWS (its manifest names a bucket), else "headless" (vacuumctl local).</summary>
+        [Serializable]
+        sealed class ManifestProbe
+        {
+            public string transport;
+            public string bucket;
+        }
+
+        /// <summary>
+        /// "network" when the campaign ran on network workers (its manifest says transport "network"), "cloud" when it
+        /// ran on AWS (its manifest names a bucket), else "headless" (vacuumctl local).
+        /// </summary>
         static string SourceOf(string folder)
         {
             try
             {
                 string manifest = Path.Combine(folder, "manifest.json");
-                return File.Exists(manifest) && File.ReadAllText(manifest).Contains("\"bucket\"") ? CloudSource : HeadlessSource;
+                if (!File.Exists(manifest)) return HeadlessSource;
+                string text = File.ReadAllText(manifest);
+                var probe = JsonUtility.FromJson<ManifestProbe>(text);
+                if (probe?.transport == NetworkSource) return NetworkSource;
+                return text.Contains("\"bucket\"") ? CloudSource : HeadlessSource;
             }
             catch (Exception)
             {

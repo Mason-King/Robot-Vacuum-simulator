@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using RobotVacuum.Network;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
@@ -23,6 +24,10 @@ namespace RobotVacuum.Headless
     ///
     /// Exit codes: 0 every run succeeded, 10 the job finished but some runs failed (see results.json),
     /// 2 the job file or arguments were rejected, 1 the job crashed.
+    ///
+    /// Worker mode (requirement 3.9) instead of a job: <c>-batchmode -nographics -worker [-workerPort 47815]
+    /// [-workerProcesses N] [-workerPairMinutes M]</c> listens for paired PCs and runs their jobs as headless child
+    /// processes of this same executable (<see cref="WorkerHost"/>).
     /// </summary>
     public static class HeadlessBootstrap
     {
@@ -31,8 +36,11 @@ namespace RobotVacuum.Headless
         public const int ExitInvalid = 2;
         public const int ExitSomeRunsFailed = 10;
 
-        /// <summary>True when this process was launched as a headless job. GUI code can check it to stay out of the way.</summary>
+        /// <summary>True when this process was launched as a headless job or a worker. GUI code can check it to stay out of the way.</summary>
         public static bool IsHeadlessJob { get; private set; }
+
+        /// <summary>True when this process was launched as a network worker (-worker).</summary>
+        public static bool IsWorker { get; private set; }
 
         public static HeadlessArgs Args { get; private set; }
 
@@ -40,9 +48,10 @@ namespace RobotVacuum.Headless
         static void Boot()
         {
             var args = HeadlessArgs.Parse(Environment.GetCommandLineArgs());
-            if (string.IsNullOrEmpty(args.configPath)) return; // a normal GUI launch
+            if (string.IsNullOrEmpty(args.configPath) && !args.worker) return; // a normal GUI launch
 
             IsHeadlessJob = true;
+            IsWorker = args.worker;
             Args = args;
 
             // Keep the log readable in CloudWatch: stack traces only for real problems.
@@ -62,9 +71,24 @@ namespace RobotVacuum.Headless
             {
                 // SDD 2.1: refuse -configPath without -batchmode -nographics, so a job can never quietly run
                 // with rendering on and be mistaken for a headless result.
-                Debug.LogError("[headless] -configPath was given without -batchmode -nographics. Refusing to run the job. " +
-                               "Launch as: <exe> -batchmode -nographics -configPath <job.json>");
+                Debug.LogError("[headless] -configPath or -worker was given without -batchmode -nographics. Refusing to start. " +
+                               "Launch as: <exe> -batchmode -nographics -configPath <job.json>, or <exe> -batchmode -nographics -worker");
                 Application.Quit(ExitInvalid);
+                return;
+            }
+
+            if (Args.worker && !string.IsNullOrEmpty(Args.configPath))
+            {
+                Debug.LogError("[headless] -worker and -configPath can't be used together: a worker receives its jobs over the network.");
+                Application.Quit(ExitInvalid);
+                return;
+            }
+
+            if (Args.worker)
+            {
+                var workerHost = new GameObject("Network Worker");
+                UnityEngine.Object.DontDestroyOnLoad(workerHost);
+                workerHost.AddComponent<WorkerHost>().Begin(Args);
                 return;
             }
 
@@ -88,6 +112,7 @@ namespace RobotVacuum.Headless
         {
             SceneManager.sceneLoaded -= OnFirstSceneLoaded;
             IsHeadlessJob = false;
+            IsWorker = false;
             Args = null;
         }
     }
@@ -101,6 +126,12 @@ namespace RobotVacuum.Headless
         public int shardCount;
         public bool validateOnly;
         public bool resume = true;
+
+        public bool worker;
+        public int workerPort;
+        public int workerProcesses;
+        public int workerPairMinutes = -1; // -1: open pairing for 10 minutes when started by hand, not when started from Network Settings
+        public int workerParentPid;
 
         public static HeadlessArgs Parse(string[] argv)
         {
@@ -116,6 +147,11 @@ namespace RobotVacuum.Headless
                 else if (Is(flag, "-shardCount") && TryInt(value, out int count)) { args.shardCount = count; i++; }
                 else if (Is(flag, "-validateOnly")) args.validateOnly = true;
                 else if (Is(flag, "-noResume")) args.resume = false;
+                else if (Is(flag, "-worker")) args.worker = true;
+                else if (Is(flag, "-workerPort") && TryInt(value, out int port)) { args.workerPort = port; i++; }
+                else if (Is(flag, "-workerProcesses") && TryInt(value, out int processes)) { args.workerProcesses = processes; i++; }
+                else if (Is(flag, "-workerPairMinutes") && TryInt(value, out int minutes)) { args.workerPairMinutes = minutes; i++; }
+                else if (Is(flag, "-workerParentPid") && TryInt(value, out int parent)) { args.workerParentPid = parent; i++; }
             }
 
             if (args.shardIndex < 0 && TryInt(Environment.GetEnvironmentVariable("AWS_BATCH_JOB_ARRAY_INDEX"), out int envIndex))

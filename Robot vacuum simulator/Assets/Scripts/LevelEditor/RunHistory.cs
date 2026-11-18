@@ -131,7 +131,7 @@ namespace RobotVacuum.LevelEditor
         public bool IsImported => !string.IsNullOrEmpty(source);
 
         /// <summary>"Cloud" or "Headless" for imported runs; empty otherwise.</summary>
-        public string SourceLabel => source == "cloud" ? "Cloud" : source == "headless" ? "Headless" : string.Empty;
+        public string SourceLabel => source == "cloud" ? "Cloud" : source == "headless" ? "Headless" : source == "network" ? "Network" : string.Empty;
 
         public DateTime FinishedAt =>
             DateTime.TryParse(finishedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var time) ? time : DateTime.MinValue;

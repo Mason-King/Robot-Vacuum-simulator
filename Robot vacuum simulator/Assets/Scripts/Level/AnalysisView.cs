@@ -445,6 +445,7 @@ namespace RobotVacuum.LevelEditor
                 run.batteryEmptied ? $"{run.batteryUsed:0} units · ran flat" : $"{run.batteryUsed:0} units",
                 run.BatteryUsedPercent / 100f, run.batteryEmptied ? "low" : "battery");
             Kpi(kpis, "Path length", Ui.FormatLength(run.distanceMeters), $"{Ui.FormatLength(run.AverageSpeed)}/s average");
+            if (kpis.childCount > 0) kpis[kpis.childCount - 1].AddToClassList("le-kpi--last"); // USS has no :last-child
 
             // How quickly the run got there.
             var milestones = Ui.Div(panel, "le-milestones");

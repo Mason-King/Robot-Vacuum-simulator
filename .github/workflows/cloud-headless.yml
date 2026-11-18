@@ -75,7 +75,7 @@ jobs:
         with:
           projectPath: ${{ env.PROJECT_PATH }}
           testMode: editmode
-          customParameters: -testFilter "RobotVacuum.Tests.HeadlessJobTests;RobotVacuum.Tests.CloudConnectionTests;RobotVacuum.Tests.CampaignImportTests;RobotVacuum.Tests.BatchStatsTests"
+          customParameters: -testFilter "RobotVacuum.Tests.HeadlessJobTests;RobotVacuum.Tests.CloudConnectionTests;RobotVacuum.Tests.CampaignImportTests;RobotVacuum.Tests.BatchStatsTests;RobotVacuum.Tests.AlgorithmSandboxTests;RobotVacuum.Tests.AlgorithmPluginTests;RobotVacuum.Tests.NetworkWorkerTests;RobotVacuum.Tests.NetworkBatchTests"
           artifactsPath: test-results
           githubToken: ${{ secrets.GITHUB_TOKEN }}
           checkName: Headless job tests

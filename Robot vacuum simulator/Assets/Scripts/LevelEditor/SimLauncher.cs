@@ -77,6 +77,9 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>The run the Analysis page should select, handed out once.</summary>
+        /// <summary>Selects <paramref name="runId"/> the next time the Analysis page opens, without changing scene.</summary>
+        public static void FocusRun(string runId) => focusedRunId = runId;
+
         public static string TakeFocusedRun()
         {
             string id = focusedRunId;
