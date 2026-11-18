@@ -403,17 +403,39 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void Validate_WarnsAboutFurnitureOutsideRooms_AndAVacuumStartingInsideIt()
+        public void Validate_WarnsAboutFurnitureOutsideRooms_AndBlocksAVacuumStartingInsideIt()
         {
             session.ObstacleKind = ObstacleKind.Sofa;
             session.AddObstacle(new Vector2(20f, 20f), Vector2.one);
             session.ObstacleKind = ObstacleKind.Cabinet;
             session.AddObstacle(Vector2.zero, Vector2.one);
 
-            var messages = session.Validate().Select(i => i.message).ToList();
+            var issues = session.Validate();
 
-            CollectionAssert.Contains(messages, "Sofa isn't inside any room.");
-            CollectionAssert.Contains(messages, "The vacuum starts inside Cabinet.");
+            CollectionAssert.Contains(issues.Select(i => i.message).ToList(), "Sofa isn't inside any room.");
+            var critical = issues.Single(i => i.severity == IssueSeverity.Critical);
+            StringAssert.Contains("vacuum starts inside Cabinet", critical.message);
+            StringAssert.Contains("before starting a simulation", critical.message);
+        }
+
+        [Test]
+        public void Validate_VacuumBodyOverlappingFurnitureEdge_IsCritical()
+        {
+            session.ObstacleKind = ObstacleKind.Cabinet;
+            // The spawn point is just outside the cabinet, but the vacuum's body still reaches into it.
+            session.AddObstacle(new Vector2(0.5f + LevelGeometry.VacuumRadius * 0.5f, 0f), Vector2.one);
+
+            Assert.IsTrue(session.Validate().Exists(i => i.severity == IssueSeverity.Critical));
+        }
+
+        [Test]
+        public void Validate_FurnitureClearOfTheVacuumBody_IsNotCritical()
+        {
+            session.ObstacleKind = ObstacleKind.Cabinet;
+            session.AddObstacle(new Vector2(0.5f + LevelGeometry.VacuumRadius + 0.05f, 0f), Vector2.one);
+
+            Assert.IsFalse(session.Validate().Exists(i => i.severity == IssueSeverity.Critical));
+            Assert.IsFalse(LevelGeometry.HasSpawnFurnitureCollision(session.Level));
         }
 
         [Test]
@@ -433,6 +455,7 @@ namespace RobotVacuum.Tests
                 a = new Vector2(0f, -1f),
                 b = new Vector2(0f, 1f),
             });
+            session.Level.RobotSpawn = new Vector2(2f, 0f); // keep the vacuum clear so only the wall overlap is critical
             session.AddObstacle(Vector2.zero, new Vector2(0.5f, 0.5f));
 
             var issue = session.Validate().Single(i => i.severity == IssueSeverity.Critical);

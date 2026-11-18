@@ -101,6 +101,13 @@ namespace RobotVacuum.LevelEditor
                 return false;
             }
 
+            if (LevelGeometry.HasSpawnFurnitureCollision(level))
+            {
+                Debug.LogWarning("Simulation cannot start because the vacuum starts inside furniture. Move the vacuum or the furniture and try again.");
+                Object.Destroy(level);
+                return false;
+            }
+
             LevelHandoff.Send(level);
             SimulatedPath = filePath;
             Origin = origin;
@@ -117,7 +124,7 @@ namespace RobotVacuum.LevelEditor
         /// </summary>
         public static bool RunBatch(LevelSnapshot snapshot, FloorPalette palette, string filePath, BatchSpec spec)
         {
-            if (spec == null || spec.patterns.Count == 0 || spec.trials < 1) return false;
+            if (spec == null || spec.algorithmIds.Count == 0 || spec.trials < 1) return false;
 
             pendingBatch = spec;
             if (Simulate(snapshot, palette, filePath, SimOrigin.StartScreen)) return true;

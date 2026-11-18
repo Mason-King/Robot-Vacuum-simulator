@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using RobotVacuum.Level;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -16,7 +17,8 @@ namespace RobotVacuum.LevelEditor
     public sealed class BatchSpec
     {
         public string batchId = Guid.NewGuid().ToString("N");
-        public List<MovementPattern> patterns = new List<MovementPattern>();
+        /// <summary>The <see cref="RobotVacuum.Sim.Control.AlgorithmCatalog"/> ids to compare, in run order.</summary>
+        public List<string> algorithmIds = new List<string>();
         public int trials = 10;
         public int baseSeed = 1;
         public float maxMinutes = 30f;
@@ -24,7 +26,7 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Step without drawing anything, as fast as the machine allows.</summary>
         public bool headless = true;
 
-        public int TotalRuns => patterns.Count * Mathf.Max(0, trials);
+        public int TotalRuns => algorithmIds.Count * Mathf.Max(0, trials);
     }
 
     /// <summary>
@@ -119,7 +121,7 @@ namespace RobotVacuum.LevelEditor
         void StartTrial()
         {
             pendingEnd = null;
-            var settings = SimConfig.ToRunSettings(spec.patterns[patternIndex], spec.baseSeed + trial);
+            var settings = SimConfig.ToRunSettings(spec.algorithmIds[patternIndex], spec.baseSeed + trial);
             if (!SimulationSession.TryStart(level, settings, spec.headless, OnRunBegan, out session, out string error))
             {
                 UnityEngine.Debug.LogWarning($"Batch: trial {RunIndex + 1} could not start: {error}");
@@ -213,7 +215,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (++trial < spec.trials) return true;
             trial = 0;
-            return ++patternIndex < spec.patterns.Count;
+            return ++patternIndex < spec.algorithmIds.Count;
         }
 
         void Complete()
@@ -271,7 +273,7 @@ namespace RobotVacuum.LevelEditor
             tile.Add(new IconElement(IconKind.Chart));
             var titles = Ui.Div(header, "le-panel__titles");
             Ui.Text(titles, "Running batch experiment", "le-panel__title");
-            Ui.Text(titles, $"{level?.name} · {spec.patterns.Count} algorithm(s) × {spec.trials} seeds" +
+            Ui.Text(titles, $"{level?.name} · {spec.algorithmIds.Count} algorithm(s) × {spec.trials} seeds" +
                             (spec.headless ? " · headless" : string.Empty), "le-panel__text");
 
             statusLabel = Ui.Text(card, string.Empty, "le-batch__status");
@@ -294,7 +296,7 @@ namespace RobotVacuum.LevelEditor
 
             int total = spec.TotalRuns;
             int current = Mathf.Min(RunIndex + 1, total);
-            string algorithm = patternIndex < spec.patterns.Count ? MovementAlgorithms.LabelOf(spec.patterns[patternIndex]) : "Done";
+            string algorithm = patternIndex < spec.algorithmIds.Count ? AlgorithmCatalog.NameOf(spec.algorithmIds[patternIndex]) : "Done";
 
             statusLabel.text = $"{algorithm} · seed {spec.baseSeed + trial} · run {current} of {total}";
             progressFill.style.width = Length.Percent(total > 0 ? (RunIndex + Mathf.Clamp01(SimTime / (spec.maxMinutes * 60f))) / total * 100f : 0f);

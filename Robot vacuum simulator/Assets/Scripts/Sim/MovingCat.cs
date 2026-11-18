@@ -15,15 +15,9 @@ namespace RobotVacuum.Sim
 
         public enum Behavior { Roaming, Investigating, Startled, Resting }
 
-        static readonly Vector2[] CatSilhouette =
-        {
-            new Vector2(-0.08f, -0.17f), new Vector2(-0.11f, -0.12f), new Vector2(-0.12f, -0.02f),
-            new Vector2(-0.105f, 0.08f), new Vector2(-0.105f, 0.20f), new Vector2(-0.08f, 0.34f),
-            new Vector2(-0.015f, 0.27f), new Vector2(0f, 0.285f), new Vector2(0.015f, 0.27f),
-            new Vector2(0.08f, 0.34f), new Vector2(0.105f, 0.20f), new Vector2(0.105f, 0.08f),
-            new Vector2(0.12f, -0.02f), new Vector2(0.11f, -0.12f), new Vector2(0.08f, -0.17f),
-            new Vector2(0.04f, -0.19f), new Vector2(-0.04f, -0.19f),
-        };
+        // Fastest the cat's body swings round to face where it is walking, in degrees per second.
+        const float FacingTurnSpeed = 360f;
+
         Rigidbody2D body;
         Vector2 spawnPosition;
         Vector2 direction;
@@ -68,7 +62,7 @@ namespace RobotVacuum.Sim
             body.interpolation = RigidbodyInterpolation2D.Interpolate;
 
             CollisionShape.pathCount = 1;
-            CollisionShape.SetPath(0, CatSilhouette);
+            CollisionShape.SetPath(0, CatShape.Silhouette);
             CollisionShape.isTrigger = false;
             if (catMeshes == null) BuildVisual();
         }
@@ -89,6 +83,8 @@ namespace RobotVacuum.Sim
             body.linearVelocity = Vector2.zero;
             transform.position = position;
             direction = RandomDirection();
+            body.rotation = HeadingDegrees(direction);
+            transform.rotation = Quaternion.Euler(0f, 0f, body.rotation);
             CurrentBehavior = Behavior.Roaming;
             startleTimer = 0f;
             behaviorTimer = NextRange(3f, 6f);
@@ -184,8 +180,12 @@ namespace RobotVacuum.Sim
                 next.y = Mathf.Clamp(next.y, minY, maxY);
             }
 
+            body.rotation = Mathf.MoveTowardsAngle(body.rotation, HeadingDegrees(direction), FacingTurnSpeed * dt);
             body.linearVelocity = direction * MoveSpeed;
         }
+
+        /// <summary>The body rotation that points the cat's nose (its local +y) along <paramref name="heading"/>.</summary>
+        public static float HeadingDegrees(Vector2 heading) => Mathf.Atan2(heading.y, heading.x) * Mathf.Rad2Deg - 90f;
 
         void OnCollisionEnter2D(Collision2D collision)
         {
@@ -304,52 +304,32 @@ namespace RobotVacuum.Sim
 
         void BuildVisual()
         {
-            var silhouetteVertices = new List<Vector3>(CatSilhouette.Length);
-            foreach (Vector2 point in CatSilhouette)
-                silhouetteVertices.Add(point);
-            CreateVisualLayer(0, "Cat silhouette", silhouetteVertices, new List<int>(Poly2D.Triangulate(CatSilhouette)), new Color(0.83f, 0.48f, 0.27f));
-
-            var markingVertices = new List<Vector3>();
-            var markingTriangles = new List<int>();
-            AddEllipse(markingVertices, markingTriangles, new Vector2(0f, -0.075f), new Vector2(0.042f, 0.075f), 16);
-            AddTriangle(markingVertices, markingTriangles, new Vector2(-0.078f, 0.30f), new Vector2(-0.052f, 0.30f), new Vector2(-0.075f, 0.245f));
-            AddTriangle(markingVertices, markingTriangles, new Vector2(0.052f, 0.30f), new Vector2(0.078f, 0.30f), new Vector2(0.075f, 0.245f));
-            AddEllipse(markingVertices, markingTriangles, new Vector2(-0.027f, 0.09f), new Vector2(0.025f, 0.018f), 12);
-            AddEllipse(markingVertices, markingTriangles, new Vector2(0.027f, 0.09f), new Vector2(0.025f, 0.018f), 12);
-            CreateVisualLayer(1, "Cat markings", markingVertices, markingTriangles, new Color(0.98f, 0.72f, 0.55f));
-
-            var featureVertices = new List<Vector3>();
-            var featureTriangles = new List<int>();
-            AddEllipse(featureVertices, featureTriangles, new Vector2(-0.034f, 0.145f), new Vector2(0.008f, 0.013f), 10);
-            AddEllipse(featureVertices, featureTriangles, new Vector2(0.034f, 0.145f), new Vector2(0.008f, 0.013f), 10);
-            AddTriangle(featureVertices, featureTriangles, new Vector2(-0.012f, 0.112f), new Vector2(0.012f, 0.112f), new Vector2(0f, 0.098f));
-            AddRibbon(featureVertices, featureTriangles, new Vector2(0f, 0.098f), new Vector2(0f, 0.082f), 0.003f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(0f, 0.082f), new Vector2(-0.012f, 0.075f), 0.003f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(0f, 0.082f), new Vector2(0.012f, 0.075f), 0.003f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(-0.048f, 0.09f), new Vector2(-0.09f, 0.105f), 0.0025f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(-0.048f, 0.084f), new Vector2(-0.095f, 0.084f), 0.0025f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(-0.048f, 0.078f), new Vector2(-0.09f, 0.063f), 0.0025f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(0.048f, 0.09f), new Vector2(0.09f, 0.105f), 0.0025f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(0.048f, 0.084f), new Vector2(0.095f, 0.084f), 0.0025f);
-            AddRibbon(featureVertices, featureTriangles, new Vector2(0.048f, 0.078f), new Vector2(0.09f, 0.063f), 0.0025f);
-            CreateVisualLayer(2, "Cat face", featureVertices, featureTriangles, new Color(0.20f, 0.12f, 0.10f));
+            var layers = CatShape.Layers;
+            catMeshes = new Mesh[layers.Count];
+            catMaterials = new Material[layers.Count];
+            for (int i = 0; i < layers.Count; i++)
+                CreateVisualLayer(i, layers[i]);
         }
 
-        void CreateVisualLayer(int index, string layerName, List<Vector3> vertices, List<int> triangles, Color color)
+        void CreateVisualLayer(int index, CatShape.Layer layer)
         {
-            var mesh = new Mesh { name = layerName };
-            mesh.SetVertices(vertices);
-            mesh.SetTriangles(triangles, 0);
+            var vertices = new Vector3[layer.vertices.Length];
+            for (int i = 0; i < vertices.Length; i++) vertices[i] = layer.vertices[i];
+
+            var mesh = new Mesh { name = layer.name };
+            mesh.vertices = vertices;
+            mesh.triangles = layer.triangles;
             mesh.RecalculateBounds();
-            catMeshes ??= new Mesh[3];
-            catMaterials ??= new Material[3];
             catMeshes[index] = mesh;
 
-            var visual = new GameObject(layerName);
+            // Nearer the camera (more negative z) for each later layer, so details sit on top of the fur.
+            var visual = new GameObject(layer.name);
             visual.transform.SetParent(transform, false);
-            visual.transform.localPosition = new Vector3(0f, 0f, -0.04f + index * 0.0001f);
+            visual.transform.localPosition = new Vector3(0f, 0f, -0.04f - index * 0.002f);
             visual.AddComponent<MeshFilter>().sharedMesh = mesh;
             var renderer = visual.AddComponent<MeshRenderer>();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
             var shader = Shader.Find("Universal Render Pipeline/Unlit")
                          ?? Shader.Find("Unlit/Color")
                          ?? Shader.Find("Sprites/Default");
@@ -357,10 +337,12 @@ namespace RobotVacuum.Sim
             {
                 catMaterials[index] = new Material(shader)
                 {
-                    name = $"MovingCat {layerName} (generated)",
+                    name = $"MovingCat {layer.name} (generated)",
                     hideFlags = HideFlags.HideAndDontSave,
-                    color = color,
+                    color = layer.color,
                 };
+                if (catMaterials[index].HasProperty("_BaseColor"))
+                    catMaterials[index].SetColor("_BaseColor", layer.color);
                 if (catMaterials[index].HasProperty("_Cull"))
                     catMaterials[index].SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
                 renderer.sharedMaterial = catMaterials[index];
@@ -387,51 +369,6 @@ namespace RobotVacuum.Sim
                     foreach (Material material in catMaterials)
                         if (material != null) DestroyImmediate(material);
             }
-        }
-
-        static void AddEllipse(List<Vector3> vertices, List<int> triangles, Vector2 center, Vector2 radii, int sides)
-        {
-            int first = vertices.Count;
-            vertices.Add(center);
-            for (int i = 0; i < sides; i++)
-            {
-                float angle = i * Mathf.PI * 2f / sides;
-                vertices.Add(center + new Vector2(Mathf.Cos(angle) * radii.x, Mathf.Sin(angle) * radii.y));
-            }
-
-            for (int i = 0; i < sides; i++)
-            {
-                triangles.Add(first);
-                triangles.Add(first + 1 + i);
-                triangles.Add(first + 1 + (i + 1) % sides);
-            }
-        }
-
-        static void AddTriangle(List<Vector3> vertices, List<int> triangles, Vector2 a, Vector2 b, Vector2 c)
-        {
-            int first = vertices.Count;
-            vertices.Add(a);
-            vertices.Add(b);
-            vertices.Add(c);
-            triangles.Add(first);
-            triangles.Add(first + 1);
-            triangles.Add(first + 2);
-        }
-
-        static void AddRibbon(List<Vector3> vertices, List<int> triangles, Vector2 start, Vector2 end, float width)
-        {
-            Vector2 normal = (end - start).normalized * (width * 0.5f);
-            int first = vertices.Count;
-            vertices.Add(start + normal);
-            vertices.Add(start - normal);
-            vertices.Add(end - normal);
-            vertices.Add(end + normal);
-            triangles.Add(first);
-            triangles.Add(first + 1);
-            triangles.Add(first + 2);
-            triangles.Add(first);
-            triangles.Add(first + 2);
-            triangles.Add(first + 3);
         }
 
         float NextRange(float min, float max) => randomSource.NextFloat(RandomProvider.Subsystem.DynamicObstacles, min, max);
