@@ -87,6 +87,19 @@ namespace RobotVacuum.LevelEditor
             return (QuantileSorted(medians, 0.025), QuantileSorted(medians, 0.975));
         }
 
+        /// <summary>
+        /// Wilson score 95% interval for a proportion of <paramref name="successes"/> out of <paramref name="trials"/>:
+        /// unlike the textbook p ± 1.96·SE it stays inside 0–1 and is sensible for small counts and for 0 or n.
+        /// </summary>
+        public static (double low, double high) WilsonInterval(int successes, int trials, double z = 1.959964)
+        {
+            if (trials <= 0) return (double.NaN, double.NaN);
+            double p = (double)successes / trials, z2 = z * z;
+            double centre = (p + z2 / (2 * trials)) / (1 + z2 / trials);
+            double half = z * Math.Sqrt(p * (1 - p) / trials + z2 / (4.0 * trials * trials)) / (1 + z2 / trials);
+            return (Math.Max(0, centre - half), Math.Min(1, centre + half));
+        }
+
         /// <summary>Mid-ranks (1-based, ties share their average rank) and Σ(t³ − t) over the tie groups.</summary>
         public static double[] Ranks(IReadOnlyList<double> values, out double tieSum)
         {

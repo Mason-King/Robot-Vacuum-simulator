@@ -78,6 +78,18 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void WilsonInterval_MatchesReferenceValues()
+        {
+            var (low, high) = Statistics.WilsonInterval(2, 10);
+            Assert.AreEqual(0.0567, low, 1e-4);
+            Assert.AreEqual(0.5098, high, 1e-4);
+
+            (low, high) = Statistics.WilsonInterval(0, 10);
+            Assert.AreEqual(0.0, low, 1e-12, "never below 0");
+            Assert.AreEqual(0.2775, high, 1e-4, "but not 0 wide either");
+        }
+
+        [Test]
         public void Friedman_PerfectAgreement()
         {
             var blocks = new List<double[]> { new double[] { 1, 2, 3 }, new double[] { 2, 5, 9 }, new double[] { 0, 1, 4 }, new double[] { 3, 4, 5 } };
@@ -250,6 +262,39 @@ namespace RobotVacuum.Tests
             foreach (var cluster in report.assisted.clusters) total += cluster.runs.Count;
             Assert.AreEqual(30, total);
             StringAssert.Contains("ML-assisted analysis", report.ToMarkdown());
+        }
+
+        [Test]
+        public void Failures_AreCountedByKind_AndShownBesideTheResults()
+        {
+            var runs = Batch();
+            var lawnmower = runs.FindAll(r => r.pattern == MovementPattern.Lawnmower);
+            lawnmower[0].failure = "NextGoal threw IndexOutOfRangeException";
+            lawnmower[0].failureKind = "Crash";
+            lawnmower[1].failure = "NextGoal did not return within 2 s";
+            lawnmower[1].failureKind = "Hang";
+
+            var report = ComparativeReport.Build(runs, new ReportOptions { assisted = false });
+            var group = report.conditions[0].algorithms.Find(g => g.runs[0].pattern == MovementPattern.Lawnmower);
+
+            Assert.AreEqual(2, group.Failed);
+            CollectionAssert.AreEqual(new[] { "Crash", "Hang" }, group.FailureKinds().Keys);
+            Assert.AreEqual(10, group.runs.Count, "failed runs stay in the comparisons");
+            StringAssert.StartsWith("2 of 10 (20%, 95% CI 6–51%)", group.DescribeFailures());
+
+            string md = report.ToMarkdown();
+            StringAssert.Contains("### Reliability", md);
+            StringAssert.Contains("| 10 | 2 | 20% [6–51%] | Crash 1, Hang 1 |", md);
+            Assert.IsTrue(report.summary.Exists(l => l.StartsWith("Failures (kept in the comparisons)") && l.Contains("Lawnmower failed 2 of 10")),
+                string.Join(" | ", report.summary));
+        }
+
+        [Test]
+        public void NoFailures_AddNoSummaryLine()
+        {
+            var report = ComparativeReport.Build(Batch(), new ReportOptions { assisted = false });
+            Assert.IsFalse(report.summary.Exists(l => l.StartsWith("Failures")));
+            Assert.AreEqual("none of 10", report.conditions[0].algorithms[0].DescribeFailures());
         }
 
         [Test]

@@ -468,7 +468,7 @@ namespace RobotVacuum.LevelEditor
 
                 var medians = Ui.Div(panel, "le-table");
                 var medianHead = Ui.Div(medians, "le-table__row le-table__row--head");
-                foreach (string heading in new[] { "Algorithm", "n", "Median", "95% CI of median", "IQR" })
+                foreach (string heading in new[] { "Algorithm", "n", "Median", "95% CI of median", "IQR", "Failed" })
                     Ui.Text(medianHead, heading, "le-table__cell");
                 foreach (var group in comparison.ranking)
                 {
@@ -479,6 +479,10 @@ namespace RobotVacuum.LevelEditor
                     Ui.Text(row, metric.Format(d.median), "le-table__cell");
                     Ui.Text(row, $"{metric.Format(d.medianLow)} – {metric.Format(d.medianHigh)}", "le-table__cell");
                     Ui.Text(row, $"{metric.Format(d.q1)} – {metric.Format(d.q3)}", "le-table__cell");
+                    int failed = group.Failed;
+                    var failedCell = Ui.Text(row, failed > 0 ? $"{failed} of {group.runs.Count}" : "–",
+                        failed > 0 ? "le-table__cell le-tone-text--low" : "le-table__cell");
+                    if (failed > 0) Ui.Tooltip(failedCell, $"Failed {group.DescribeFailures()}. Failed runs are kept in these comparisons.");
                 }
 
                 var table = Ui.Div(panel, "le-table");

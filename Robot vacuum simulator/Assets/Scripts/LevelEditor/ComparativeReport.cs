@@ -170,6 +170,34 @@ namespace RobotVacuum.LevelEditor
 
         public Descriptive this[ReportMetric metric] => stats[metric.key];
 
+        /// <summary>Runs where the algorithm failed (crashed, hung, made an invalid move or stalled). They stay in the comparisons.</summary>
+        public int Failed => runs.FindAll(r => !string.IsNullOrEmpty(r.failure)).Count;
+
+        /// <summary>Failed runs by kind (Crash, Hang, InvalidMove, Stalled; "Unknown" for runs recorded before kinds were).</summary>
+        public SortedDictionary<string, int> FailureKinds()
+        {
+            var kinds = new SortedDictionary<string, int>(StringComparer.Ordinal);
+            foreach (var run in runs)
+            {
+                if (string.IsNullOrEmpty(run.failure)) continue;
+                string kind = string.IsNullOrEmpty(run.failureKind) ? "Unknown" : run.failureKind;
+                kinds.TryGetValue(kind, out int n);
+                kinds[kind] = n + 1;
+            }
+            return kinds;
+        }
+
+        /// <summary>"2 of 10 (20%, 95% CI 6–51%): Crash 1, Hang 1", or "none of 10".</summary>
+        public string DescribeFailures()
+        {
+            int failed = Failed, total = runs.Count;
+            if (failed == 0) return $"none of {total}";
+            var (low, high) = Statistics.WilsonInterval(failed, total);
+            var kinds = new List<string>();
+            foreach (var pair in FailureKinds()) kinds.Add($"{pair.Key} {pair.Value}");
+            return FormattableString.Invariant($"{failed} of {total} ({100.0 * failed / total:0}%, 95% CI {100 * low:0}–{100 * high:0}%): ") + string.Join(", ", kinds);
+        }
+
         public List<double> Values(ReportMetric metric) => runs.ConvertAll(r => metric.Read(r));
 
         /// <summary>The metric per seed. A seed run more than once is averaged (identical settings replay identically).</summary>
@@ -530,6 +558,13 @@ namespace RobotVacuum.LevelEditor
             return cross;
         }
 
+        static string Kinds(AlgorithmGroup group)
+        {
+            var kinds = new List<string>();
+            foreach (var pair in group.FailureKinds()) kinds.Add($"{pair.Key}:{pair.Value}");
+            return string.Join(";", kinds);
+        }
+
         static string Join(string a, string b) => string.IsNullOrEmpty(a) ? b : string.IsNullOrEmpty(b) ? a : $"{a}; {b}";
 
         // ---------------------------------------------------------------- output
@@ -570,6 +605,7 @@ namespace RobotVacuum.LevelEditor
             {
                 md.Append("## ").AppendLine(section.label);
                 md.AppendLine();
+                WriteReliability(md, section);
                 foreach (var comparison in section.metrics) WriteMetric(md, section, comparison);
             }
 
@@ -618,6 +654,24 @@ namespace RobotVacuum.LevelEditor
                     md.AppendLine($"| {Cell(name)} | {count} | {test.test} | {FormatP(test.pValue)} | {FormatEffect(test)} |");
                 md.AppendLine();
             }
+        }
+
+        static void WriteReliability(StringBuilder md, ConditionSection section)
+        {
+            md.AppendLine("### Reliability");
+            md.AppendLine();
+            md.AppendLine("| Algorithm | Runs | Failed | Failure rate [95% CI] | Kinds |");
+            md.AppendLine("|---|---:|---:|---|---|");
+            foreach (var group in section.algorithms)
+            {
+                int failed = group.Failed, total = group.runs.Count;
+                var (low, high) = Statistics.WilsonInterval(failed, total);
+                var kinds = new List<string>();
+                foreach (var pair in group.FailureKinds()) kinds.Add($"{pair.Key} {pair.Value}");
+                md.AppendLine(FormattableString.Invariant(
+                    $"| {Cell(group.name)} | {total} | {failed} | {100.0 * failed / Math.Max(1, total):0}% [{100 * low:0}–{100 * high:0}%] | {(kinds.Count > 0 ? string.Join(", ", kinds) : "–")} |"));
+            }
+            md.AppendLine();
         }
 
         void WriteMetric(StringBuilder md, ConditionSection section, MetricComparison comparison)
@@ -670,6 +724,7 @@ namespace RobotVacuum.LevelEditor
             md.AppendLine($"- **Multiple comparisons.** Pairwise p-values are Holm–Bonferroni adjusted within each metric and condition; a difference is called significant at adjusted p < {options.alpha:0.##}.");
             md.AppendLine("- **Effect sizes.** Rank-biserial r (paired) and Cliff's δ (independent), with |0.147| / |0.33| / |0.474| as small / medium / large; Kendall's W for Friedman; ε² for Kruskal–Wallis. A significant result with a negligible effect is unlikely to matter in practice.");
             md.AppendLine($"- **Intervals.** Medians carry a percentile bootstrap 95% CI ({options.bootstrapResamples} resamples, fixed seed so reports are reproducible); means carry a Student-t 95% CI.");
+            md.AppendLine("- **Failures.** Runs where the algorithm crashed, hung, made an invalid move or stalled stay in every comparison: the coverage a failing algorithm reached is its real result, and dropping those runs would flatter it. Each condition's Reliability table gives the failure count and rate (Wilson 95% interval) by kind. The batch statistics table (2.8) leaves failed runs out to match cloud campaign results, so its means can differ from this report's.");
             md.AppendLine("- **Censoring.** A run that never reached 90% coverage counts as slower than any run that did (ranked last) instead of being dropped; it is left out of the mean.");
             md.AppendLine("- **Across conditions.** Each shared condition contributes one median per algorithm; algorithms are ranked within each condition and compared with a Friedman test over conditions (Demšar, 2006).");
             md.AppendLine("- **Caveat.** \"No significant difference\" with only a few runs per group is inconclusive, not evidence that algorithms are equal. Run more seeds to narrow the intervals.");
@@ -678,7 +733,7 @@ namespace RobotVacuum.LevelEditor
 
         string GroupsCsv()
         {
-            var csv = new StringBuilder("condition,algorithm_id,algorithm,metric,n,not_reached,mean,sd,ci95,median,median_ci_low,median_ci_high,q1,q3\n");
+            var csv = new StringBuilder("condition,algorithm_id,algorithm,metric,n,not_reached,mean,sd,ci95,median,median_ci_low,median_ci_high,q1,q3,failed,failure_kinds\n");
             foreach (var section in conditions)
                 foreach (var group in section.algorithms)
                     foreach (var metric in ReportMetrics.All)
@@ -688,7 +743,7 @@ namespace RobotVacuum.LevelEditor
                             .Append(metric.key).Append(',').Append(d.n).Append(',').Append(d.censored).Append(',')
                             .Append(Num(d.mean)).Append(',').Append(Num(d.sd)).Append(',').Append(Num(d.ci95)).Append(',')
                             .Append(Num(d.median)).Append(',').Append(Num(d.medianLow)).Append(',').Append(Num(d.medianHigh)).Append(',')
-                            .Append(Num(d.q1)).Append(',').Append(Num(d.q3)).Append('\n');
+                            .Append(Num(d.q1)).Append(',').Append(Num(d.q3)).Append(',').Append(group.Failed).Append(',').Append(Csv(Kinds(group))).Append('\n');
                     }
             return csv.ToString();
         }

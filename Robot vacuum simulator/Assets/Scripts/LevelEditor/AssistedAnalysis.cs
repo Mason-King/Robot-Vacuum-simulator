@@ -584,6 +584,11 @@ namespace RobotVacuum.LevelEditor
                 }
 
                 lines.Add($"**{section.label}**: {Leader(coverage)}");
+
+                // Reliability next to the results: which algorithms failed, how often and how.
+                var failing = section.algorithms.FindAll(g => g.Failed > 0);
+                if (failing.Count > 0)
+                    lines.Add("Failures (kept in the comparisons): " + string.Join("; ", failing.ConvertAll(g => $"{g.name} failed {g.DescribeFailures()}")) + ".");
                 foreach (var metric in ReportMetrics.All)
                 {
                     if (metric == ReportMetrics.Coverage) continue;
