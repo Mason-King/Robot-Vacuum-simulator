@@ -154,6 +154,7 @@ namespace RobotVacuum.LevelEditor
             reverseSpeed = Vacuum.reverseSpeed,
             turnSpeed = Vacuum.turnSpeed,
             batteryCapacity = Vacuum.batteryCapacity,
+            shape = Vacuum.shape,
         };
 
         /// <summary>

@@ -200,7 +200,7 @@ namespace RobotVacuum.Sim
                 detail += "\n" + result.errorMessage;
 
             endPanel.Show($"Run finished: {Describe(result != null ? result.endReason : RunEndReason.None)}",
-                detail, RunAgain, CloseRun);
+                detail, RunAgain, CloseRun, hud != null && hud.CanViewAnalysis ? hud.ViewAnalysis : (System.Action)null);
         }
 
         void RunAgain()

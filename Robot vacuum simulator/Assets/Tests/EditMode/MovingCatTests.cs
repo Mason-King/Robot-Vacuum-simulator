@@ -244,5 +244,44 @@ namespace RobotVacuum.Tests
                 Object.DestroyImmediate(level);
             }
         }
+
+        [Test]
+        public void PlacedCats_AreFencedInToTheFloorPlan()
+        {
+            LevelData level = LevelWithTwoCats();
+            var levelObject = new GameObject("Cat fence level");
+            try
+            {
+                var renderer = levelObject.AddComponent<LevelRenderer>();
+                renderer.Level = level;
+                var cat = MovingCat.SpawnPlacedCats(renderer, levelObject.transform, new RandomProvider(1u))[0];
+
+                Assert.IsTrue(cat.Confined, "placed cats get the floor fence");
+                Assert.IsTrue(cat.IsOnFloor(cat.transform.position), "its spawn is on the floor");
+                Assert.IsFalse(cat.IsOnFloor((Vector2)renderer.LevelToWorld(new Vector2(500f, 500f))), "far outside the building is not");
+            }
+            finally
+            {
+                Object.DestroyImmediate(levelObject);
+                Object.DestroyImmediate(level);
+            }
+        }
+
+        [Test]
+        public void LooseCats_AreNotFenced()
+        {
+            var host = new GameObject("Loose cat");
+            try
+            {
+                var cat = host.AddComponent<MovingCat>();
+                cat.Initialize(new Rect(-2f, -2f, 4f, 4f), Vector2.zero, new RandomProvider(1u));
+                Assert.IsFalse(cat.Confined);
+                Assert.IsTrue(cat.IsOnFloor(new Vector2(999f, 999f)), "no floor plan: no fence");
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
     }
 }

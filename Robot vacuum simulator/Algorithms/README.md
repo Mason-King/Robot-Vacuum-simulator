@@ -28,11 +28,47 @@ run is in progress, and the list stays as it was until the run is stopped.
   `Vec2`, `Pose2`, `IBeliefMap` and `CellIndex`.
 - **Read the map only through the `IBeliefMap` you are handed**, and plan from the believed pose you are handed. The
   robot's true position is not available, by design.
-- **Randomness only from `context.random`**, so the same seed gives the same run.
+- **Randomness only from `context.random`**, so the same seed gives the same run. `System.Random` and the clock are
+  refused (see the sandbox below).
 - **Return nearby waypoints** (a few metres at most), or `null` for "no goal right now".
 - `Name` must be non-empty and different from every other algorithm's. The class's full name (namespace + class) is its
   id, which `config.json` records; it must be unique too.
-- An exception thrown by the algorithm stops the run with an error message; it does not crash the simulator.
+- **Failures stop the run, not the simulator.** While it runs, algorithm code is under a run guard (`AlgorithmGuard`:
+  a worker thread the simulation waits on, so runs stay deterministic). The run ends with an error naming the kind
+  of failure:
+  - **Crash:** any exception (including out-of-memory).
+  - **Hang:** a call that does not return in time (constructor and `Initialize`: 5 s; `NextGoal`: 2 s; `Name` /
+    `SupportsSlam` while loading: 2 s). That's an infinite loop or a deadlock. The worker is aborted where the
+    runtime allows it, and the algorithm is never called again. Time limits are lifted while a debugger is attached.
+  - **InvalidMove:** a non-finite waypoint, one more than 200 m from the robot, or invalid `DriveRequests`
+    (an undefined mode, or a sweep exposure that is negative or not finite).
+  - **Stalled:** the robot made no progress for a long time.
+
+  The one exception is a stack overflow (unbounded recursion), which .NET cannot recover from on any thread.
+  To try failures out, see `_FaultInjection/README.md`.
+
+## The sandbox (requirement 4.8)
+
+An algorithm may come from someone else, and a job can carry it to another computer (a network worker or a cloud
+node), so what algorithm code can reach is fixed and checked **before any of it runs**, for `.cs` files and for DLLs
+alike. Everything not listed here is refused.
+
+| Allowed | Refused |
+|---|---|
+| The algorithm API (`RobotVacuum.AlgorithmApi`) and your own types | Files and folders (`System.IO`) |
+| Numbers and `Math`, strings, `StringBuilder`, `CultureInfo`, enums, tuples, `Span<T>`, `Lazy<T>`, delegates (`Func`, `Action`) | The network (`System.Net`) and other programs (`Process`) |
+| Collections (`System.Collections`, `.Generic`, `.ObjectModel`) and LINQ (`Enumerable`) | Reflection: `GetType()`, `typeof`, `Type`, `Activator`, `System.Reflection`, `dynamic`, expression trees |
+| `System.Numerics` (`Vector2`, `BigInteger`, `Complex` ...) | Threads, tasks, timers, `lock`, concurrent collections, finalizers |
+| Exceptions (`throw`, `try`/`catch`) | Clocks and machine state (`DateTime.Now`, `Stopwatch`, `Environment`, `Guid`) and `System.Random`: they would make the same seed give different runs (2.1, 2.9) |
+| Iterators (`yield return`), events | `Console` (use `context.Log`), native code (`extern`, `DllImport`), `System.Numerics.Vector<T>` (its size depends on the processor) |
+
+A refused use is reported like a compile error, with the file, line and the code `RV0048`, for example
+`MyAlgorithm.cs(14,20): RV0048 'System.IO.File' is not available to algorithms. Algorithms cannot read or write files.`
+
+What the sandbox checks is what code can *reach*, not how it *behaves*. Behaviour is the run guard's job (see
+"Failures stop the run" above): an algorithm that crashes, loops forever or makes an invalid move ends its run, in
+every kind of run. Memory use is not capped by either; that is left to the run limits (each run's time limit, 2.11)
+and, for headless and network jobs, to running each job in its own process.
 
 ## Errors
 
@@ -43,7 +79,12 @@ example `MyAlgorithm.cs(12,17): CS0029 Cannot implicitly convert type 'string' t
 
 Build a class library targeting **.NET Standard 2.1**, referencing `RobotVacuum.AlgorithmApi.dll` (found in the
 simulator's `..._Data/Managed` folder, or the project's `Library/ScriptAssemblies`). A DLL that references anything
-else (UnityEngine, the simulator) is refused.
+else (UnityEngine, the simulator) is refused, and the sandbox above applies: the DLL's metadata (every type and member
+it uses from outside, and any native code) is checked before it is loaded.
+
+DLLs are loaded only from this folder on your own computer. Jobs sent to other computers carry `.cs` source only, so
+remote code always goes through the full source check. A DLL whose IL was written by hand to be unverifiable is not
+detected (disclosed limitation).
 
 ## Good to know
 
@@ -51,6 +92,11 @@ else (UnityEngine, the simulator) is refused.
   takes a few milliseconds, and an unchanged file is not compiled again.
 - .NET cannot unload code, so each changed version of a file stays in memory until the simulator closes. Harmless
   for normal use; restart after many edit-and-rescan cycles.
+- The body can be Round (the default), D-shaped or Rectangular (Configuration › Vacuum › Body shape, or `vacuum.shape`
+  in a job file). Every shape is 34 cm wide, so `robotRadius` (half the width) and `cleaningWidth` are the same for all
+  three and lane spacing needs no change. The D and the rectangle need more room to turn in place (about 46 and 51 cm
+  across, against 34 cm), and their corners can catch a wall mid-turn; the controller handles that (it backs off and
+  re-routes), so an algorithm doesn't have to.
 
 ## Map analysis
 

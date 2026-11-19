@@ -33,6 +33,8 @@ namespace RobotVacuum.Sim.Control
 
         readonly Dictionary<long, float> ease = new Dictionary<long, float>();
         readonly HashSet<long> permanent = new HashSet<long>();
+        readonly Dictionary<long, float> transient = new Dictionary<long, float>();
+        readonly List<long> forgetting = new List<long>();
         readonly List<CellIndex> pending = new List<CellIndex>();
         readonly HashSet<long> pendingKeys = new HashSet<long>();
         bool overflowed;
@@ -51,6 +53,12 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Bumped on every reported change, so a reader can tell "something changed" without taking the feed.</summary>
         public int ChangeCounter { get; private set; }
 
+        /// <summary>Simulated time, set by the controller each step; stamps when a temporary obstacle was last seen.</summary>
+        public float Clock { get; set; }
+
+        /// <summary>A write at least this passable counts as the robot knowing the cell is floor.</summary>
+        public const float KnownFloorThreshold = 0.5f;
+
         public BeliefCell Get(int row, int col) => Grid.GetCell(row, col);
 
         public float Traversability(int row, int col) => Grid.GetCell(row, col).traversabilityBelief;
@@ -61,10 +69,14 @@ namespace RobotVacuum.Sim.Control
         {
             var cell = Grid.GetCell(row, col);
             float old = cell.traversabilityBelief;
-            if (old == value) return; // a cell already equal to the observation is not rewritten
+            bool learnsFloor = value >= KnownFloorThreshold && !cell.knownFloor;
+            if (value <= 0f || transient.Count > 0) TrackTransient(CellIndex.Pack(row, col), old, value, cell.knownFloor);
+            if (old == value && !learnsFloor) return; // a cell already equal to the observation is not rewritten
 
             cell.traversabilityBelief = value;
+            if (learnsFloor) cell.knownFloor = true;
             if (!Grid.SetCell(row, col, cell)) return; // beyond the runaway guard
+            if (old == value) return; // only learned that it is floor: nothing to report
 
             if ((old <= 0f) != (value <= 0f)) TopologyVersion++;
             if (Mathf.Abs(value - old) >= ReportThreshold || (old <= 0f) != (value <= 0f)) Record(row, col);
@@ -117,6 +129,53 @@ namespace RobotVacuum.Sim.Control
         public void MarkPermanent(int row, int col) => permanent.Add(CellIndex.Pack(row, col));
 
         public bool IsPermanent(int row, int col) => permanent.Count > 0 && permanent.Contains(CellIndex.Pack(row, col));
+
+        // ---- Temporary (dynamic) obstacles ----------------------------------------
+
+        /// <summary>
+        /// A TEMPORARY obstacle is a cell the robot knew as floor (preloaded floor, or seen clear) that is now
+        /// believed blocked: something moved onto it, like a cat. Walls, furniture and closed doors are not
+        /// temporary: they are preloaded as blocked, or blocked the first time they are seen. Each temporary
+        /// cell remembers when it was last observed blocked, so a stale one can be forgotten
+        /// (<see cref="ForgetTransients"/>) when the robot is waiting for a way through.
+        /// </summary>
+        void TrackTransient(long key, float old, float value, bool knownFloor)
+        {
+            if (value > 0f)
+            {
+                transient.Remove(key); // seen clear again
+                return;
+            }
+
+            if (transient.ContainsKey(key)) transient[key] = Clock; // still there
+            else if (old > 0f && knownFloor && !permanent.Contains(key)) transient[key] = Clock; // something moved in
+        }
+
+        /// <summary>True while any cell is blocked by a temporary obstacle.</summary>
+        public bool HasTransientBlocks => transient.Count > 0;
+
+        public int TransientCount => transient.Count;
+
+        public bool IsTransient(int row, int col) => transient.ContainsKey(CellIndex.Pack(row, col));
+
+        /// <summary>
+        /// Clears every temporary obstacle last seen before <paramref name="seenBefore"/> back to its floor's ease:
+        /// whatever was there has had time to move on. One still in view is re-marked by the next observation.
+        /// Returns how many cells were cleared.
+        /// </summary>
+        public int ForgetTransients(float seenBefore)
+        {
+            forgetting.Clear();
+            foreach (var pair in transient)
+                if (pair.Value < seenBefore) forgetting.Add(pair.Key);
+
+            foreach (long key in forgetting)
+            {
+                int row = (int)(key >> 32), col = (int)(uint)key; // CellIndex.Pack reversed
+                SetTraversability(row, col, EaseAt(row, col)); // removes it from the set
+            }
+            return forgetting.Count;
+        }
 
         // ---- Floor-ease memory -----------------------------------------------
 

@@ -17,6 +17,9 @@ namespace RobotVacuum.Sim.Sensors
         /// <summary>The sweep's radius as a fraction of the body radius (slightly narrower, so side-scrapes don't count).</summary>
         public const float SweepRadiusFraction = 0.95f;
 
+        /// <summary>D-shaped and rectangular bodies: the depth of the bumper strip swept forward from the flat front edge, metres.</summary>
+        public const float FrontStripDepth = 0.02f;
+
         readonly RaycastHit2D[] hits = new RaycastHit2D[8];
 
         public bool Enabled => true;
@@ -42,8 +45,20 @@ namespace RobotVacuum.Sim.Sensors
             filter.useTriggers = false;
 
             Vector2 forward = context.WorldDirection(0f);
-            int count = Physics2D.CircleCast(context.truePosition, context.robotRadius * SweepRadiusFraction,
-                forward, filter, hits, LookAheadMeters);
+            int count;
+            if (context.shape.IsRound)
+            {
+                count = Physics2D.CircleCast(context.truePosition, context.robotRadius * SweepRadiusFraction,
+                    forward, filter, hits, LookAheadMeters);
+            }
+            else
+            {
+                // A flat front (3.3): sweep the bumper strip along the front edge, the same narrowing, the same reach.
+                var shape = context.shape;
+                Vector2 origin = context.truePosition + forward * (shape.front - FrontStripDepth * 0.5f);
+                var size = new Vector2(shape.Width * SweepRadiusFraction, FrontStripDepth);
+                count = Physics2D.BoxCast(origin, size, context.trueHeading, forward, filter, hits, LookAheadMeters);
+            }
 
             for (int i = 0; i < count; i++)
             {

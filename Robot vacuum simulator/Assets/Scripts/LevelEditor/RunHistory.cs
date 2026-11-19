@@ -53,8 +53,31 @@ namespace RobotVacuum.LevelEditor
         /// <summary>True when the run was stepped headless, without drawing.</summary>
         public bool headless;
 
+        // The sensing setup the run used, so reports can compare like with like. Runs saved before these
+        // were recorded leave conditionsRecorded false and are grouped as "sensing not recorded".
+        public bool conditionsRecorded;
+        public bool slam;
+        public float noiseScale;
+        public bool lidarEnabled;
+        public float lidarRangeMeters;
+        public float lidarHalfAngleDegrees;
+        public int lidarRayCount;
+        public bool floorSensorEnabled;
+
+        /// <summary>
+        /// Where the run came from: empty for runs made in this app, "cloud" or "headless" for runs imported from a
+        /// campaign's results (<see cref="CampaignImport"/>). Imported runs also keep the campaign's name and the
+        /// configuration they used; a campaign is listed as one batch per floor plan and configuration.
+        /// </summary>
+        public string source;
+        public string campaignName;
+        public string configuration;
+
         /// <summary>Why the algorithm was stopped, if it failed.</summary>
         public string failure;
+
+        /// <summary>The failure's kind when the algorithm failed: Crash, Hang, InvalidMove or Stalled.</summary>
+        public string failureKind;
 
         public float cellSize;
         public float telemetryInterval;
@@ -118,6 +141,11 @@ namespace RobotVacuum.LevelEditor
         public string AlgorithmName => !string.IsNullOrEmpty(algorithmName) ? algorithmName : MovementAlgorithms.LabelOf(pattern);
 
         public bool IsBatch => !string.IsNullOrEmpty(batchId);
+
+        public bool IsImported => !string.IsNullOrEmpty(source);
+
+        /// <summary>"Cloud" or "Headless" for imported runs; empty otherwise.</summary>
+        public string SourceLabel => source == "cloud" ? "Cloud" : source == "headless" ? "Headless" : source == "network" ? "Network" : string.Empty;
 
         public DateTime FinishedAt =>
             DateTime.TryParse(finishedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var time) ? time : DateTime.MinValue;

@@ -59,6 +59,12 @@ namespace RobotVacuumSim.EnvironmentModel
         // formulas divide by it, so it must never be 0.
         public float vacuumResistanceBelief;
 
+        // True once the robot has known this cell as floor (preloaded as
+        // floor, or seen clear). Blocked AFTER that means something moved in
+        // (a cat): a temporary obstacle, not a wall. False by default, so the
+        // zero-fill is fine for this one.
+        public bool knownFloor;
+
         /// <summary>An unvisited cell: nothing done, normal floor, passable.</summary>
         public static BeliefCell Default => new BeliefCell
         {

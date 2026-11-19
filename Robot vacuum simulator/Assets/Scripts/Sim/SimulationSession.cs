@@ -123,6 +123,14 @@ namespace RobotVacuum.Sim
         public float SimulatedSeconds { get; private set; }
         public float RealSeconds { get; private set; }
 
+        /// <summary>
+        /// Simulated seconds after which the run ends as <see cref="RunEndReason.TimeCap"/>: the run's own
+        /// cap (<see cref="RunSettings.maxSimulatedSeconds"/>), never above the program's safety cap.
+        /// </summary>
+        public float TimeCapSeconds => Settings != null && Settings.maxSimulatedSeconds > 0f
+            ? Mathf.Min(Settings.maxSimulatedSeconds, SimDefaults.MaxSimulatedSeconds)
+            : SimDefaults.MaxSimulatedSeconds;
+
         /// <summary>Raised once when a run ends on its own (battery, time cap, error). Not raised by Restart or Close.</summary>
         public event Action<SimulationSession> Finished;
 
@@ -235,7 +243,7 @@ namespace RobotVacuum.Sim
             var outcome = Runner.Robot != null ? Runner.Robot.Outcome : Control.RunOutcome.None;
 
             if (Runner.Robot != null && Runner.Robot.AlgorithmFailed)
-                EndRun(RunEndReason.Error, "The movement algorithm failed. See the Console for details.", raiseFinished: true);
+                EndRun(RunEndReason.Error, DescribeFailure(Runner.Robot), raiseFinished: true);
             else if (outcome == Control.RunOutcome.Completed)
                 EndRun(RunEndReason.Completed, null, raiseFinished: true);
             else if (outcome == Control.RunOutcome.DockedLowBattery)
@@ -244,13 +252,28 @@ namespace RobotVacuum.Sim
                 EndRun(RunEndReason.Degenerate, Runner.Robot.OutcomeMessage, raiseFinished: true);
             else if (Runner.Battery != null && !Runner.Battery.CanOperate)
                 EndRun(RunEndReason.BatteryDepleted, null, raiseFinished: true);
-            else if (SimulatedSeconds >= SimDefaults.MaxSimulatedSeconds)
+            else if (SimulatedSeconds >= TimeCapSeconds)
                 EndRun(RunEndReason.TimeCap, null, raiseFinished: true);
         }
 
         void Tick(float unscaledDt)
         {
             if (State == Phase.Running) RealSeconds += unscaledDt;
+        }
+
+        /// <summary>"The algorithm hung: NextGoal did not return within 2 s …" for the end-of-run panel and the run's result.</summary>
+        static string DescribeFailure(VacuumRobot robot)
+        {
+            string kind = robot.FailureKind switch
+            {
+                Control.AlgorithmFault.Crash => "The algorithm crashed",
+                Control.AlgorithmFault.Hang => "The algorithm hung",
+                Control.AlgorithmFault.InvalidMove => "The algorithm made an invalid move",
+                Control.AlgorithmFault.Stalled => "The algorithm stalled",
+                _ => "The movement algorithm failed",
+            };
+            string reason = robot.FailureReason;
+            return string.IsNullOrEmpty(reason) ? $"{kind}. See the Console for details." : $"{kind}: {reason}";
         }
 
         void EndRun(RunEndReason reason, string errorMessage, bool raiseFinished)

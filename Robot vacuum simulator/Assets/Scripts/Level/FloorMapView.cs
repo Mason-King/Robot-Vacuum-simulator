@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using RobotVacuum.Level;
+using RobotVacuum.Sim;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -30,6 +31,7 @@ namespace RobotVacuum.LevelEditor
         Vector2 robot;
         float robotHeading;
         float robotRadius = 0.17f;
+        VacuumShapeKind robotShape;
         bool showRobot;
 
         public FloorMapView(LevelSnapshot level, FloorPalette palette)
@@ -87,8 +89,10 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>Shows the vacuum's path through its first <paramref name="count"/> points, and the vacuum at the last.</summary>
-        public void SetPath(List<Vector2> points, int count, float heading, float radius)
+        public void SetPath(List<Vector2> points, int count, float heading, float radius,
+            VacuumShapeKind shape = VacuumShapeKind.Round)
         {
+            robotShape = shape;
             path = points;
             pathCount = Mathf.Clamp(count, 0, points?.Count ?? 0);
             showRobot = pathCount > 0;
@@ -198,7 +202,22 @@ namespace RobotVacuum.LevelEditor
             float radius = Mathf.Max(4f, robotRadius * scale);
             painter.fillColor = new Color(0.93f, 0.94f, 0.96f);
             painter.BeginPath();
-            painter.Arc(centre, radius, 0f, 360f);
+            if (robotShape == VacuumShapeKind.Round || robotRadius * scale < 4f)
+            {
+                painter.Arc(centre, radius, 0f, 360f);
+            }
+            else
+            {
+                // The body's real outline, turned to its heading (3.3).
+                var outline = VacuumShape.For(robotShape, robotRadius).Outline(4);
+                for (int i = 0; i < outline.Count; i++)
+                {
+                    Vector2 point = ToLocal(robot + VacuumShape.ToWorld(outline[i], robotHeading), bounds, scale, rect);
+                    if (i == 0) painter.MoveTo(point);
+                    else painter.LineTo(point);
+                }
+                painter.ClosePath();
+            }
             painter.Fill();
 
             float radians = robotHeading * Mathf.Deg2Rad;

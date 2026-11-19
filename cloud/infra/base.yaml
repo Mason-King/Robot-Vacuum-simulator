@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Robot Vacuum Simulator - long-lived cloud resources (requirement 5.5, C.12): the container registry,
+  the results bucket, a monthly budget alert, and the role GitHub Actions uses to push images (3.10).
+  Created once with `python -m vacuumctl bootstrap`. Costs nothing while idle except stored data.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: robot-vacuum-sim
+    AllowedPattern: "[a-z0-9-]{3,40}"
+  BudgetEmail:
+    Type: String
+    Default: ""
+    Description: Email that gets the monthly budget alerts. Leave empty to skip the budget.
+  MonthlyBudgetUSD:
+    Type: Number
+    Default: 20
+  GitHubRepository:
+    Type: String
+    Default: ""
+    Description: owner/repo allowed to push images, e.g. Mason-King/Robot-Vacuum-simulator. Empty = no CI role.
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set false if the account already has the token.actions.githubusercontent.com OIDC provider.
+  ResultsRetentionDays:
+    Type: Number
+    Default: 90
+    Description: Campaign data in the results bucket is deleted after this many days.
+
+Conditions:
+  HasBudget: !Not [!Equals [!Ref BudgetEmail, ""]]
+  HasGitHub: !Not [!Equals [!Ref GitHubRepository, ""]]
+  CreateOidc: !And [!Condition HasGitHub, !Equals [!Ref CreateGitHubOidcProvider, "true"]]
+
+Resources:
+  ImageRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-headless"
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep the 20 newest images",
+            "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+            "action":{"type":"expire"}}]}
+
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-campaigns
+            Status: Enabled
+            Prefix: campaigns/
+            ExpirationInDays: !Ref ResultsRetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  ResultsBucketTlsOnly:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResultsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ResultsBucket.Arn
+              - !Sub "${ResultsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${ProjectName}-monthly"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUSD
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 50}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+        - Notification: {NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  CiImagePushRole:
+    Type: AWS::IAM::Role
+    Condition: HasGitHub
+    Properties:
+      RoleName: !Sub "${ProjectName}-github-ci"
+      Description: Assumed by GitHub Actions (OIDC, no stored keys) to push the headless image to ECR.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidc
+                - !Ref GitHubOidcProvider
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:*"
+      Policies:
+        - PolicyName: push-headless-image
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:DescribeImages
+                Resource: !GetAtt ImageRepository.Arn
+
+Outputs:
+  ProjectName:
+    Value: !Ref ProjectName
+  ImageRepositoryUri:
+    Value: !GetAtt ImageRepository.RepositoryUri
+  ResultsBucketName:
+    Value: !Ref ResultsBucket
+  CiImagePushRoleArn:
+    Condition: HasGitHub
+    Value: !GetAtt CiImagePushRole.Arn
