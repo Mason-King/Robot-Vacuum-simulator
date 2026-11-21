@@ -72,6 +72,8 @@ namespace RobotVacuum.Sim.Control
             new AlgorithmEntry(RandomBounceId, "Random", true, BuiltInOrigin, null, () => new RandomBounceAlgorithm()),
             new AlgorithmEntry(BoustrophedonSweep.Id, "Boustrophedon Sweep", true, BuiltInOrigin, null, () => new BoustrophedonSweep()),
             new AlgorithmEntry(BoustrophedonCrawl.Id, "Boustrophedon Crawl", true, BuiltInOrigin, null, () => new BoustrophedonCrawl()),
+            new AlgorithmEntry(Sheep.Id, "Sheep", true, BuiltInOrigin, null, () => new Sheep()),
+            new AlgorithmEntry(Mouse.Id, "Mouse", true, BuiltInOrigin, null, () => new Mouse()),
             new AlgorithmEntry("Legacy.Spiral", "Spiral", false, BuiltInOrigin, MovementPattern.Spiral, null),
             new AlgorithmEntry("Legacy.WallFollow", "Wall follow", false, BuiltInOrigin, MovementPattern.WallFollow, null),
             new AlgorithmEntry("Legacy.Lawnmower", "Lawnmower", false, BuiltInOrigin, MovementPattern.Lawnmower, null),

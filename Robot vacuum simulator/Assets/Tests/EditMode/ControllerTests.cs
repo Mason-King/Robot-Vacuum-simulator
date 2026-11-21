@@ -428,6 +428,51 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void Driver_HeadOnBumpRightAtTheGoal_CountsAsReached()
+        {
+            // A goal by a wall: the bumper's look-ahead fires before the robot is on it. Within BumperArrivalMeters that
+            // is arriving (as close as the bumper allows), not an obstacle to back off from.
+            var driver = new WaypointDriver();
+            var pose = new RobotPose(Vector2.zero, 0f); // facing +y
+            driver.SetGoal(new Vector2(0f, 0.06f), pose, 0f, view);
+
+            driver.Step(Input(pose, 0.02f, view, bumped: true), out float forward, out _);
+
+            Assert.AreEqual(GoalStatus.Reached, driver.Status);
+            Assert.AreEqual(0f, forward, "stopped, not reversing");
+            Assert.AreEqual(1, driver.BumperArrivals);
+            StringAssert.StartsWith("reached by the bumper", driver.EndReason);
+        }
+
+        [Test]
+        public void Driver_BumpOffToTheSideNearTheGoal_IsNotAnArrival()
+        {
+            // A wall to the side (an edge run along it) is no reason to stop short: backing off and re-routing reaches it.
+            var driver = new WaypointDriver();
+            var pose = new RobotPose(Vector2.zero, 0f);
+            driver.SetGoal(new Vector2(0f, 0.05f), pose, 0f, view);
+
+            driver.Step(new DriveInput(pose, 0.02f, 0.02f, true, ControllerConstants.BumperArrivalDegrees + 10f, view,
+                0.17f, 0.65f, 0.35f, 320f), out _, out _);
+
+            Assert.AreNotEqual(GoalStatus.Reached, driver.Status);
+            Assert.AreEqual(0, driver.BumperArrivals);
+        }
+
+        [Test]
+        public void Driver_HeadOnBumpJustBeyondTheArrivalDistance_StillBlocks()
+        {
+            var driver = new WaypointDriver();
+            var pose = new RobotPose(Vector2.zero, 0f);
+            driver.SetGoal(new Vector2(0f, ControllerConstants.BumperArrivalMeters + 0.02f), pose, 0f, view);
+
+            driver.Step(Input(pose, 0.02f, view, bumped: true), out float forward, out _);
+
+            Assert.AreEqual(GoalStatus.Blocked, driver.Status);
+            Assert.Less(forward, 0f, "reversing");
+        }
+
+        [Test]
         public void Driver_TurnsInPlace_WhenTheGoalIsBehind()
         {
             var driver = new WaypointDriver();

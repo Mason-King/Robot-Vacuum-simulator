@@ -270,7 +270,17 @@ namespace RobotVacuum.Sim.Control
                 bool atEnd = row == endRow && col == endCol;
                 if (!atEnd || includeEnd)
                 {
-                    if (Ensure(row, col, out int index) && stamp[index] != scanId)
+                    // Ensure, with its common case (the cell is already inside the grid) written out: this loop runs
+                    // for every cell of every ray, and most of those cells were already visited by an earlier ray.
+                    int r = row - minRow, c = col - minCol, index;
+                    bool inside;
+                    if ((uint)r < (uint)rows && (uint)c < (uint)cols)
+                    {
+                        index = r * cols + c;
+                        inside = true;
+                    }
+                    else inside = Ensure(row, col, out index);
+                    if (inside && stamp[index] != scanId)
                     {
                         stamp[index] = scanId;
                         bool didChange = Update(index, row, col, missOdds, missProbability, changed);

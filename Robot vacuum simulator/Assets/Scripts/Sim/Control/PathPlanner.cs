@@ -35,6 +35,8 @@ namespace RobotVacuum.Sim.Control
         readonly int reachCells; // how far (cells) a blocked cell's influence on clearance reaches
         readonly float half;     // half a cell
         readonly float cap;      // clearance values are capped here: anything above the clearance is just "free"
+        readonly int span;       // 2 × reachCells + 1
+        readonly float[] offsets; // OffsetDistance(dr, dc) at [(dr + reachCells) × span + (dc + reachCells)]
 
         // Clearance field over a rectangle of cells.
         float[] field;
@@ -70,6 +72,13 @@ namespace RobotVacuum.Sim.Control
             half = cellSize * 0.5f;
             reachCells = Mathf.CeilToInt((clearance + half) / cellSize) + 1;
             cap = clearance + cellSize;
+
+            // OffsetDistance for every offset within reach, worked out once (each is the same float every time).
+            span = 2 * reachCells + 1;
+            offsets = new float[span * span];
+            for (int dr = -reachCells; dr <= reachCells; dr++)
+                for (int dc = -reachCells; dc <= reachCells; dc++)
+                    offsets[(dr + reachCells) * span + (dc + reachCells)] = OffsetDistance(dr, dc);
         }
 
         /// <summary>The distance the body is kept from anything believed impassable (radius + margin), metres.</summary>
@@ -431,11 +440,12 @@ namespace RobotVacuum.Sim.Control
                     {
                         int rr = r + dr;
                         if (rr < 0 || rr >= fieldRows) continue;
+                        int offsetRow = (dr + reachCells) * span + reachCells;
                         for (int dc = -reachCells; dc <= reachCells; dc++)
                         {
                             int cc = c + dc;
                             if (cc < 0 || cc >= fieldCols) continue;
-                            float d = OffsetDistance(dr, dc);
+                            float d = offsets[offsetRow + dc];
                             int index = rr * fieldCols + cc;
                             if (d < field[index]) field[index] = d;
                         }
@@ -488,20 +498,24 @@ namespace RobotVacuum.Sim.Control
                 }
             }
 
+            // Each affected cell: the minimum, over the wall cells within reach, of their offset distance (looked up,
+            // not recomputed). A minimum doesn't depend on the order it is taken in, and nothing is below 0, so the
+            // search can stop at a 0; the value is the one the full rebuild gives.
             for (int i = 0; i < affectedCells.Count; i++)
             {
                 int index = affectedCells[i];
                 int r = index / fieldCols, c = index - r * fieldCols;
+                int rowFrom = Math.Max(0, r - reachCells), rowTo = Math.Min(fieldRows - 1, r + reachCells);
+                int colFrom = Math.Max(0, c - reachCells), colTo = Math.Min(fieldCols - 1, c + reachCells);
                 float best = cap;
-                for (int dr = -reachCells; dr <= reachCells; dr++)
+                for (int rr = rowFrom; rr <= rowTo && best > 0f; rr++)
                 {
-                    int rr = r + dr;
-                    if (rr < 0 || rr >= fieldRows) continue;
-                    for (int dc = -reachCells; dc <= reachCells; dc++)
+                    int wallRow = rr * fieldCols;
+                    int offsetRow = (rr - r + reachCells) * span + reachCells - c; // + cc gives the offset of (rr - r, cc - c)
+                    for (int cc = colFrom; cc <= colTo; cc++)
                     {
-                        int cc = c + dc;
-                        if (cc < 0 || cc >= fieldCols || fieldWall[rr * fieldCols + cc] == 0) continue;
-                        float d = OffsetDistance(dr, dc);
+                        if (fieldWall[wallRow + cc] == 0) continue;
+                        float d = offsets[offsetRow + cc];
                         if (d < best) best = d;
                     }
                 }
@@ -522,7 +536,7 @@ namespace RobotVacuum.Sim.Control
                 for (int dc = -reachCells; dc <= reachCells; dc++)
                 {
                     if (!view.IsBlocked(row + dr, col + dc)) continue;
-                    float d = OffsetDistance(dr, dc);
+                    float d = offsets[(dr + reachCells) * span + (dc + reachCells)];
                     if (d < best) best = d;
                 }
             return best;

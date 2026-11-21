@@ -30,6 +30,9 @@ namespace RobotVacuum.Sim.Control
 
         public int Version { get; private set; }
 
+        public bool SkipRooms { get; set; }
+        bool roomsStale; // rooms were skipped since they were last found
+
         public bool Update(Vec2 robot)
         {
             long started = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -38,7 +41,12 @@ namespace RobotVacuum.Sim.Control
             long taken = System.Diagnostics.Stopwatch.GetTimestamp();
             reach.Build(snapshot, map, robot);
             long reached = System.Diagnostics.Stopwatch.GetTimestamp();
-            rooms.Build(snapshot, map, reach, changed);
+            if (SkipRooms) roomsStale = true;
+            else
+            {
+                rooms.Build(snapshot, map, reach, changed || roomsStale);
+                roomsStale = false;
+            }
             long done = System.Diagnostics.Stopwatch.GetTimestamp();
 
             Updates++;
@@ -84,8 +92,9 @@ namespace RobotVacuum.Sim.Control
         public float ReachDistance(int row, int col) => reach.Distance(row, col);
         public bool Reachable(int row, int col) => reach.Reachable(row, col);
 
-        public int RoomCount => rooms.Count;
-        public int RoomOf(int row, int col) => rooms.LabelOf(snapshot, row, col);
-        public IReadOnlyList<(Vec2 a, Vec2 b)> Doorways => rooms.Doorways;
+        public int RoomCount => SkipRooms ? 0 : rooms.Count;
+        public int RoomOf(int row, int col) => SkipRooms ? -1 : rooms.LabelOf(snapshot, row, col);
+        public IReadOnlyList<(Vec2 a, Vec2 b)> Doorways => SkipRooms ? NoDoorways : rooms.Doorways;
+        static readonly (Vec2 a, Vec2 b)[] NoDoorways = new (Vec2 a, Vec2 b)[0];
     }
 }

@@ -39,6 +39,30 @@ namespace RobotVacuum.Sim.Control
     }
 
     /// <summary>
+    /// What to do on arriving at a goal: the algorithm's <see cref="DriveRequests.Hold"/> request, with the values the
+    /// controller adds (the vacuum's power, for the hold's cap). The radius is already cut to the robot's.
+    /// </summary>
+    public readonly struct HoldRequest
+    {
+        public readonly HoldMode mode;
+        public readonly float seconds;
+        public readonly float cleanliness;
+        public readonly float radius;
+        public readonly float vacuumPower;
+
+        public HoldRequest(HoldMode mode, float seconds, float cleanliness, float radius, float vacuumPower)
+        {
+            this.mode = mode;
+            this.seconds = seconds;
+            this.cleanliness = cleanliness;
+            this.radius = radius;
+            this.vacuumPower = vacuumPower;
+        }
+
+        public static HoldRequest None => default;
+    }
+
+    /// <summary>
     /// The lower layer's driving: takes the robot to one goal at a time and reports how it is going (design doc,
     /// section 4). Everything here works from the BELIEVED pose and the believed map.
     ///
@@ -57,6 +81,11 @@ namespace RobotVacuum.Sim.Control
     ///                 ends the goal Blocked.
     ///   Blocked       re-routes used up, a detour too long, or (without a planner) at once on contact or no progress.
     ///   Unreachable   the goal is in a cell believed impassable, or no path for the body exists.
+    ///   Holding       on arrival at a goal with a hold request: stay still for a time, or until the believed cleanliness
+    ///                 of the cells within the hold's radius of the goal (and under the brush) reaches its level (capped at <see cref="K.HoldCapFactor"/> ×
+    ///                 the time the dirtiest of them needed when the hold began). InProgress while holding, Reached
+    ///                 after. The first contact is ignored; one <see cref="K.HoldSecondContactSeconds"/> or more after it
+    ///                 ends the hold Blocked.
     ///   recovery      if the algorithm asks for the SAME goal again after Blocked, the robot turns toward the side
     ///                 with more believed free space, sidesteps a short way, and tries again (re-routes start over).
     ///
@@ -64,7 +93,7 @@ namespace RobotVacuum.Sim.Control
     /// </summary>
     public sealed class WaypointDriver
     {
-        public enum Phase { Idle, Driving, BackingOff, TurningAway, Sidestepping }
+        public enum Phase { Idle, Driving, BackingOff, TurningAway, Sidestepping, Holding }
 
         Vector2 goal;
         bool hasGoal;
@@ -89,6 +118,12 @@ namespace RobotVacuum.Sim.Control
         bool passThrough;        // the goal is a point on the way: no slowing for it, Reached early
         bool wasTouching;
 
+        // Holding (see HoldRequest).
+        HoldRequest hold;
+        float holdEnd;           // ForSeconds: when it ends; UntilClean: the cap
+        float holdFirstContact;  // sim time of the first contact during the hold; negative = none yet
+        bool holdTouching;
+
         public Phase CurrentPhase { get; private set; } = Phase.Idle;
         public GoalStatus Status { get; private set; } = GoalStatus.None;
 
@@ -102,11 +137,17 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public System.Action<string> PathNotice { get; set; }
 
+        /// <summary>True while the robot is holding over a reached goal (see <see cref="HoldRequest"/>).</summary>
+        public bool Holding => CurrentPhase == Phase.Holding;
+
         /// <summary>True when the current goal is a point on the way (see <see cref="SetGoal"/>).</summary>
         public bool PassThrough => passThrough;
 
         /// <summary>The goal being driven to, or null.</summary>
         public Vector2? Goal => hasGoal ? goal : (Vector2?)null;
+
+        /// <summary>Diagnostics: why the last goal ended Blocked or Unreachable (null for Reached).</summary>
+        public string EndReason { get; private set; }
 
         /// <summary>The point being steered at right now: the next corner of the path, or the goal.</summary>
         public Vector2? Target => !hasGoal ? (Vector2?)null : Target0();
@@ -142,6 +183,7 @@ namespace RobotVacuum.Sim.Control
             path.Clear();
             reroutes = 0;
             passThrough = false;
+            hold = HoldRequest.None;
         }
 
         /// <summary>
@@ -154,9 +196,17 @@ namespace RobotVacuum.Sim.Control
         /// as the robot is within <see cref="DriveRequests.PassThroughMeters"/>, while the robot keeps moving, so the
         /// next goal carries the motion on without a stop.
         /// </param>
-        public void SetGoal(Vector2? waypoint, RobotPose pose, float simTime, InternalModelView view, bool passThrough = false)
+        /// <param name="hold">What to do on arrival (ignored for a pass-through goal). The same goal asked for again while
+        /// the robot holds over it leaves the hold running as it is.</param>
+        public void SetGoal(Vector2? waypoint, RobotPose pose, float simTime, InternalModelView view, bool passThrough = false,
+            HoldRequest hold = default)
         {
+            if (waypoint.HasValue && hasGoal && CurrentPhase == Phase.Holding && Status == GoalStatus.InProgress &&
+                Vector2.Distance(waypoint.Value, goal) <= K.SameGoalMeters)
+                return; // the same goal while holding over it: keep holding
+
             this.passThrough = passThrough && waypoint.HasValue;
+            this.hold = this.passThrough ? HoldRequest.None : hold;
             if (!waypoint.HasValue)
             {
                 hasGoal = false;
@@ -173,6 +223,7 @@ namespace RobotVacuum.Sim.Control
             goal = next;
             hasGoal = true;
             Status = GoalStatus.InProgress;
+            EndReason = null;
             StatusReported = false;
             retryAfterBackOff = false;
             if (!nudge)
@@ -187,7 +238,7 @@ namespace RobotVacuum.Sim.Control
             if (view != null && view.IsBlockedAt(goal))
             {
                 path.Clear();
-                Finish(GoalStatus.Unreachable);
+                Finish(GoalStatus.Unreachable, "the goal's cell is mapped as blocked");
                 return;
             }
 
@@ -212,6 +263,7 @@ namespace RobotVacuum.Sim.Control
             if (!hasGoal) return;
 
             Status = GoalStatus.InProgress;
+            EndReason = null;
             StatusReported = false;
             lastProgressTime = simTime;
             bestDistance = Remaining(pose);
@@ -238,6 +290,7 @@ namespace RobotVacuum.Sim.Control
                 Status == GoalStatus.InProgress && input.simTime - lastProgressTime > K.BlockedTimeoutSeconds)
             {
                 Status = GoalStatus.Blocked;
+                EndReason = $"no progress for {K.BlockedTimeoutSeconds:F0} s while recovering ({CurrentPhase}), re-route {reroutes} of {K.MaxReroutes}";
                 StatusReported = false;
                 CurrentPhase = Phase.Idle;
                 return;
@@ -274,6 +327,10 @@ namespace RobotVacuum.Sim.Control
 
                 case Phase.Driving:
                     StepDrive(input, out forward, out turn);
+                    return;
+
+                case Phase.Holding:
+                    StepHold(input);
                     return;
 
                 default:
@@ -329,6 +386,7 @@ namespace RobotVacuum.Sim.Control
             {
                 // Passed: report it, and keep rolling toward it until the next goal arrives (asked for at once).
                 Status = GoalStatus.Reached;
+                EndReason = null;
                 StatusReported = false;
                 float passError = pose.BearingTo(goal);
                 turn = Mathf.Clamp(passError * K.SteeringGain, -input.turnSpeed, input.turnSpeed);
@@ -338,13 +396,14 @@ namespace RobotVacuum.Sim.Control
 
             if (toGoal <= K.ArrivalToleranceMeters)
             {
-                Finish(GoalStatus.Reached);
+                if (hold.mode != HoldMode.None) BeginHold(input);
+                else Finish(GoalStatus.Reached);
                 return;
             }
 
             if (input.view != null && input.view.IsBlockedAt(goal))
             {
-                Finish(GoalStatus.Unreachable);
+                Finish(GoalStatus.Unreachable, "the goal's cell became mapped as blocked on the way");
                 return;
             }
 
@@ -357,7 +416,7 @@ namespace RobotVacuum.Sim.Control
             else if (input.simTime - lastProgressTime > K.BlockedTimeoutSeconds)
             {
                 if (Planning) Encounter(input, backOff: false, out forward);
-                else Finish(GoalStatus.Blocked);
+                else Finish(GoalStatus.Blocked, $"no progress for {K.BlockedTimeoutSeconds:F0} s (driving straight, no path)");
                 return;
             }
 
@@ -385,6 +444,7 @@ namespace RobotVacuum.Sim.Control
                 if (ContactAhead(input))
                 {
                     bool graze = Mathf.Abs(input.bumpBearing) > K.GlancingContactDegrees;
+                    if (ArrivedByBumper(input, out forward, out turn)) return;
                     if (graze && !wasTouching) glances++;
                     wasTouching = true;
 
@@ -408,18 +468,131 @@ namespace RobotVacuum.Sim.Control
 
             if (ContactOrBlockedAhead(input))
             {
+                if (input.bumped && ArrivedByBumper(input, out forward, out turn)) return;
                 turn = 0f;
-                Finish(GoalStatus.Blocked);
+                Finish(GoalStatus.Blocked, input.bumped ? "contact ahead (driving straight, no path)" : "mapped obstacle just ahead (driving straight, no path)");
                 BeginBackOff(retry: false);
                 StepBackOff(input, out forward);
             }
         }
 
-        void Finish(GoalStatus status)
+        /// <summary>
+        /// A head-on bump (within <see cref="K.BumperArrivalDegrees"/>) this close to the goal
+        /// (<see cref="K.BumperArrivalMeters"/>): the goal is reached, as near as the bumper lets the robot get. Stops
+        /// the robot; false (nothing changed) otherwise.
+        /// </summary>
+        bool ArrivedByBumper(in DriveInput input, out float forward, out float turn)
+        {
+            forward = 0f;
+            turn = 0f;
+            if (Mathf.Abs(input.bumpBearing) > K.BumperArrivalDegrees) return false;
+            float toGoal = Vector2.Distance(input.pose.position, goal);
+            if (toGoal > K.BumperArrivalMeters) return false;
+            BumperArrivals++;
+            if (hold.mode != HoldMode.None) BeginHold(input); // hold where the bumper stopped it (the contact is the hold's first)
+            else Finish(GoalStatus.Reached, $"reached by the bumper, {toGoal:F3} m short (contact bearing {input.bumpBearing:F0}°)");
+            return true;
+        }
+
+        /// <summary>Diagnostics: goals counted as reached by a head-on bump close to them.</summary>
+        public int BumperArrivals { get; private set; }
+
+        void Finish(GoalStatus status, string reason = null)
         {
             Status = status;
+            EndReason = reason;
             StatusReported = false;
             if (CurrentPhase == Phase.Driving) CurrentPhase = Phase.Idle;
+        }
+
+        // ---- Holding --------------------------------------------------------------------------------
+
+        void BeginHold(in DriveInput input)
+        {
+            CurrentPhase = Phase.Holding;
+            holdTouching = input.bumped;
+            holdFirstContact = input.bumped ? input.simTime : -1f; // arriving in contact: that is the first contact
+            holdEnd = hold.mode == HoldMode.ForSeconds
+                ? input.simTime + Mathf.Max(0f, hold.seconds)
+                : input.simTime + K.HoldCapFactor * DirtiestCellSeconds(input);
+        }
+
+        void StepHold(in DriveInput input)
+        {
+            // Contacts: the first is ignored (more contact within the next few seconds is the same encounter); one that
+            // starts HoldSecondContactSeconds or more after it ends the hold.
+            if (input.bumped && !holdTouching)
+            {
+                if (holdFirstContact < 0f) holdFirstContact = input.simTime;
+                else if (input.simTime - holdFirstContact >= K.HoldSecondContactSeconds)
+                {
+                    EndHold(GoalStatus.Blocked, $"a second contact {input.simTime - holdFirstContact:F1} s after the first, while holding");
+                    return;
+                }
+            }
+            holdTouching = input.bumped;
+
+            if (hold.mode == HoldMode.UntilClean && HoldCellsClean(input))
+            {
+                EndHold(GoalStatus.Reached);
+                return;
+            }
+            if (input.simTime >= holdEnd) EndHold(GoalStatus.Reached);
+        }
+
+        void EndHold(GoalStatus status, string reason = null)
+        {
+            EndReason = reason;
+            Status = status;
+            StatusReported = false;
+            CurrentPhase = Phase.Idle;
+        }
+
+        /// <summary>
+        /// True when every passable cell checked by the hold is at its level. Checked: cell centres within the hold's
+        /// radius of the GOAL (the cells the algorithm asked about, wherever within tolerance the robot stopped) and
+        /// within the robot's radius of the believed position (under the brush, so they can get clean).
+        /// </summary>
+        bool HoldCellsClean(in DriveInput input)
+        {
+            var view = input.view;
+            if (view == null) return true;
+            Vector2 c = goal, p = input.pose.position;
+            float r = hold.radius, rr = r * r, br = input.radius * input.radius, level = hold.cleanliness;
+            if (!view.TryWorldToCell(new Vector2(c.x - r, c.y - r), out var low) ||
+                !view.TryWorldToCell(new Vector2(c.x + r, c.y + r), out var high)) return true;
+            for (int row = low.row; row <= high.row; row++)
+                for (int col = low.col; col <= high.col; col++)
+                {
+                    Vector2 at = view.CellCenter(row, col);
+                    if ((at - c).sqrMagnitude > rr || (at - p).sqrMagnitude > br || view.IsBlocked(row, col)) continue;
+                    if (view.GetCell(row, col).cleanlinessBelief < level) return false;
+                }
+            return true;
+        }
+
+        /// <summary>
+        /// For the UntilClean cap: the seconds the dirtiest checked cell (as in <see cref="HoldCellsClean"/>) needs to
+        /// reach the level under the brush, (level - cleanliness) × resistance / power.
+        /// </summary>
+        float DirtiestCellSeconds(in DriveInput input)
+        {
+            var view = input.view;
+            if (view == null || hold.vacuumPower <= 0f) return 0f;
+            Vector2 c = goal, p = input.pose.position;
+            float r = hold.radius, rr = r * r, br = input.radius * input.radius, level = hold.cleanliness, worst = 0f;
+            if (!view.TryWorldToCell(new Vector2(c.x - r, c.y - r), out var low) ||
+                !view.TryWorldToCell(new Vector2(c.x + r, c.y + r), out var high)) return 0f;
+            for (int row = low.row; row <= high.row; row++)
+                for (int col = low.col; col <= high.col; col++)
+                {
+                    Vector2 at = view.CellCenter(row, col);
+                    if ((at - c).sqrMagnitude > rr || (at - p).sqrMagnitude > br || view.IsBlocked(row, col)) continue;
+                    var cell = view.GetCell(row, col);
+                    float need = (level - cell.cleanlinessBelief) * cell.vacuumResistanceBelief / hold.vacuumPower;
+                    if (need > worst) worst = need;
+                }
+            return worst;
         }
 
         // ---- Paths and re-routing --------------------------------------------------------------------
@@ -435,7 +608,7 @@ namespace RobotVacuum.Sim.Control
             if (!Planner.FindPath(pose.position, goal, path, out float length))
             {
                 path.Clear();
-                Finish(GoalStatus.Unreachable);
+                Finish(GoalStatus.Unreachable, first ? "no path" : $"no path on re-planning (re-route {reroutes} of {K.MaxReroutes})");
                 return false;
             }
             if (PathNotice != null) ReportShadedCells(view, length);
@@ -446,7 +619,7 @@ namespace RobotVacuum.Sim.Control
             }
             else if (length > K.DetourFactor * firstPlanLength + K.DetourExtraMeters)
             {
-                Finish(GoalStatus.Blocked);
+                Finish(GoalStatus.Blocked, $"re-planned path {length:F2} m is too long a detour (first plan {firstPlanLength:F2} m)");
                 return false;
             }
             return true;
@@ -487,7 +660,9 @@ namespace RobotVacuum.Sim.Control
 
             if (reroutes > K.MaxReroutes)
             {
-                Finish(GoalStatus.Blocked);
+                Finish(GoalStatus.Blocked, backOff
+                    ? $"contact with re-routes used up ({K.MaxReroutes}), contact bearing {input.bumpBearing:F0}°"
+                    : $"no progress for {K.BlockedTimeoutSeconds:F0} s with re-routes used up ({K.MaxReroutes})");
                 if (backOff)
                 {
                     BeginBackOff(retry: false);

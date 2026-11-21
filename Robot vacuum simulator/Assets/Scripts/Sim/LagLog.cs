@@ -299,6 +299,16 @@ namespace RobotVacuum.Sim
                 line.Append("\n  Sensing by sensor (ms per sim second):");
                 for (int i = 0; i < sensorNames.Count; i++)
                     line.Append(i == 0 ? " " : ", ").Append(sensorNames[i]).Append(' ').Append((sensorMs[i] / seconds).ToString("F2"));
+                for (int i = 0; i < sensorKeys.Count; i++)
+                {
+                    if (!(sensorKeys[i] is Sensors.LidarSensor lidar) || lidar.Rays == 0) continue;
+                    line.Append("\n  Lidar: ").Append((lidar.Scans / seconds).ToString("F1")).Append(" scans and ")
+                        .Append((lidar.Rays / seconds).ToString("F0")).Append(" rays per sim second, ")
+                        .Append(((double)lidar.HitsReturned / lidar.Rays).ToString("F2")).Append(" hits returned per ray; inside Physics2D.Raycast ")
+                        .Append((lidar.RaycastMs / seconds).ToString("F2")).Append(" ms per sim second (")
+                        .Append((lidar.RaycastMs * 1000.0 / lidar.Rays).ToString("F2")).Append(" µs per ray), the rest ")
+                        .Append((System.Math.Max(0.0, sensorMs[i] - lidar.RaycastMs) / seconds).ToString("F2")).Append('.');
+                }
             }
 
             if (analysis != null && analysis.Updates > 0)

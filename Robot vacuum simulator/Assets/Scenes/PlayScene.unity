@@ -280,7 +280,7 @@ MonoBehaviour:
   palette: {fileID: 0}
   settings:
     pattern: 0
-    algorithmId: BoustrophedonSweep
+    algorithmId: Mouse
     randomSeed: 0
     seed: 1029520771
     targetMaxClean: 2

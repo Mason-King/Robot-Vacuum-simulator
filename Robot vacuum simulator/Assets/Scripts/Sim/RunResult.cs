@@ -66,6 +66,18 @@ namespace RobotVacuum.Sim
         // Share of cleanable cells that reached the target.
         public float fullyCleanedPercent;
 
+        // Over-cleaning across the same cleanable cells (see ExternalModelData.OverCleaning):
+        // meanCleanRatio: all cleaning done ÷ what the target asks for (1 = the target everywhere, on average);
+        // median/p90CleanRatio: each cell's cleanliness ÷ target; overCleanedPercent: share of cells past 1.1 × target;
+        // overCleaningSquareMeters: cleaning beyond the target, as m² of floor cleaned once more to the target;
+        // overCleaningPercentOfTotal: share of all cleaning done that went beyond the target.
+        public float meanCleanRatio;
+        public float medianCleanRatio;
+        public float p90CleanRatio;
+        public float overCleanedPercent;
+        public float overCleaningSquareMeters;
+        public float overCleaningPercentOfTotal;
+
         // target_max_clean this run was measured against.
         public float targetMaxClean;
         public float blockedAreaSquareMeters;

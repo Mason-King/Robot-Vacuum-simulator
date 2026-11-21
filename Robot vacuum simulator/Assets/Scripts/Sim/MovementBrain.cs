@@ -78,6 +78,7 @@ namespace RobotVacuum.Sim
         DriveRequests drive = new DriveRequests();
         DriveMode goalMode = DriveMode.Travel;
         float goalExposure;
+        float goalTargetFraction = 1f;
         float targetCleanliness = 2f;
 
         // The dock: where the run started (the one pose known exactly), and the trip back to it.
@@ -345,7 +346,8 @@ namespace RobotVacuum.Sim
                 }
                 algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
                     writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
-                    targetCleanliness, vacuumPower, drive, mapAnalysis = new MapAnalysis(map), log));
+                    targetCleanliness, vacuumPower, drive, mapAnalysis = new MapAnalysis(map), log, () => simTime,
+                    () => robot.DriveSpeedMetersPerSecond, () => robot.TurnSpeedDegreesPerSecond));
                 LagLog.SetMapAnalysis(mapAnalysis);
             }
             catch (System.Exception exception)
@@ -515,6 +517,7 @@ namespace RobotVacuum.Sim
 
             if (simTime < nextGoalTime && !goalEnded) return;
             nextGoalTime = simTime + ControllerConstants.GoalPeriodSeconds;
+            if (goalEnded && (status != GoalStatus.Reached || driver.EndReason != null)) LogGoalEnd(status);
 
             Vector2? next;
             try
@@ -554,10 +557,39 @@ namespace RobotVacuum.Sim
 
             goalMode = drive.Mode;
             goalExposure = drive.SweepExposureMeters;
+            goalTargetFraction = Mathf.Max(0.05f, drive.SweepTargetFraction);
             if (same && status == GoalStatus.Blocked) driver.RetryAfterBlocked(believedPose, simTime, view);
-            else if (!same || status == GoalStatus.InProgress) driver.SetGoal(next, believedPose, simTime, view, drive.PassThrough);
-            // Same waypoint after Reached / Unreachable: leave it finished; the algorithm is asked again next period.
+            // A hold asked for again at the same waypoint after Reached is a new hold (the tile wasn't clean yet).
+            else if (!same || status == GoalStatus.InProgress || (status == GoalStatus.Reached && drive.Hold != HoldMode.None))
+                driver.SetGoal(next, believedPose, simTime, view, drive.PassThrough, HoldFromRequest());
+            // Otherwise the same waypoint after Reached / Unreachable: leave it finished; the algorithm is asked again next period.
         }
+
+        /// <summary>
+        /// Diagnostics: a goal that ended Blocked or Unreachable (or was reached by the bumper), with the driver's reason, where the robot was, and how
+        /// much room the map gives at the goal and at the robot (the planner's clearance, capped just above what it needs).
+        /// </summary>
+        void LogGoalEnd(GoalStatus status)
+        {
+            var goal = driver.Goal;
+            if (!goal.HasValue) return;
+            Vector2 at = believedPose.position;
+            string room = "";
+            if (planner != null && view != null)
+            {
+                string Clear(Vector2 p) => view.TryWorldToCell(p, out var cell) ? planner.ClearanceOf(cell.row, cell.col).ToString("F3") : "?";
+                room = $"; clearance at goal {Clear(goal.Value)} m, at robot {Clear(at)} m (the planner wants {planner.Clearance:F3})";
+            }
+            Debug.Log($"[Driver {simTime:F1} s] goal ({goal.Value.x:F2}, {goal.Value.y:F2}) {status}: {driver.EndReason ?? "no reason recorded"}. " +
+                      $"Robot at ({at.x:F2}, {at.y:F2}), {Vector2.Distance(at, goal.Value):F3} m from the goal{room}.", this);
+        }
+
+        /// <summary>The algorithm's hold request for its goal, with the radius cut to the robot's and the vacuum's power added.</summary>
+        HoldRequest HoldFromRequest() =>
+            drive.Hold == HoldMode.None
+                ? HoldRequest.None
+                : new HoldRequest(drive.Hold, drive.HoldSeconds, drive.HoldCleanliness,
+                    Mathf.Clamp(drive.HoldRadiusMeters, 0f, robot.Radius), vacuumPower);
 
         // ---- Sweep speed --------------------------------------------------------------------------------------
 
@@ -579,7 +611,7 @@ namespace RobotVacuum.Sim
                         if ((view.CellCenter(row, col) - p).sqrMagnitude <= radius * radius)
                             resistance = Mathf.Max(resistance, view.GetCell(row, col).vacuumResistanceBelief);
             }
-            float speed = CoverageMath.SweepSpeed(goalExposure, vacuumPower, resistance, targetCleanliness) / ControllerConstants.SweepSpeedSafety;
+            float speed = CoverageMath.SweepSpeed(goalExposure, vacuumPower, resistance, targetCleanliness * goalTargetFraction) / ControllerConstants.SweepSpeedSafety;
             return Mathf.Max(ControllerConstants.SweepSpeedFloor, speed);
         }
 

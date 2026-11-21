@@ -51,6 +51,21 @@ namespace RobotVacuum.Sim.Control
         /// <summary>A whisker contact within this many degrees of straight ahead stops forward driving.</summary>
         public const float FrontContactDegrees = 100f;
 
+        /// <summary>
+        /// A head-on bump (within <see cref="BumperArrivalDegrees"/> of straight ahead) this close to the goal counts as
+        /// arriving: the robot is as close as its bumper lets it get. The bumper fires on anything within
+        /// <see cref="Sensors.WhiskerSensor.LookAheadMeters"/> (9 cm) of the body's front, so a goal right in front of
+        /// a wall (an edge run's corner, a door jamb, a lane's end in a corner) can't be driven onto: without this, the
+        /// robot backed off and tried again until its re-routes ran out and the goal ended Blocked, about 5 cm short,
+        /// after several seconds. 7 cm and 20°: those failures stopped 4–6 cm short at 0–16°. Wider (10 cm, 45°) also
+        /// stopped edge runs early where the wall was to the side, which backing off and re-routing does reach, and
+        /// left the strips by the walls dirtier.
+        /// </summary>
+        public const float BumperArrivalMeters = 0.07f;
+
+        /// <summary>See <see cref="BumperArrivalMeters"/>.</summary>
+        public const float BumperArrivalDegrees = 20f;
+
         /// <summary>After contact, the robot backs straight off this far.</summary>
         public const float BackOffMeters = 0.08f;
 
@@ -175,5 +190,11 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Traversability below this is costed as this (so a very hard floor is avoided, not treated as nearly a wall).</summary>
         public const float PlannerMinTraversability = 0.2f;
+
+        /// <summary>An UntilClean hold ends after this many times the time its dirtiest cell needed when the hold began.</summary>
+        public const float HoldCapFactor = 1.5f;
+
+        /// <summary>During a hold the first contact is ignored; a contact at least this long after it ends the hold as Blocked, sim seconds.</summary>
+        public const float HoldSecondContactSeconds = 3f;
     }
 }
