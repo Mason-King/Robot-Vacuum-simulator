@@ -170,6 +170,34 @@ class CampaignTests(unittest.TestCase):
             else:
                 self.assertIn(f'"{label}", {str(slam).lower()}', catalog)
 
+    def test_nonsense_files_give_campaign_errors_not_tracebacks(self):
+        """A user's malformed file must come back as plain sentences (CampaignError), never a Python exception."""
+        nonsense = [
+            "not json {", "", "[1, 2]", "null", '"text"', "[" * 3000 + "]" * 3000,
+            json.dumps(minimal(floorPlans="house")),
+            json.dumps(minimal(configurations={"name": "x"})),
+            json.dumps(minimal(configurations=[None, "fast", {"vacuum": "fast"}, {"sensing": "on"}])),
+            json.dumps(minimal(sweep="all")),
+            json.dumps(minimal(sweep={"algorithms": [{"id": 1}], "seeds": ["a"], "seedCount": "ten"})),
+            json.dumps(minimal(runs={"runIndex": 0})),
+            json.dumps(minimal(execution={"shardCount": "4"})),
+            json.dumps(minimal(algorithmSources={"path": "a.cs"})),
+            json.dumps(minimal(floorTypes=[{"name": 3}])),
+            json.dumps(minimal(campaignName={"a": 1})),
+            json.dumps(minimal(sweep={"algorithms": ["RandomBounce"], "seedCount": 10 ** 9})),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "job.json")
+            for text in nonsense:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                with self.assertRaises(c.CampaignError, msg=text[:60]) as raised:
+                    c.prepare(path)
+                self.assertTrue(raised.exception.errors and all(isinstance(e, str) for e in raised.exception.errors))
+            with open(path, "w", encoding="utf-16") as handle:
+                json.dump(minimal(), handle)
+            self.assertEqual(len(c.prepare(path)["runs"]), 6, "a UTF-16 file (Windows Notepad) is read too")
+
     def test_defaults_match_the_unity_source(self):
         """Guards against the Python and C# defaults drifting apart."""
         root = os.path.join(HERE, "..", "..", "Robot vacuum simulator", "Assets", "Scripts")

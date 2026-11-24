@@ -67,6 +67,9 @@ namespace RobotVacuum.LevelEditor
                 if (!MovementAlgorithms.IsDefined(data.pattern)) data.pattern = MovementPattern.RandomBounce;
                 if (data.vacuum == null || data.vacuum.driveSpeed <= 0f) data.vacuum = VacuumSettings.Defaults();
                 data.runSettings ??= new RunSettings();
+                // Settings saved before algorithms had ids only name the pattern: keep that choice rather than reset it.
+                if (string.IsNullOrEmpty(data.runSettings.algorithmId))
+                    data.runSettings.algorithmId = AlgorithmCatalog.IdOf(data.pattern);
                 if (AlgorithmCatalog.Find(data.runSettings.algorithmId) == null)
                     data.runSettings.algorithmId = AlgorithmCatalog.Entries[0].Id;
                 var builtInPattern = AlgorithmCatalog.PatternOf(data.runSettings.algorithmId);

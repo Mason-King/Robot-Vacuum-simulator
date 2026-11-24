@@ -149,6 +149,23 @@ See `examples/slam-custom.example.json` and `examples/algorithms/LongStraights.c
 | `saveHeatmapImages` | true | Keep each run's three heatmap PNGs. |
 | `maxRealSecondsPerRun` | 3600 | Wall-clock limit per run; a run over it is stopped and recorded as an error (2.11). 0 = none. |
 
+### Limits and runaway runs
+
+- **At most 100,000 runs per job** (floor plans × configurations × algorithms × seeds). A bigger sweep is rejected
+  (exit code 2, and `vacuumctl validate` says so) instead of being built; split it into several campaigns.
+- **Floor plans the simulator can't hold** fail to start with a sentence saying why (the run is recorded with
+  `endReason` `NotStarted`; the rest of the job carries on): a coordinate or size beyond ±10,000 m or not a number,
+  no floor area at all, or a grid of more than 16,000 cells along a side or 50 million cells in all (use a larger
+  `cellSizeMeters`). See `Robot vacuum simulator/Docs/floor-plan-format.md` › Limits.
+- **An algorithm call that never returns** (an endless loop in a custom algorithm's `NextGoal` or `Initialize`) is
+  stopped after 20 s; the run ends as `Error` with a message saying so and the job carries on.
+- **A run that stops the process from responding** for `maxRealSecondsPerRun` (between 60 and 300 s) is recorded as an
+  error, `results.json` gets `status: "failed"`, and the process exits with code 1. A retry (AWS Batch retries
+  automatically; locally, run the same command again) resumes after that run.
+- **A run that kills the process** (out of memory) can't record anything, so `current-run.json` names the run in
+  progress. The next attempt tries that run once more; if the process dies during it again, the attempt after records
+  it as failed ("stopped during this run 2 times in a row") and carries on with the rest.
+
 ## Command line of the headless build
 
 ```
@@ -159,7 +176,8 @@ See `examples/slam-custom.example.json` and `examples/algorithms/LongStraights.c
 `-configPath` without `-batchmode -nographics` is refused (SDD 2.1). `-shardIndex` falls back to
 `AWS_BATCH_JOB_ARRAY_INDEX`, `-shardCount` to `VACUUM_SHARD_COUNT`, then `execution.shardCount`.
 
-Exit codes: `0` all runs succeeded · `10` finished, some runs failed (see results) · `2` job rejected · `1` crashed.
+Exit codes: `0` all runs succeeded · `10` finished, some runs failed (see results) · `2` job rejected · `1` crashed or
+stopped responding (finished runs are kept; running the same command again resumes).
 
 ## What a node writes
 
@@ -167,6 +185,8 @@ Exit codes: `0` all runs succeeded · `10` finished, some runs failed (see resul
 <outputPath>/
   results.json        ShardResults - status, host, every finished run's outcome
   heartbeat.json      progress, refreshed every ~2 s
+  current-run.json    the run in progress (deleted when the shard finishes); lets a retry skip a run that keeps
+                      killing the process
   logs/unity.log      (container only)
   runs/<guid>/        one folder per run, same files as a GUI run:
                       config.json, result.json, summary.json, telemetry.csv, replay.json, parameters.csv,

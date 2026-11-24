@@ -134,7 +134,8 @@ namespace RobotVacuum.Sim
     public static class LegacyPatternExecution
     {
         const double MaxCallMilliseconds = 250.0;
-        const float MaxSteeringDegreesPerSecond = 360f;
+        /// <summary>The fastest turn a legacy pattern may ask for; anything more is treated as a broken result.</summary>
+        public const float MaxSteeringDegreesPerSecond = 360f;
         const float MaxTurnDegrees = 360f;
         const float MaxDriveDistance = 100f;
 
@@ -238,7 +239,10 @@ namespace RobotVacuum.Sim
                 return Wander(robot);
             }
 
-            float angularSpeed = robot.DriveSpeedNow / Mathf.Max(radius, 0.01f);
+            // A tight spiral at a high drive speed would ask for a turn faster than any legal steering output: cap
+            // it, so the first loops are just a little wider than one cleaning width apart at those speeds.
+            float angularSpeed = Mathf.Min(robot.DriveSpeedNow / Mathf.Max(radius, 0.01f),
+                LegacyPatternExecution.MaxSteeringDegreesPerSecond * 0.95f * Mathf.Deg2Rad);
 
             // Growing by one cleaning width per full turn makes neighbouring loops just touch.
             radius += robot.CleaningWidth / (2f * Mathf.PI) * angularSpeed * dt;

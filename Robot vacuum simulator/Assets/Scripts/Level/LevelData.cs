@@ -148,11 +148,19 @@ namespace RobotVacuum.Level
         public Color WallColor { get => wallColor; set => wallColor = value; }
         public Vector2 RobotSpawn { get => robotSpawn; set => robotSpawn = value; }
 
+        /// <summary>Wall thickness limits, metres. The Inspector's slider offers 0.02-0.5; a file is held to the same top.</summary>
+        public const float MinWallThickness = 0.01f;
+        public const float MaxWallThickness = 0.5f;
+
         public float WallThickness
         {
             get => wallThickness;
-            set => wallThickness = Mathf.Max(0.01f, value);
+            set => wallThickness = ClampWallThickness(value);
         }
+
+        /// <summary>A usable wall thickness: NaN or less than the minimum becomes the minimum, more than the maximum the maximum.</summary>
+        public static float ClampWallThickness(float value) =>
+            float.IsNaN(value) ? MinWallThickness : Mathf.Clamp(value, MinWallThickness, MaxWallThickness);
 
         /// <summary>How far a doorway can sit from a wall edge and still cut it.</summary>
         public float DoorwaySnapDistance => Mathf.Max(wallThickness, 0.12f);
@@ -176,7 +184,7 @@ namespace RobotVacuum.Level
 
         void OnValidate()
         {
-            wallThickness = Mathf.Max(0.01f, wallThickness);
+            wallThickness = ClampWallThickness(wallThickness);
             if (rooms == null) rooms = new List<Room>();
             if (doorways == null) doorways = new List<Doorway>();
             if (wallStrokes == null) wallStrokes = new List<WallStroke>();

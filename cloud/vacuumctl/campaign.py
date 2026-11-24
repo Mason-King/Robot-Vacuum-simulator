@@ -35,6 +35,8 @@ CORRECTION_QUALITIES = ["Performance", "Balanced", "Reliable"]
 MAX_ALGORITHM_FILES = 64
 MAX_ALGORITHM_FILE_BYTES = 1024 * 1024
 MAX_ALGORITHM_TOTAL_BYTES = 4 * 1024 * 1024
+# A campaign this big is almost certainly a typo (seedCount 1000000000). Same limit as HeadlessJob.MaxRuns.
+MAX_RUNS = 100_000
 
 # The project's own Algorithms folder: shipped next to every build, so its algorithms exist on every node.
 SHIPPED_ALGORITHMS_FOLDER = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
@@ -169,21 +171,51 @@ def new_campaign_id(name):
     return f"{slug}-{stamp}-{uuid.uuid4().hex[:4]}"
 
 
+def _read_json(path, what):
+    """JSON from a file, or a CampaignError saying in plain words why it can't be read."""
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as error:
+        raise CampaignError([f"{what}: could not open {path}: {error.strerror or error}"])
+    for encoding in ("utf-8-sig", "utf-16"):
+        if encoding == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            continue
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise CampaignError([f"{what}: {path} is not a text file (save it as UTF-8)."])
+    if not text.strip():
+        raise CampaignError([f"{what}: {path} is empty."])
+    try:
+        return json.loads(text)
+    except RecursionError:
+        raise CampaignError([f"{what}: {path} is nested too deeply to be a campaign file."])
+    except ValueError as error:
+        raise CampaignError([f"{what}: {path} is not valid JSON ({error})."])
+
+
 def load(path):
     """Reads a campaign file, inlining floor plans given as {"file": "..."} (relative to the campaign file)."""
-    with open(path, encoding="utf-8-sig") as handle:
-        job = json.load(handle)
+    job = _read_json(path, "campaign file")
+    shape = check_shape(job)
+    if shape:
+        raise CampaignError(shape)
 
     base = os.path.dirname(os.path.abspath(path))
     plans = []
     for i, plan in enumerate(job.get("floorPlans") or []):
         if isinstance(plan, dict) and "file" in plan and "rooms" not in plan:
-            plan_path = os.path.join(base, plan["file"])
-            try:
-                with open(plan_path, encoding="utf-8-sig") as handle:
-                    loaded = json.load(handle)
-            except (OSError, ValueError) as error:
-                raise CampaignError([f"floorPlans[{i}]: could not read {plan_path}: {error}"])
+            plan_path = os.path.join(base, str(plan["file"]))
+            loaded = _read_json(plan_path, f"floorPlans[{i}]")
+            if not isinstance(loaded, dict):
+                raise CampaignError([f"floorPlans[{i}]: {plan_path} must hold one floor plan object {{...}}."])
+            plan_errors = _check_plan(loaded, f"floorPlans[{i}] ({os.path.basename(plan_path)})")
+            if plan_errors:
+                raise CampaignError(plan_errors)
             if plan.get("name"):
                 loaded["name"] = plan["name"]
             plans.append(loaded)
@@ -196,7 +228,7 @@ def load(path):
     # stays one multi-file algorithm project on the node, as it is on the desktop.
     sources = list(job.get("algorithmSources") or [])
     for i, entry in enumerate(job.pop("algorithmFiles", None) or []):
-        target = os.path.join(base, str(entry))
+        target = os.path.join(base, entry)
         if os.path.isdir(target):
             top = os.path.basename(os.path.normpath(target))
             found = []
@@ -221,6 +253,160 @@ def load(path):
     if sources:
         job["algorithmSources"] = sources
     return job
+
+
+# ---------------------------------------------------------------------------------------------- structure
+
+_TYPE_NAMES = {dict: "an object {...}", list: "a list [...]", str: "text in quotes", int: "a whole number",
+               float: "a number", bool: "true or false"}
+
+
+def _is(value, kind):
+    if kind is float:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, kind)
+
+
+def _want(errors, where, value, kind, optional=True):
+    """True if value has the kind (or is absent/null and optional); otherwise adds an error and returns False."""
+    if value is None and optional:
+        return True
+    if _is(value, kind):
+        return True
+    got = "null" if value is None else _TYPE_NAMES.get(type(value), type(value).__name__)
+    errors.append(f"{where} must be {_TYPE_NAMES[kind]}, not {got}.")
+    return False
+
+
+def _want_list(errors, where, value, item_kind):
+    if not _want(errors, where, value, list):
+        return []
+    good = []
+    for i, item in enumerate(value or []):
+        if _want(errors, f"{where}[{i}]", item, item_kind, optional=False):
+            good.append(item)
+    return good
+
+
+def _point(errors, where, value):
+    if _want(errors, where, value, dict):
+        for axis in ("x", "y"):
+            _want(errors, f"{where}.{axis}", (value or {}).get(axis), float)
+
+
+def _check_plan(plan, at):
+    """Types in one floor plan (the values themselves are checked later)."""
+    errors = []
+    _want(errors, f"{at}.name", plan.get("name"), str)
+    for r, room in enumerate(_want_list(errors, f"{at}.rooms", plan.get("rooms"), dict)):
+        where = f"{at}.rooms[{r}]"
+        _want(errors, f"{where}.name", room.get("name"), str)
+        _want(errors, f"{where}.floor", room.get("floor"), str)
+        _want(errors, f"{where}.floorIndex", room.get("floorIndex"), int)
+        for v, point in enumerate(_want_list(errors, f"{where}.outline", room.get("outline"), dict)):
+            _point(errors, f"{where}.outline[{v}]", point)
+    for d, door in enumerate(_want_list(errors, f"{at}.doorways", plan.get("doorways"), dict)):
+        where = f"{at}.doorways[{d}]"
+        for field in ("roomA", "roomB"):
+            _want(errors, f"{where}.{field}", door.get(field), int)
+        _point(errors, f"{where}.center", door.get("center"))
+        _want(errors, f"{where}.width", door.get("width"), float)
+    for o, item in enumerate(_want_list(errors, f"{at}.obstacles", plan.get("obstacles"), dict)):
+        where = f"{at}.obstacles[{o}]"
+        _want(errors, f"{where}.kind", item.get("kind"), int)
+        _point(errors, f"{where}.center", item.get("center"))
+        _point(errors, f"{where}.size", item.get("size"))
+        _want(errors, f"{where}.rotation", item.get("rotation"), float)
+        _want(errors, f"{where}.blocksVacuum", item.get("blocksVacuum"), bool)
+    for w, stroke in enumerate(_want_list(errors, f"{at}.wallStrokes", plan.get("wallStrokes"), dict)):
+        _point(errors, f"{at}.wallStrokes[{w}].a", stroke.get("a"))
+        _point(errors, f"{at}.wallStrokes[{w}].b", stroke.get("b"))
+    _want(errors, f"{at}.wallThickness", plan.get("wallThickness"), float)
+    _point(errors, f"{at}.robotSpawn", plan.get("robotSpawn"))
+    return errors
+
+
+def check_shape(job):
+    """Every value of the wrong TYPE in a campaign file (a string where a list belongs, a list where an object
+    belongs, ...), as sentences. Run before anything else reads the file, so a nonsense file gets a clear message
+    instead of a Python traceback. Ranges and cross-references are validate()'s job."""
+    if not isinstance(job, dict):
+        got = "null" if job is None else _TYPE_NAMES.get(type(job), type(job).__name__)
+        return [f"The campaign file must be one JSON object {{...}}, not {got}."]
+    errors = []
+    _want(errors, "schemaVersion", job.get("schemaVersion"), int)
+    for field in ("campaignName", "campaignId", "description"):
+        _want(errors, field, job.get(field), str)
+
+    for i, floor in enumerate(_want_list(errors, "floorTypes", job.get("floorTypes"), dict)):
+        _want(errors, f"floorTypes[{i}].name", floor.get("name"), str)
+
+    for i, plan in enumerate(_want_list(errors, "floorPlans", job.get("floorPlans"), dict)):
+        if "file" in plan and "rooms" not in plan:
+            _want(errors, f"floorPlans[{i}].file", plan.get("file"), str, optional=False)
+        else:
+            errors.extend(_check_plan(plan, f"floorPlans[{i}]"))
+
+    for i, config in enumerate(_want_list(errors, "configurations", job.get("configurations"), dict)):
+        at = f"configurations[{i}]"
+        _want(errors, f"{at}.name", config.get("name"), str)
+        for section in ("vacuum", "battery", "simulation", "sensing"):
+            if _want(errors, f"{at}.{section}", config.get(section), dict):
+                for key, value in (config.get(section) or {}).items():
+                    if isinstance(value, (dict, list)):
+                        errors.append(f"{at}.{section}.{key} must be a single value, not {_TYPE_NAMES[type(value)]}.")
+        for e, effort in enumerate(_want_list(errors, f"{at}.floorEfforts", config.get("floorEfforts"), dict)):
+            _want(errors, f"{at}.floorEfforts[{e}].floor", effort.get("floor"), str)
+            _want(errors, f"{at}.floorEfforts[{e}].effort", effort.get("effort"), float)
+
+    if _want(errors, "sweep", job.get("sweep"), dict):
+        sweep = job.get("sweep") or {}
+        _want_list(errors, "sweep.algorithms", sweep.get("algorithms"), str)
+        _want_list(errors, "sweep.seeds", sweep.get("seeds"), int)
+        _want(errors, "sweep.seedStart", sweep.get("seedStart"), int)
+        _want(errors, "sweep.seedCount", sweep.get("seedCount"), int)
+        _want_list(errors, "sweep.floorPlans", sweep.get("floorPlans"), str)
+        _want_list(errors, "sweep.configurations", sweep.get("configurations"), str)
+
+    for i, run in enumerate(_want_list(errors, "runs", job.get("runs"), dict)):
+        for field in ("runIndex", "floorPlan", "configuration", "seed"):
+            _want(errors, f"runs[{i}].{field}", run.get(field), int)
+        _want(errors, f"runs[{i}].algorithm", run.get("algorithm"), str)
+
+    if _want(errors, "execution", job.get("execution"), dict):
+        execution = job.get("execution") or {}
+        for field in ("shardCount", "reportEveryNRuns"):
+            _want(errors, f"execution.{field}", execution.get(field), int)
+        _want(errors, "execution.maxRealSecondsPerRun", execution.get("maxRealSecondsPerRun"), float)
+        for field in ("saveExternalModel", "saveHeatmapImages"):
+            _want(errors, f"execution.{field}", execution.get(field), bool)
+
+    _want_list(errors, "algorithmFiles", job.get("algorithmFiles"), str)
+    for i, source in enumerate(_want_list(errors, "algorithmSources", job.get("algorithmSources"), dict)):
+        _want(errors, f"algorithmSources[{i}].path", source.get("path"), str, optional=False)
+        _want(errors, f"algorithmSources[{i}].source", source.get("source"), str, optional=False)
+
+    if len(errors) > 25:
+        errors = errors[:25] + [f"... and {len(errors) - 25} more."]
+    return errors
+
+
+def planned_run_count(job):
+    """How many runs the sweep would make, without making them (a typo like seedCount 1e9 must not fill memory)."""
+    if job.get("runs"):
+        return len(job["runs"])
+    sweep = job.get("sweep") or {}
+
+    def chosen(names, items):
+        return len(names) if names else len(items or [])
+
+    seeds = len(sweep.get("seeds") or []) or max(1, sweep.get("seedCount") or 1)
+    algorithms = len(sweep.get("algorithms") or []) or 1
+    plans = chosen(sweep.get("floorPlans"), job.get("floorPlans"))
+    configs = chosen(sweep.get("configurations"), job.get("configurations")) or 1
+    return plans * configs * algorithms * seeds
 
 
 # ---------------------------------------------------------------------------------------------- algorithms
@@ -357,6 +543,10 @@ def normalise(job):
 
     job["sweep"] = _merge(SWEEP_DEFAULTS, job.get("sweep"))
     job["execution"] = _merge(EXECUTION_DEFAULTS, job.get("execution"))
+    planned = planned_run_count(job)
+    if planned > MAX_RUNS:
+        raise CampaignError([f"The sweep makes {planned:,} runs; the most one campaign can hold is {MAX_RUNS:,}. "
+                             f"Check sweep.seedCount and the number of floor plans, configurations and algorithms."])
     if not job.get("runs"):
         job["runs"], _ = expand_sweep(job)
     return job
@@ -544,7 +734,12 @@ def prepare(path, shard_count=None, campaign_id=None):
     job = load(path)
     if campaign_id:
         job["campaignId"] = campaign_id
-    job = normalise(job)
+    try:
+        job = normalise(job)
+    except (TypeError, ValueError, AttributeError, KeyError) as error:
+        # check_shape catches wrong types; this is the backstop for a combination it doesn't foresee.
+        raise CampaignError([f"The campaign file has a value this tool can't use ({type(error).__name__}: {error}). "
+                             f"Compare it with cloud/docs/job-format.md."])
     if shard_count is not None:
         job["execution"]["shardCount"] = int(shard_count)
     # Never send more nodes than runs: an empty node still costs a start-up.

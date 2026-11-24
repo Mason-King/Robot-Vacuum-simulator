@@ -236,7 +236,7 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(level), () =>
+            RunChecks.ConfirmThen(overlay, RunChecks.WithCurrentSettings(RunChecks.Problems(level)), () =>
             {
                 // Only a serialized palette asset outlives this scene; the launcher supplies its own otherwise.
                 if (!SimLauncher.Simulate(level, palette, path, SimOrigin.StartScreen))
@@ -414,7 +414,7 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(level), () =>
+            RunChecks.ConfirmThen(overlay, RunChecks.WithCurrentSettings(RunChecks.Problems(level)), () =>
             {
                 var job = NetworkJobBuilder.FromBatch(level, spec, Palette, out string problem);
                 var campaign = job != null ? NetworkCampaign.TryStart(job, targets, out problem) : null;
@@ -454,7 +454,7 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(level), () =>
+            RunChecks.ConfirmThen(overlay, RunChecks.WithCurrentSettings(RunChecks.Problems(level)), () =>
             {
                 if (!SimLauncher.RunBatch(level, palette, path, spec))
                     overlay.Toast("The simulator scene isn't in the build's scene list.");

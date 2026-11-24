@@ -256,6 +256,9 @@ namespace RobotVacuum.Tests
         [Test]
         public void FloorTypeAt_DoesNotReturnFloorForSolidWallPoints()
         {
+            // One 3 m room, walls on all sides, its bottom wall along y = -1.5 (the sample apartment has none there).
+            Object.DestroyImmediate(level);
+            level = TestLevels.NewLevel(l => l.Rooms.Add(new Room { name = "Box", outline = TestLevels.Square(new Vector2(-1.5f, -1.5f), 3f) }));
             var palette = FloorPalette.CreateDefault();
             FloorType wall = null;
             try

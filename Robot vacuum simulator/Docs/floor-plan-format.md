@@ -55,7 +55,7 @@ All lengths are in **metres**. The x axis points right and the y axis points up.
 | `obstacles[].kind` | 0 Sofa, 1 Bed, 2 Table, 3 Chair, 4 Cabinet, 5 Box, 6 Cat. A cat moves during the run and never blocks floor. |
 | `obstacles[].blocksVacuum` | `true` means the vacuum can't enter it, and the floor under it is left out of coverage. `false` means the vacuum drives underneath. |
 | `obstacles[].size`, `rotation` | Width and depth in metres, and the rotation in degrees. |
-| `wallThickness` | Wall thickness in metres. Walls are centred on room sides. |
+| `wallThickness` | Wall thickness in metres, 0.01-0.5 (outside that range it is clamped). Walls are centred on room sides. |
 | `robotSpawn` | Where the vacuum starts. It must be inside a room. |
 
 ## Checks on import and before a run
@@ -65,3 +65,12 @@ On import, a file with no valid room is rejected. Before any run, the app warns 
 - The vacuum starts outside every room.
 - A room can't be reached through doorways, so it will register 0% coverage.
 - An outside wall has a gap wide enough for the vacuum to drive out of.
+
+## Limits
+
+A floor plan the simulator can't hold is refused before the run starts, with a message saying why:
+
+- every coordinate and size must be within 10,000 m of the origin (and be a real number);
+- the rooms together need at least 0.01 m² of floor (a room needs 3 corners that are not on one line);
+- the grid (the floor plan's extent divided by the cell size) may have at most 16,000 cells along a side and 50
+  million in all. At the default 2-inch cells that is about a 300 m square; use a larger cell size for bigger plans.

@@ -194,6 +194,10 @@ def main():
         sync = S3Sync(out_dir, args.output_uri.rstrip("/") + "/" + shard_name)
         if sync.download_if_exists("results.json", os.path.join(out_dir, "results.json")):
             log("found results from an earlier attempt; finished runs will be skipped")
+        # Names the run that was in progress if the earlier attempt died (out of memory, killed): a run that
+        # keeps killing the simulator is skipped instead of failing every retry.
+        if sync.download_if_exists("current-run.json", os.path.join(out_dir, "current-run.json")):
+            log("found the earlier attempt's run-in-progress marker")
 
     exe = find_executable()
     command = [

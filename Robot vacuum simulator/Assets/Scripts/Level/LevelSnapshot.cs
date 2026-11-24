@@ -89,7 +89,7 @@ namespace RobotVacuum.LevelEditor
             doorways ??= new List<Doorway>();
             wallStrokes ??= new List<WallStroke>();
             obstacles ??= new List<Obstacle>();
-            wallThickness = Mathf.Max(0.01f, wallThickness);
+            wallThickness = LevelData.ClampWallThickness(wallThickness);
 
             foreach (var room in rooms)
             {

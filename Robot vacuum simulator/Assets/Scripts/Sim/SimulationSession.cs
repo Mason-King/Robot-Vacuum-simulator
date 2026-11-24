@@ -189,6 +189,15 @@ namespace RobotVacuum.Sim
                 SimulatedSeconds = 0f;
                 RealSeconds = 0f;
 
+                // A floor plan the simulation can't hold (absurd coordinates, no floor, a grid too big for memory) is
+                // refused here with a plain reason, before anything is built or a run folder is made.
+                string limit = RunLimits.Problem(Level, Settings.cellSizeMeters);
+                if (limit != null)
+                {
+                    error = limit;
+                    return false;
+                }
+
                 // The folder first, so the Console is captured into it from the very start (console_log.txt).
                 RunFolder = RunArtifacts.NewRunFolder();
                 log = new RunLog(RunFolder);
@@ -233,6 +242,11 @@ namespace RobotVacuum.Sim
             }
         }
 
+        /// <summary>The run's error text when the movement algorithm stopped: its reason, so a batch or headless result says why.</summary>
+        public static string AlgorithmFailureMessage(string reason) =>
+            string.IsNullOrWhiteSpace(reason) ? "The movement algorithm failed. See the Console for details."
+                : $"The movement algorithm failed: {reason}";
+
         // Called by the clock every physics step, before the robot and the cleaning grid run (see SessionClock).
         void Step(float dt)
         {
@@ -243,7 +257,7 @@ namespace RobotVacuum.Sim
             var outcome = Runner.Robot != null ? Runner.Robot.Outcome : Control.RunOutcome.None;
 
             if (Runner.Robot != null && Runner.Robot.AlgorithmFailed)
-                EndRun(RunEndReason.Error, "The movement algorithm failed. See the Console for details.", raiseFinished: true);
+                EndRun(RunEndReason.Error, AlgorithmFailureMessage(Runner.Robot.FailureReason), raiseFinished: true);
             else if (outcome == Control.RunOutcome.Completed)
                 EndRun(RunEndReason.Completed, null, raiseFinished: true);
             else if (outcome == Control.RunOutcome.DockedLowBattery)

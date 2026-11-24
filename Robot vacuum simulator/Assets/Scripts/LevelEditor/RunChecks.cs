@@ -38,9 +38,49 @@ namespace RobotVacuum.LevelEditor
                              "which also lowers the whole floor plan's coverage.");
             }
 
+            var tangled = new List<string>();
+            for (int i = 0; i < level.Rooms.Count; i++)
+            {
+                var room = level.GetRoom(i);
+                if (room?.outline == null || room.outline.Count < 3 || Poly2D.IsSimple(room.outline)) continue;
+                tangled.Add(!string.IsNullOrEmpty(room.name) ? room.name : $"Room {i + 1}");
+            }
+            if (tangled.Count > 0)
+                problems.Add($"The outline of {string.Join(", ", tangled)} crosses itself or doubles back, so parts of " +
+                             $"{(tangled.Count == 1 ? "that room" : "those rooms")} may count as outside and its coverage may be wrong. " +
+                             "Redraw it in the floor plan editor.");
+
             string openings = EditorSession.DescribeOpenings(level);
             if (openings != null) problems.Add(openings);
 
+            return problems;
+        }
+
+        /// <summary>
+        /// Settings that will run but give a result that looks broken, one paragraph each. Like the floor plan
+        /// warnings, the run still goes ahead.
+        /// </summary>
+        public static List<string> SettingsProblems(RobotVacuum.Sim.RunSettings settings)
+        {
+            var problems = new List<string>();
+            if (settings == null) return problems;
+            settings = settings.Resolved(); // unset values take their defaults, out-of-range ones are clamped
+
+            if (settings.slam && !settings.lidarEnabled)
+                problems.Add("SLAM is on but the lidar is off, so the vacuum learns the floor only by driving over it and " +
+                             "bumping into things. Algorithms that plan from the map (such as Boustrophedon) may report " +
+                             "\"Completed\" after cleaning very little. Turn the lidar on for a meaningful SLAM run.");
+            else if (settings.slam && settings.lidarHalfAngleDegrees < 5f)
+                problems.Add($"SLAM is on with a lidar field of view of only {settings.lidarHalfAngleDegrees * 2f:0.#}°, so the " +
+                             "vacuum sees almost nothing beside it. Algorithms that plan from the map may finish early with low coverage.");
+
+            return problems;
+        }
+
+        /// <summary>The floor plan warnings plus the warnings for the GUI's current run settings.</summary>
+        public static List<string> WithCurrentSettings(List<string> problems)
+        {
+            problems.AddRange(SettingsProblems(SimConfig.RunSettings));
             return problems;
         }
 

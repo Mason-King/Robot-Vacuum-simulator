@@ -1040,7 +1040,7 @@ namespace RobotVacuum.LevelEditor
 
             var snapshot = LevelSnapshot.Parse(session.Serialize());
             if (!HasRooms(snapshot)) return;
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(session.Level), () => SimulateChecked(snapshot));
+            RunChecks.ConfirmThen(overlay, RunChecks.WithCurrentSettings(RunChecks.Problems(session.Level)), () => SimulateChecked(snapshot));
         }
 
         void SimulateChecked(LevelSnapshot snapshot)
@@ -1054,7 +1054,7 @@ namespace RobotVacuum.LevelEditor
         void SimulateLevel(LevelSnapshot snapshot, string path)
         {
             if (!HasRooms(snapshot)) return;
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(snapshot), () => SimulateLevelChecked(snapshot, path));
+            RunChecks.ConfirmThen(overlay, RunChecks.WithCurrentSettings(RunChecks.Problems(snapshot)), () => SimulateLevelChecked(snapshot, path));
         }
 
         void SimulateLevelChecked(LevelSnapshot snapshot, string path)
@@ -1086,7 +1086,7 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(session.Level), BeginRun);
+            RunChecks.ConfirmThen(overlay, RunChecks.WithCurrentSettings(RunChecks.Problems(session.Level)), BeginRun);
         }
 
         bool CanStartSimulation()

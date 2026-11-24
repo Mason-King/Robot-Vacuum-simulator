@@ -335,13 +335,17 @@ namespace RobotVacuum.Sim
                     string name = AlgorithmCatalog.NameOf(id);
                     log = message => Debug.Log($"[{name} {simTime:F1} s] {message}", this);
                 }
-                algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
+                var context = new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
                     writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
-                    targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log));
+                    targetCleanliness, vacuumPower, drive, new MapAnalysis(map), log);
+                AlgorithmWatchdog.Enter();
+                try { algorithm.Initialize(context); }
+                finally { AlgorithmWatchdog.Exit(); }
             }
             catch (System.Exception exception)
             {
-                Fail($"Initialize failed: {exception.GetType().Name}: {exception.Message}");
+                if (AlgorithmWatchdog.ClaimTimeout(exception)) Fail(AlgorithmWatchdog.TimeoutMessage("Initialize"));
+                else Fail($"Initialize failed: {exception.GetType().Name}: {exception.Message}");
             }
         }
 
@@ -484,19 +488,22 @@ namespace RobotVacuum.Sim
             {
                 long started = System.Diagnostics.Stopwatch.GetTimestamp();
                 Vec2? picked;
+                AlgorithmWatchdog.Enter();
                 try
                 {
                     picked = algorithm.NextGoal(map, believedPose.ToApi(), status);
                 }
                 finally
                 {
+                    AlgorithmWatchdog.Exit();
                     msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                 }
                 next = picked.HasValue ? picked.Value.ToUnity() : (Vector2?)null;
             }
             catch (System.Exception exception)
             {
-                Fail($"NextGoal failed: {exception.GetType().Name}: {exception.Message}");
+                Fail(AlgorithmWatchdog.ClaimTimeout(exception) ? AlgorithmWatchdog.TimeoutMessage("NextGoal")
+                    : $"NextGoal failed: {exception.GetType().Name}: {exception.Message}");
                 return;
             }
 

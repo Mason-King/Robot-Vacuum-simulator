@@ -19,6 +19,15 @@ from . import campaign as campaigns
 from . import stats
 
 
+# Exit codes of the headless build (HeadlessBootstrap): finished, finished with failed runs, job rejected.
+EXIT_DONE = (0, 10)
+EXIT_REJECTED = 2
+# Like the cloud's AWS Batch retry strategy: a shard that crashed or stopped responding is started again, up to
+# this many times. Each attempt resumes after the runs already finished, and a run that keeps killing the
+# simulator is skipped on the attempt after its second crash (current-run.json).
+MAX_RETRIES = 2
+
+
 def run_local(campaign_path, exe, out_dir, processes=1, open_report=True):
     if not os.path.isfile(exe):
         sys.exit(f"Simulator executable not found: {exe}")
@@ -31,17 +40,23 @@ def run_local(campaign_path, exe, out_dir, processes=1, open_report=True):
 
     print(f"Running {len(job['runs'])} run(s) headless in {count} local process(es). Output: {out_dir}", flush=True)
     started = time.monotonic()
+    def launch(shard, shard_dir, attempt):
+        log_name = "unity.log" if attempt == 0 else f"unity.attempt{attempt + 1}.log"
+        command = [exe, "-batchmode", "-nographics", "-logFile", os.path.join(shard_dir, "logs", log_name),
+                   "-configPath", job_path, "-outputPath", shard_dir,
+                   "-shardIndex", str(shard), "-shardCount", str(count)]
+        return subprocess.Popen(command)
+
     procs = []
+    attempts = {}
     for shard in range(count):
         shard_dir = os.path.join(out_dir, "shards", f"shard-{shard:04d}")
         os.makedirs(os.path.join(shard_dir, "logs"), exist_ok=True)
-        command = [exe, "-batchmode", "-nographics", "-logFile", os.path.join(shard_dir, "logs", "unity.log"),
-                   "-configPath", job_path, "-outputPath", shard_dir,
-                   "-shardIndex", str(shard), "-shardCount", str(count)]
-        procs.append((shard, shard_dir, subprocess.Popen(command)))
+        attempts[shard] = 0
+        procs.append((shard, shard_dir, launch(shard, shard_dir, 0)))
 
     total = len(job["runs"])
-    while any(p.poll() is None for _, _, p in procs):
+    while any(p.poll() is None for _, _, p in procs) or _retry_crashed(procs, attempts, launch):
         time.sleep(2)
         done = 0
         for _, shard_dir, _ in procs:
@@ -59,8 +74,8 @@ def run_local(campaign_path, exe, out_dir, processes=1, open_report=True):
         shard_results.append(data)
         shard_status.append({"shardIndex": shard, "exitCode": proc.returncode,
                              "status": (data or {}).get("status", "no results")})
-        if proc.returncode not in (0, 10):
-            print(f"  shard {shard} exited with code {proc.returncode}; see {os.path.join(shard_dir, 'logs', 'unity.log')}")
+        if proc.returncode not in EXIT_DONE:
+            print(f"  shard {shard} exited with code {proc.returncode}; see {os.path.join(shard_dir, 'logs')}")
 
     results = stats.aggregate(job, shard_results, shard_status)
     results["wallClockSeconds"] = time.monotonic() - started
@@ -73,6 +88,21 @@ def run_local(campaign_path, exe, out_dir, processes=1, open_report=True):
     from .report import write_report
     write_report(path, open_browser=open_report, job=job)
     return results
+
+
+def _retry_crashed(procs, attempts, launch):
+    """Restart shards that crashed (not finished, not rejected) while they have retries left. True if any restarted."""
+    restarted = False
+    for i, (shard, shard_dir, proc) in enumerate(procs):
+        code = proc.poll()
+        if code is None or code in EXIT_DONE or code == EXIT_REJECTED or attempts[shard] >= MAX_RETRIES:
+            continue
+        attempts[shard] += 1
+        print(f"\n  shard {shard} stopped with code {code}; starting it again to finish its remaining runs "
+              f"(retry {attempts[shard]} of {MAX_RETRIES})", flush=True)
+        procs[i] = (shard, shard_dir, launch(shard, shard_dir, attempts[shard]))
+        restarted = True
+    return restarted
 
 
 # Fields of result.json that must match between two runs of the same configuration and seed.

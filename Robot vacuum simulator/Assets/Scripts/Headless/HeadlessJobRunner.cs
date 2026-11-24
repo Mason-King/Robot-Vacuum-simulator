@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
 using RobotVacuum.Level;
 using RobotVacuum.LevelEditor;
 using RobotVacuum.Sim;
@@ -23,10 +25,29 @@ namespace RobotVacuum.Headless
     ///                           replay.json, external_model.json, heatmap PNGs (same as a GUI run)
     /// </code>
     /// One run failing (bad floor plan, algorithm crash, wall-clock limit) is recorded and the shard moves on (4.5, 2.11).
+    ///
+    /// Two guards keep one bad run from sinking the whole shard when the process itself can't carry on:
+    /// <list type="bullet">
+    /// <item>A run that stops the frame loop (stuck somewhere the <see cref="AlgorithmWatchdog"/> can't reach) is
+    /// recorded as failed by a background thread, which then ends the process with <see cref="HeadlessBootstrap.ExitCrashed"/>.
+    /// The retry (AWS Batch, or running the job again) resumes after it.</item>
+    /// <item>A run that kills the process outright (out of memory) can't record anything, so current-run.json names the
+    /// run in progress. On resume, a run that was in progress when the process died is tried once more; if it was
+    /// in progress for <see cref="CrashesBeforeSkip"/> deaths in a row it is recorded as failed and skipped.</item>
+    /// </list>
     /// </summary>
     public sealed class HeadlessJobRunner : MonoBehaviour
     {
         const float HeartbeatInterval = 2f;
+
+        /// <summary>The file naming the run in progress, for resuming after the process died part-way through it.</summary>
+        public const string CurrentRunFileName = "current-run.json";
+
+        /// <summary>A run in progress when the process died this many times in a row is skipped on the next attempt.</summary>
+        public const int CrashesBeforeSkip = 2;
+
+        /// <summary>The longest the frame loop may stop for during a run, in real seconds, before the run is abandoned.</summary>
+        public const float MaxStallSeconds = 300f;
 
         HeadlessArgs args;
         HeadlessJob job;
@@ -36,7 +57,7 @@ namespace RobotVacuum.Headless
         readonly List<RunSpec> queue = new List<RunSpec>();
         int nextInQueue;
         int sinceReport;
-        bool done;
+        volatile bool done;
         float nextHeartbeat;
 
         // The run in progress
@@ -48,6 +69,15 @@ namespace RobotVacuum.Headless
         RunRecorder recorder;
         bool sessionEnded;
         float runStartedRealtime;
+
+        // Resume after a crash, and the stall guard
+        int retriedRunIndex = -1;
+        int retriedRunCrashes;
+        Thread stallGuard;
+        long lastFrameTimestamp;    // Stopwatch timestamp of the last frame (or run start); read by the stall guard
+        volatile bool runInProgress;
+        volatile bool stopStallGuard;
+        float stallSeconds = MaxStallSeconds;
 
         public void Begin(HeadlessArgs launchArgs)
         {
@@ -131,13 +161,177 @@ namespace RobotVacuum.Headless
                 results.startedUtc = previous.startedUtc ?? results.startedUtc;
                 Log($"Resuming: {results.runs.Count} run(s) already finished on an earlier attempt.");
             }
+            if (args.resume) SkipRunsThatKeepCrashing(mine, alreadyFinished);
             RecountResults();
 
             foreach (var run in mine)
                 if (!alreadyFinished.Contains(run.runIndex)) queue.Add(run);
 
             results.WriteTo(outputFolder);
+            StartStallGuard();
             StartNextRun();
+        }
+
+        // ---------------------------------------------------------------- crashes and stalls
+
+        [Serializable]
+        sealed class CurrentRunMarker
+        {
+            public string campaignId;
+            public int shardIndex;
+            public int shardCount;
+            public int runIndex = -1;
+            public int crashes;
+        }
+
+        /// <summary>
+        /// The previous attempt died during a run (current-run.json names it and results.json doesn't have it).
+        /// Try it again, unless it was also the run in progress the time before: then record it as failed and move on.
+        /// </summary>
+        void SkipRunsThatKeepCrashing(List<RunSpec> mine, HashSet<int> alreadyFinished)
+        {
+            CurrentRunMarker marker = null;
+            try
+            {
+                string path = Path.Combine(outputFolder, CurrentRunFileName);
+                if (File.Exists(path)) marker = JsonUtility.FromJson<CurrentRunMarker>(File.ReadAllText(path));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[headless] Ignoring an unreadable {CurrentRunFileName}: {ex.Message}");
+            }
+
+            if (marker == null || marker.campaignId != job.campaignId || marker.shardIndex != results.shardIndex ||
+                marker.shardCount != results.shardCount || alreadyFinished.Contains(marker.runIndex))
+                return;
+
+            var run = mine.Find(r => r.runIndex == marker.runIndex);
+            if (run == null) return;
+
+            int crashes = Mathf.Max(0, marker.crashes) + 1;
+            if (crashes < CrashesBeforeSkip)
+            {
+                retriedRunIndex = run.runIndex;
+                retriedRunCrashes = crashes;
+                Log($"Run {run.runIndex} was in progress when the previous attempt stopped; trying it once more.");
+                return;
+            }
+
+            var outcome = NewOutcome(run);
+            outcome.error = $"The simulator stopped during this run {crashes} times in a row (most likely it ran out of memory, " +
+                            "or it was stuck and was killed), so the run was skipped. Try a larger cell size, a smaller floor plan, " +
+                            "or check the algorithm for runaway memory use or endless loops.";
+            Debug.LogWarning($"[headless] Run {run.runIndex}: {outcome.error}");
+            results.runs.Add(outcome);
+            alreadyFinished.Add(run.runIndex);
+        }
+
+        void WriteCurrentRun(RunSpec run)
+        {
+            var marker = new CurrentRunMarker
+            {
+                campaignId = job.campaignId,
+                shardIndex = results.shardIndex,
+                shardCount = results.shardCount,
+                runIndex = run.runIndex,
+                crashes = run.runIndex == retriedRunIndex ? retriedRunCrashes : 0,
+            };
+            try
+            {
+                string path = Path.Combine(outputFolder, CurrentRunFileName);
+                File.WriteAllText(path + ".tmp", JsonUtility.ToJson(marker));
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(path + ".tmp", path);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[headless] Could not write {CurrentRunFileName}: {ex.Message}");
+            }
+        }
+
+        void DeleteCurrentRun()
+        {
+            try { File.Delete(Path.Combine(outputFolder, CurrentRunFileName)); }
+            catch (Exception) { /* nothing to resume from anyway */ }
+        }
+
+        void StartStallGuard()
+        {
+            float limit = job.execution.maxRealSecondsPerRun;
+            stallSeconds = limit > 0f ? Mathf.Clamp(limit, 60f, MaxStallSeconds) : MaxStallSeconds;
+            Interlocked.Exchange(ref lastFrameTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+            stallGuard = new Thread(WatchForStall) { IsBackground = true, Name = "Headless stall guard" };
+            stallGuard.Start();
+        }
+
+        // Background thread: if the frame loop stops for too long during a run, record the run and end the process.
+        void WatchForStall()
+        {
+            while (!stopStallGuard)
+            {
+                Thread.Sleep(1000);
+                if (!runInProgress || done) continue;
+
+                long last = Interlocked.Read(ref lastFrameTimestamp);
+                double seconds = (System.Diagnostics.Stopwatch.GetTimestamp() - last) / (double)System.Diagnostics.Stopwatch.Frequency;
+                if (seconds < stallSeconds) continue;
+
+                // The main thread is stuck inside this run, so nothing else is touching the results.
+                try
+                {
+                    done = true;
+                    var outcome = currentOutcome;
+                    outcome.succeeded = false;
+                    outcome.endReason = RunEndReason.Error.ToString();
+                    outcome.error = $"The simulation stopped responding for {stallSeconds:0} s during this run, so the run was abandoned " +
+                                    "and the shard was restarted. Finished runs are kept; the retry carries on with the next run.";
+                    Debug.LogError($"[headless] Run {outcome.runIndex}: {outcome.error}");
+                    results.runs.Add(outcome);
+                    RecountResults();
+                    results.status = "failed";
+                    results.errors.Add($"Run {outcome.runIndex} stopped responding; the shard needs a retry to finish (it resumes after that run).");
+                    results.finishedUtc = DateTime.UtcNow.ToString("o");
+                    results.WriteTo(outputFolder);
+                    new Heartbeat
+                    {
+                        status = "failed",
+                        currentRunIndex = outcome.runIndex,
+                        completedRuns = results.completedRuns,
+                        totalRuns = results.totalRuns,
+                    }.WriteTo(outputFolder);
+                    DeleteCurrentRun();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                }
+
+                HardExit(HeadlessBootstrap.ExitCrashed);
+                return;
+            }
+        }
+
+        [DllImport("libc", EntryPoint = "_exit")]
+        static extern void UnixExit(int code);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll")]
+        static extern bool TerminateProcess(IntPtr process, uint code);
+
+        // Application.Quit waits for the main thread, which is the thread that's stuck: end the process directly.
+        static void HardExit(int code)
+        {
+            Debug.Log($"[headless] Exiting with code {code} (the main thread is not responding).");
+            try { Console.Out.Flush(); } catch (Exception) { }
+            try
+            {
+                if (Environment.OSVersion.Platform == PlatformID.Unix || Environment.OSVersion.Platform == PlatformID.MacOSX) UnixExit(code);
+                else TerminateProcess(GetCurrentProcess(), (uint)code);
+            }
+            catch (Exception) { }
+            System.Diagnostics.Process.GetCurrentProcess().Kill();
         }
 
         // ---------------------------------------------------------------- frame loop
@@ -145,6 +339,7 @@ namespace RobotVacuum.Headless
         void Update()
         {
             if (done) return;
+            Interlocked.Exchange(ref lastFrameTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
 
             try
             {
@@ -191,22 +386,12 @@ namespace RobotVacuum.Headless
             currentConfig = job.configurations[run.configuration];
             var plan = job.floorPlans[run.floorPlan];
 
-            currentOutcome = new RunOutcome
-            {
-                runIndex = run.runIndex,
-                floorPlanIndex = run.floorPlan,
-                floorPlan = plan != null ? plan.name : null,
-                configurationIndex = run.configuration,
-                configuration = currentConfig.name,
-                algorithm = run.algorithm,
-                algorithmName = AlgorithmCatalog.NameOf(run.algorithm),
-                seed = run.seed,
-                slam = currentConfig.sensing.slam,
-                endReason = "NotStarted",
-                batteryCapacity = currentConfig.battery.capacity,
-                targetMaxClean = currentConfig.simulation.targetMaxClean,
-                cellSizeMeters = currentConfig.simulation.cellSizeMeters,
-            };
+            currentOutcome = NewOutcome(run);
+
+            // From here until the run is recorded, a process death or a stall is pinned on this run.
+            WriteCurrentRun(run);
+            Interlocked.Exchange(ref lastFrameTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+            runInProgress = true;
 
             try
             {
@@ -257,6 +442,7 @@ namespace RobotVacuum.Headless
                     showBeliefOverlay = false,
                     logAlgorithmDecisions = currentConfig.simulation.logAlgorithmDecisions,
                 };
+                currentOutcome.warnings.AddRange(RunChecks.SettingsProblems(settings));
 
                 sessionEnded = false;
                 if (!SimulationSession.TryStart(currentLevel, settings, headless: true, OnRunBegan, out session, out string error))
@@ -376,6 +562,28 @@ namespace RobotVacuum.Headless
             StartNextRun();
         }
 
+        RunOutcome NewOutcome(RunSpec run)
+        {
+            var config = job.configurations[run.configuration];
+            var plan = job.floorPlans[run.floorPlan];
+            return new RunOutcome
+            {
+                runIndex = run.runIndex,
+                floorPlanIndex = run.floorPlan,
+                floorPlan = plan != null ? plan.name : null,
+                configurationIndex = run.configuration,
+                configuration = config.name,
+                algorithm = run.algorithm,
+                algorithmName = AlgorithmCatalog.NameOf(run.algorithm),
+                seed = run.seed,
+                slam = config.sensing.slam,
+                endReason = "NotStarted",
+                batteryCapacity = config.battery.capacity,
+                targetMaxClean = config.simulation.targetMaxClean,
+                cellSizeMeters = config.simulation.cellSizeMeters,
+            };
+        }
+
         bool FailToStart(string message)
         {
             currentOutcome.succeeded = false;
@@ -390,6 +598,7 @@ namespace RobotVacuum.Headless
 
         void Record(RunOutcome outcome)
         {
+            runInProgress = false;
             results.runs.Add(outcome);
             RecountResults();
 
@@ -430,6 +639,7 @@ namespace RobotVacuum.Headless
             results.finishedUtc = DateTime.UtcNow.ToString("o");
             results.WriteTo(outputFolder);
             WriteHeartbeat("completed");
+            DeleteCurrentRun();
             CleanUp();
 
             Log($"Shard finished: {results.completedRuns} run(s), {results.failedRuns} failed. Results: {Path.Combine(outputFolder, ShardResults.FileName)}");
@@ -489,6 +699,8 @@ namespace RobotVacuum.Headless
 
         void CleanUp()
         {
+            stopStallGuard = true;
+            runInProgress = false;
             CloseSession();
             ReleaseLevel();
             FloorTuning.ClearAll();

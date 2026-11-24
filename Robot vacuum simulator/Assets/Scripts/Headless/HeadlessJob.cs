@@ -60,6 +60,9 @@ namespace RobotVacuum.Headless
         /// <summary>Notes from loading the job (algorithm load report, replaced files) for the log. Not part of the file.</summary>
         [NonSerialized] public List<string> loadNotes = new List<string>();
 
+        /// <summary>The most runs one job may hold. A bigger sweep is almost certainly a typo (seedCount 1000000000) and would fill memory.</summary>
+        public const int MaxRuns = 100000;
+
         public const int MaxAlgorithmFiles = 64;
         public const int MaxAlgorithmFileBytes = 1024 * 1024;
         public const int MaxAlgorithmTotalBytes = 4 * 1024 * 1024;
@@ -104,6 +107,9 @@ namespace RobotVacuum.Headless
                 return null;
             }
 
+            // No id given: derive one from the file's contents, so running the same job file again finds its earlier
+            // results and resumes (a random id would start over every time). vacuumctl always writes an id.
+            if (string.IsNullOrWhiteSpace(job.campaignId)) job.campaignId = ContentId(json);
             job.Normalise();
             errors = job.Validate();
             if (errors.Count == 0) job.LoadAlgorithms(errors);
@@ -111,6 +117,16 @@ namespace RobotVacuum.Headless
         }
 
         public string ToJson(bool pretty = true) => JsonUtility.ToJson(this, pretty);
+
+        /// <summary>"job-" and the first 128 bits of the SHA-256 of the job file's text, as hex.</summary>
+        static string ContentId(string json)
+        {
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(json));
+            var text = new System.Text.StringBuilder("job-", 36);
+            for (int i = 0; i < 16; i++) text.Append(hash[i].ToString("x2"));
+            return text.ToString();
+        }
 
         // ---------------------------------------------------------------- defaults
 
@@ -160,9 +176,18 @@ namespace RobotVacuum.Headless
                 ? sweep.algorithms
                 : new List<string> { AlgorithmCatalog.RandomBounceId };
 
+            // Count before building anything: a typo in seedCount must be an error, not an out-of-memory crash.
+            long seedTotal = sweep.seeds != null && sweep.seeds.Count > 0 ? sweep.seeds.Count : Math.Max(1, sweep.seedCount);
+            long planned = (long)planIndices.Count * configIndices.Count * algorithms.Count * seedTotal;
+            if (planned > MaxRuns)
+            {
+                errors.Add($"sweep: makes {planned} runs; the most one job can hold is {MaxRuns}. Check sweep.seedCount.");
+                return expanded;
+            }
+
             var seeds = new List<int>();
             if (sweep.seeds != null && sweep.seeds.Count > 0) seeds.AddRange(sweep.seeds);
-            else for (int s = 0; s < Mathf.Max(1, sweep.seedCount); s++) seeds.Add(sweep.seedStart + s);
+            else for (int s = 0; s < Mathf.Max(1, sweep.seedCount); s++) seeds.Add(unchecked(sweep.seedStart + s));
 
             int index = 0;
             foreach (int plan in planIndices)
@@ -307,6 +332,7 @@ namespace RobotVacuum.Headless
 
             // Runs
             if (runs.Count == 0) errors.Add("runs: nothing to run (no runs listed and the sweep is empty).");
+            if (runs.Count > MaxRuns) errors.Add($"runs: {runs.Count} runs is more than the {MaxRuns} one job can hold.");
             var seen = new HashSet<int>();
             foreach (var run in runs)
             {
