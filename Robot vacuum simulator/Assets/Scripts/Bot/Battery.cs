@@ -33,6 +33,21 @@ namespace RobotVacuum
             set => SetCapacity(value);
         }
 
+        /// <summary>Charge used every second the robot is stalled against something.</summary>
+        public float StalledEnergyPerSecond => stalledEnergyPerSecond;
+
+        /// <summary>
+        /// Sets the work-based drain coefficients (3.6). A negative value keeps the current one, so callers can
+        /// change only what they mean to. Does not touch the charge.
+        /// </summary>
+        public void ConfigureDrain(float perMeter, float perDegree, float perSecondOperating, float perSecondStalled)
+        {
+            if (perMeter >= 0f) distanceEnergyPerMeter = perMeter;
+            if (perDegree >= 0f) turnEnergyPerDegree = perDegree;
+            if (perSecondOperating >= 0f) operatingEnergyPerSecond = perSecondOperating;
+            if (perSecondStalled >= 0f) stalledEnergyPerSecond = perSecondStalled;
+        }
+
         public float CurrentCharge { get; private set; }
 
         /// <summary>Charge used per metre driven (before the floor's multiplier).</summary>
