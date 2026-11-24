@@ -376,8 +376,6 @@ namespace RobotVacuum.LevelEditor
             // Alphabetical by last name.
             foreach (string name in new[] { "Kristie Byler", "Mason King", "Eric Olivares", "Emmi Phillips", "Tommy Rasmussen" })
                 Ui.Text(names, name, "le-about__name");
-            Ui.Text(credits, "UNDER THE GUIDANCE OF", "le-about__eyebrow le-about__eyebrow--gap");
-            Ui.Text(credits, "Professor James Williamson", "le-about__name");
             Ui.Text(credits, "UAH College of Computer Science", "le-about__place");
 
             var version = Ui.Div(this, "le-panel");
