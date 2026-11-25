@@ -23,9 +23,14 @@ namespace RobotVacuum.Sim
     // that are already clean, which is what the Coverage and OverCoverage
     // heatmaps measure. Cells under blocking furniture are skipped entirely.
     //
-    // PLACEHOLDER, clearly flagged: the full cleaning-effectiveness formula
-    // (SDD 3.14 -- dwell time x velocity x surface type) doesn't exist yet;
-    // velocity does not enter this yet.
+    // Cleaning effectiveness (requirement 3.14): speed enters through dwell.
+    // Time over a point is brush length / speed, so a faster pass leaves less
+    // cleanliness. Surface type compounds it through cleaningEffort: carpet
+    // needs more dwell than tile to reach the same target. The dirt level is
+    // uniform by design; target_max_clean is "fully clean". The controller
+    // knows the target and this formula, senses the floor's vacuum
+    // resistance, and sets its sweep speed to reach the target
+    // (CoverageMath.SweepSpeed).
     // ============================================================================
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]

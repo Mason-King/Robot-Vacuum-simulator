@@ -57,12 +57,6 @@ namespace RobotVacuum.Sim.Control
         double sumX, sumY;
         int insertCount;
 
-        internal void ResetInsertPositions()
-        {
-            sumX = sumY = 0;
-            insertCount = 0;
-        }
-
         internal void AddInsertPosition(Vector2 p)
         {
             sumX += p.x;
@@ -75,33 +69,6 @@ namespace RobotVacuum.Sim.Control
             this.index = index;
             this.grid = grid;
             this.origin = origin;
-        }
-    }
-
-    /// <summary>
-    /// One scan local SLAM added to the submaps, kept so the submaps can be rebuilt from their scans at corrected poses
-    /// (design: SLAM_Option2_Design.md). <see cref="pose"/> is where it was added, in local SLAM's frame.
-    /// </summary>
-    public sealed class ScanNode
-    {
-        public readonly int index;
-        public readonly RobotPose pose;
-        public readonly float time;
-        public readonly LidarRay[] rays;
-        public readonly float lidarRange;
-
-        /// <summary>The submaps it went into (the second is −1 if only one was active).</summary>
-        public readonly int submapA, submapB;
-
-        public ScanNode(int index, RobotPose pose, float time, LidarRay[] rays, float lidarRange, int submapA, int submapB)
-        {
-            this.index = index;
-            this.pose = pose;
-            this.time = time;
-            this.rays = rays;
-            this.lidarRange = lidarRange;
-            this.submapA = submapA;
-            this.submapB = submapB;
         }
     }
 
@@ -130,13 +97,6 @@ namespace RobotVacuum.Sim.Control
         readonly List<Vector2> points = new List<Vector2>(360);
         readonly List<long> changed = new List<long>(4096);
         readonly HashSet<long> changedSet = new HashSet<long>();
-        readonly List<ScanNode> nodes = new List<ScanNode>();
-
-        /// <summary>Every scan added so far, in order (kept only when <see cref="KeepNodes"/> is on).</summary>
-        public IReadOnlyList<ScanNode> Nodes => nodes;
-
-        /// <summary>Keep each added scan as a <see cref="ScanNode"/> (the node-level graph needs them).</summary>
-        public bool KeepNodes { get; set; }
 
         readonly float freeSpaceMargin;
         RobotPose lastInserted;
@@ -194,7 +154,6 @@ namespace RobotVacuum.Sim.Control
             submaps.Clear();
             active.Clear();
             changed.Clear();
-            nodes.Clear();
             anyInserted = false;
             lastInserted = start;
             lastInsertedTime = 0f;
@@ -227,9 +186,7 @@ namespace RobotVacuum.Sim.Control
                 if (points.Count >= S.MinHits)
                 {
                     long matchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                    matcher.Weights = PointWeightPower > 0 ? weights : null;
-                    pose = matcher.Match(active[0].grid, points, predicted, TranslationWeightOverride > 0f ? TranslationWeightOverride : S.TranslationWeight,
-                        RotationWeightOverride > 0f ? RotationWeightOverride : S.RotationWeight);
+                    pose = matcher.Match(active[0].grid, points, predicted, S.TranslationWeight, S.RotationWeight);
                     Matches++;
                     MatchMs += MsSince(matchStarted);
                     MatchIterations += matcher.LastIterations;
@@ -295,58 +252,26 @@ namespace RobotVacuum.Sim.Control
         /// <summary>The traversability an algorithm sees for a probability: wall = 0, unknown or free = the floor's ease, in between = shaded.</summary>
         public static float Traversability(float probability, float ease)
         {
-            float occupied = OccupiedOverride > 0f ? OccupiedOverride : S.OccupiedProbability;
+            const float occupied = S.OccupiedProbability;
             if (probability <= 0f || probability <= S.FreeProbability) return ease;
             if (probability >= occupied) return 0f;
             return ease * (occupied - probability) / (occupied - S.FreeProbability);
         }
-
-        // ---- Diagnostics only (tests): wall-thickness experiments. Defaults = the normal rule. ----
-        internal static float MarginSigmasOverride = -1f;  // ≥ 0: use this free-space margin (σ) instead
-        internal static float MarginFromRangeMeters = 0f;  // the margin applies only to returns further than this
-        internal static float OccupiedOverride = 0f;       // > 0: wall threshold for the Internal Model instead
-        internal static float RotationWeightOverride = 0f; // > 0: the scan matcher's rotation weight instead
-        internal static float TranslationWeightOverride = 0f; // > 0: the scan matcher's translation weight (trust in odometry's step) instead
-        internal static float InsertRangeOverride = 0f;       // > 0: returns within this range are written into the map instead
-        static float InsertRange => InsertRangeOverride > 0f ? InsertRangeOverride : S.MaxInsertRangeMeters;
-        internal static float SubmapCellOverride = 0f;
-        internal static float TrackRangeOverride = 0f;     // > 0: tracking uses only returns within this range (m)
-        internal static int PointWeightPower = 0;          // 1 or 2: tracking weights each point by (σ(1 m) / σ(range))^power
-        internal static int ScansPerSubmapOverride = 0;    // > 0: scans per submap instead     // > 0: submap cell size instead (the Internal Model can't be drawn then)
 
         // ---- Internals ---------------------------------------------------------------------------------------
 
         void CollectPoints(SensorFrame frame)
         {
             points.Clear();
-            weights.Clear();
             var rays = frame.lidarRays;
             int stride = Mathf.Max(1, Profile.rayStride), seen = 0;
             for (int i = 0; i < rays.Count; i++)
             {
                 if (!rays[i].hit) continue;
-                if (TrackRangeOverride > 0f && rays[i].range > TrackRangeOverride) continue;
                 if (seen++ % stride != 0) continue;
                 points.Add(RobotPose.DirectionOf(rays[i].bearing) * rays[i].range);
-                if (PointWeightPower > 0)
-                {
-                    const float sigmaAtOneMeter = Sensors.SensorNoiseProfile.LidarRangeSigmaMeters + Sensors.SensorNoiseProfile.LidarRangeSigmaFraction;
-                    float sigma = Sensors.SensorNoiseProfile.LidarRangeSigmaMeters + Sensors.SensorNoiseProfile.LidarRangeSigmaFraction * rays[i].range;
-                    weights.Add(Mathf.Pow(sigmaAtOneMeter / sigma, PointWeightPower));
-                }
-            }
-
-            // Scale the weights so their mean square is 1: the fit's total weight stays as without weights.
-            if (weights.Count > 0)
-            {
-                double meanSquare = 0;
-                foreach (float w in weights) meanSquare += w * w;
-                float k = (float)(1.0 / System.Math.Sqrt(meanSquare / weights.Count));
-                for (int i = 0; i < weights.Count; i++) weights[i] *= k;
             }
         }
-
-        readonly List<float> weights = new List<float>(360);
 
         bool MovedEnough(RobotPose pose, float simTime) =>
             Vector2.Distance(pose.position, lastInserted.position) > S.MotionFilterMeters ||
@@ -358,7 +283,7 @@ namespace RobotVacuum.Sim.Control
             if (active.Count == 0) AddSubmap(pose.position);
 
             float noReturn = Mathf.Min(S.MissingDataRayLengthMeters, frame.lidarRange);
-            float margin = MarginSigmasOverride >= 0f ? MarginSigmasOverride : freeSpaceMargin;
+            float margin = freeSpaceMargin;
             // The active submaps share a lattice, so the scan is traced once, into the older one, and the cells it
             // touched are replayed into the newer one: the same result as inserting into each.
             bool replay = active.Count == 2 && ReplayInserts && active[0].grid.SameLattice(active[1].grid);
@@ -367,12 +292,9 @@ namespace RobotVacuum.Sim.Control
             {
                 var grid = active[i].grid;
                 if (replay && i == 1) grid.Replay(scanCells, changed);
-                else grid.Insert(pose, frame.lidarRays, noReturn, InsertRange, margin, MarginFromRangeMeters, changed, replay ? scanCells : null);
+                else grid.Insert(pose, frame.lidarRays, noReturn, S.MaxInsertRangeMeters, margin, 0f, changed, replay ? scanCells : null);
                 active[i].AddInsertPosition(pose.position);
             }
-            if (KeepNodes)
-                nodes.Add(new ScanNode(nodes.Count, pose, simTime, frame.lidarRays.ToArray(), frame.lidarRange,
-                    active[0].index, active.Count > 1 ? active[1].index : -1));
 
             anyInserted = true;
             lastInserted = pose;
@@ -398,23 +320,8 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Diagnostics (tests): false inserts each scan into each active submap separately (the old way).</summary>
         internal static bool ReplayInserts = true;
 
-        /// <summary>
-        /// Rebuilds a FINISHED submap from scans at the given poses (in local SLAM's frame, i.e. the submap's grid frame),
-        /// inserted exactly as they were the first time. Active submaps are never rebuilt (tracking uses them).
-        /// </summary>
-        public void Rebuild(Submap submap, List<(ScanNode node, RobotPose pose)> scans)
-        {
-            if (!submap.Finished) return;
-            float margin = MarginSigmasOverride >= 0f ? MarginSigmasOverride : freeSpaceMargin;
-            submap.grid.Clear();
-            submap.ResetInsertPositions();
-            foreach (var (node, pose) in scans)
-            {
-                float noReturn = Mathf.Min(S.MissingDataRayLengthMeters, node.lidarRange);
-                submap.grid.Insert(pose, node.rays, noReturn, InsertRange, margin, MarginFromRangeMeters, null);
-                submap.AddInsertPosition(pose.position);
-            }
-        }
+        /// <summary>Tests: scans per submap instead of the constant (> 0), so a short run crosses submap hand-overs.</summary>
+        internal static int ScansPerSubmapOverride = 0;
 
         void AddSubmap(Vector2 origin)
         {
@@ -423,7 +330,7 @@ namespace RobotVacuum.Sim.Control
                 active[0].Finished = true;
                 active.RemoveAt(0);
             }
-            var submap = new Submap(submaps.Count, new ProbabilityGrid(anchor, SubmapCellOverride > 0f ? SubmapCellOverride : cellSize), origin);
+            var submap = new Submap(submaps.Count, new ProbabilityGrid(anchor, cellSize), origin);
             submaps.Add(submap);
             active.Add(submap);
         }

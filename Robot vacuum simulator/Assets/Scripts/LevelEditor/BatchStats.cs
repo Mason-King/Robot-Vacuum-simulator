@@ -60,7 +60,6 @@ namespace RobotVacuum.LevelEditor
         /// <summary>The algorithm's <see cref="RunReport.AlgorithmKey"/>; runs are grouped by it.</summary>
         public string algorithmId;
         public string name;
-        public MovementPattern pattern;
         public List<RunReport> runs = new List<RunReport>();
 
         /// <summary>The trials the statistics are computed from: those whose algorithm didn't fail.</summary>
@@ -106,7 +105,7 @@ namespace RobotVacuum.LevelEditor
             {
                 string key = run.AlgorithmKey;
                 if (!byAlgorithm.TryGetValue(key, out var group))
-                    byAlgorithm[key] = group = new AlgorithmSummary { algorithmId = key, name = run.AlgorithmName, pattern = run.pattern };
+                    byAlgorithm[key] = group = new AlgorithmSummary { algorithmId = key, name = run.AlgorithmName };
                 group.runs.Add(run);
             }
 

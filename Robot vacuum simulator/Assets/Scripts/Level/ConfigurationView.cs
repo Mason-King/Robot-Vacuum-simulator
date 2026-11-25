@@ -68,14 +68,7 @@ namespace RobotVacuum.LevelEditor
         {
             PanelTitle(panel, IconKind.Spawn, "Movement", "How the vacuum chooses where to go next.");
             panel.Add(new RunSettingsPanel(SimConfig.RunSettings, null, refusal => overlay.Toast(refusal),
-                SaveRunSettings));
-        }
-
-        void SaveRunSettings()
-        {
-            var pattern = AlgorithmCatalog.PatternOf(SimConfig.RunSettings.algorithmId);
-            if (pattern.HasValue) SimConfig.Pattern = pattern.Value;
-            else SimConfig.Save();
+                SimConfig.Save));
         }
 
         void BuildVacuum(VisualElement panel)

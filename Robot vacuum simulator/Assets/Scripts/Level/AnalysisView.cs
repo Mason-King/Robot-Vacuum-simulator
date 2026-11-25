@@ -149,7 +149,7 @@ namespace RobotVacuum.LevelEditor
 
             var text = Ui.Div(row, "le-run-row__text");
             Ui.Text(text, run.levelName, "le-run-row__title");
-            Ui.Text(text, $"{run.PatternLabel} · {VacuumSettings.FormatDuration(run.durationSeconds)} · {FormatWhen(run.FinishedAt)}",
+            Ui.Text(text, $"{run.AlgorithmName} · {VacuumSettings.FormatDuration(run.durationSeconds)} · {FormatWhen(run.FinishedAt)}",
                 "le-run-row__meta");
             Ui.Text(row, $"{run.coveragePercent:0.0}%", $"le-run-row__value le-tone-text--{CoverageTone(run.coveragePercent)}");
 
@@ -419,7 +419,7 @@ namespace RobotVacuum.LevelEditor
             var panel = Ui.Div(column, "le-panel");
             var header = Ui.Div(panel, "le-panel__header");
             var titles = Ui.Div(header, "le-panel__titles");
-            Ui.Text(titles, $"{run.levelName} · {run.PatternLabel}", "le-panel__title");
+            Ui.Text(titles, $"{run.levelName} · {run.AlgorithmName}", "le-panel__title");
             Ui.Text(titles, $"{run.FinishedAt:d MMM yyyy, HH:mm} · {run.endReason} · seed {run.seed}", "le-panel__text");
 
             if (run.IsBatch)
@@ -442,7 +442,7 @@ namespace RobotVacuum.LevelEditor
                 Ui.IconButton(header, IconKind.Save, "Open this run's data: telemetry.csv, cell_events.csv, cells_final.csv, parameters.csv, replay.json",
                     () => FloorPlanFiles.Reveal(run.dataFolder), "le-btn--ghost le-btn--small");
             if (!run.IsBatch)
-                Ui.IconButton(header, IconKind.Trash, "Delete this run", () => ConfirmDelete(run.id, $"the {run.PatternLabel} run on {run.levelName}"),
+                Ui.IconButton(header, IconKind.Trash, "Delete this run", () => ConfirmDelete(run.id, $"the {run.AlgorithmName} run on {run.levelName}"),
                     "le-btn--ghost le-btn--small");
 
             if (!string.IsNullOrEmpty(run.failure))
@@ -704,10 +704,10 @@ namespace RobotVacuum.LevelEditor
             }
 
             var singles = runs.FindAll(run => !run.IsBatch);
-            var groups = ComparePatterns(singles, compareAllLevels ? null : selectedRun?.levelPath, compareAllLevels ? null : levelName);
+            var groups = CompareAlgorithms(singles, compareAllLevels ? null : selectedRun?.levelPath, compareAllLevels ? null : levelName);
             if (groups.Count == 0)
             {
-                Ui.Text(panel, "No single-algorithm runs to compare yet.", "le-empty-hint");
+                Ui.Text(panel, "No single runs to compare yet.", "le-empty-hint");
                 return;
             }
 
@@ -727,9 +727,8 @@ namespace RobotVacuum.LevelEditor
             }
         }
 
-        public readonly struct PatternSummary
+        public readonly struct AlgorithmComparison
         {
-            public readonly MovementPattern pattern;
             public readonly string algorithmId;
             public readonly string name;
             public readonly int runs;
@@ -737,10 +736,9 @@ namespace RobotVacuum.LevelEditor
             public readonly float averageSeconds;
             public readonly float coveragePerMinute;
 
-            public PatternSummary(MovementPattern pattern, string algorithmId, string name, int runs, float averageCoverage,
+            public AlgorithmComparison(string algorithmId, string name, int runs, float averageCoverage,
                 float averageSeconds, float coveragePerMinute)
             {
-                this.pattern = pattern;
                 this.algorithmId = algorithmId;
                 this.name = name;
                 this.runs = runs;
@@ -751,15 +749,14 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>
-        /// Averages single-algorithm runs per movement pattern, best average coverage first. Given a level,
+        /// Averages runs per algorithm, best average coverage first. Given a level,
         /// only its runs count: matched by file when the run has one, by name otherwise.
         /// </summary>
-        public static List<PatternSummary> ComparePatterns(IEnumerable<RunReport> runs, string levelPath = null, string levelName = null)
+        public static List<AlgorithmComparison> CompareAlgorithms(IEnumerable<RunReport> runs, string levelPath = null, string levelName = null)
         {
             var totals = new Dictionary<string, (RunReport first, int count, float coverage, float seconds)>();
             foreach (var run in runs)
             {
-                if (run.mixedPatterns) continue;
                 if (levelName != null)
                 {
                     bool samePlan = !string.IsNullOrEmpty(levelPath) && !string.IsNullOrEmpty(run.levelPath)
@@ -773,12 +770,12 @@ namespace RobotVacuum.LevelEditor
                 totals[key] = (t.first ?? run, t.count + 1, t.coverage + run.coveragePercent, t.seconds + run.durationSeconds);
             }
 
-            var result = new List<PatternSummary>();
+            var result = new List<AlgorithmComparison>();
             foreach (var pair in totals)
             {
                 var t = pair.Value;
                 float perMinute = t.seconds > 0f ? t.coverage / (t.seconds / 60f) : 0f;
-                result.Add(new PatternSummary(t.first.pattern, pair.Key, t.first.AlgorithmName, t.count,
+                result.Add(new AlgorithmComparison(pair.Key, t.first.AlgorithmName, t.count,
                     t.coverage / t.count, t.seconds / t.count, perMinute));
             }
 

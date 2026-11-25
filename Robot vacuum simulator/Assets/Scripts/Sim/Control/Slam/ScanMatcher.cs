@@ -27,16 +27,6 @@ namespace RobotVacuum.Sim.Control
         /// <summary>The last fit's iterations and its mean fit to the map (mean M over the points, 0–1).</summary>
         public int LastIterations { get; private set; }
 
-        /// <summary>Diagnostics (tests): hit-field matching on (1) or off (0) regardless of the constant; −1 = the constant.</summary>
-        internal static int HitFieldOverride = -1;
-
-        /// <summary>Diagnostics (tests): the hit kernel's σ instead of the constant (0 = the constant).</summary>
-        internal static float HitFieldSigmaOverride = 0f;
-
-        static bool UseHits => HitFieldOverride >= 0 ? HitFieldOverride == 1 : S.MatchAgainstHits;
-
-        /// <summary>Diagnostics (tests): a weight per point for the fit (null = all 1).</summary>
-        internal List<float> Weights;
         public float LastMeanProbability { get; private set; }
 
         /// <summary>
@@ -97,6 +87,7 @@ namespace RobotVacuum.Sim.Control
 
             LastIterations = iteration;
             LastMeanProbability = MeanProbability(points, tx, ty, th);
+
             return new RobotPose(new Vector2((float)tx, (float)ty), Mathf.DeltaAngle(0f, (float)(th * 180.0 / Math.PI)));
         }
 
@@ -181,22 +172,9 @@ namespace RobotVacuum.Sim.Control
             {
                 double px = points[i].x, py = points[i].y;
                 double wx = tx + c * px - s * py, wy = ty + s * px + c * py;
-                double scale = Weights != null ? occupiedScale * Weights[i] : occupiedScale;
-                double r, dpdx, dpdy;
-                if (UseHits)
-                {
-                    // r = scale · e, with e = exp(−D) falling as the point nears where hits landed: ∂r/∂w = scale · ∂e/∂w,
-                    // written below as −scale · (−∂e/∂w) so the shared Jacobian code applies.
-                    double e = HitResidual(wx, wy, out double dedx, out double dedy);
-                    r = scale * e;
-                    dpdx = -dedx;
-                    dpdy = -dedy;
-                }
-                else
-                {
-                    double p = Interpolate(wx, wy, out dpdx, out dpdy);
-                    r = scale * (1.0 - p);
-                }
+                double scale = occupiedScale;
+                double p = Interpolate(wx, wy, out double dpdx, out double dpdy);
+                double r = scale * (1.0 - p);
                 sum += r * r;
 
                 if (H != null)
@@ -245,49 +223,6 @@ namespace RobotVacuum.Sim.Control
         // ---- Bicubic interpolation over cell centres -----------------------------------------------------
 
         /// <summary>The occupancy probability at a world point, and its gradient (per metre).</summary>
-        /// <summary>
-        /// Hit field: D = Σ over occupied cells whose mean hit lies within R = 2 cells of the point of
-        /// w · exp(−d² / 2σ²) · (1 − d²/R²)², with d the distance to the cell's mean hit and w = min(hits, cap) / cap.
-        /// The taper takes each cell's contribution smoothly to zero at R, and a 7 × 7 window always holds every cell
-        /// that close, so the field and its gradient are continuous everywhere (a plain 5 × 5 window jumped as the point
-        /// crossed a cell line). Returns e = exp(−D) (1 far from any hits, falling toward 0 where hits are dense) and its
-        /// gradient. Hits gather symmetrically about a real surface, so D peaks there whatever the occupancy band's
-        /// thickness or the lattice's position.
-        /// </summary>
-        internal double HitResidual(double wx, double wy, out double dedx, out double dedy)
-        {
-            double sigma = HitFieldSigmaOverride > 0f ? HitFieldSigmaOverride : S.HitFieldSigmaMeters;
-            double inverseTwoSigmaSq = 1.0 / (2 * sigma * sigma), inverseSigmaSq = 1.0 / (sigma * sigma);
-            double cell = 1.0 / inverseCell, radiusSq = 4 * cell * cell, inverseRadiusSq = 1.0 / radiusSq;
-            int col0 = (int)Math.Floor((wx - ax) * inverseCell), row0 = (int)Math.Floor((wy - ay) * inverseCell);
-            double D = 0, dDdx = 0, dDdy = 0;
-            for (int dr = -3; dr <= 3; dr++)
-            {
-                for (int dc = -3; dc <= 3; dc++)
-                {
-                    if (!grid.TryIndex(row0 + dr, col0 + dc, out int index)) continue;
-                    int n = grid.hitCount[index];
-                    if (n == 0 || grid.probability[index] <= S.FreeProbability) continue;
-                    double mx = ax + grid.hitSumX[index] / n, my = ay + grid.hitSumY[index] / n;
-                    double dx = wx - mx, dy = wy - my, d2 = dx * dx + dy * dy;
-                    if (d2 >= radiusSq) continue;
-                    double w = Math.Min(n, S.HitFieldCountCap) / (double)S.HitFieldCountCap;
-                    double g = Math.Exp(-d2 * inverseTwoSigmaSq);
-                    double t = 1 - d2 * inverseRadiusSq, taper = t * t;
-                    double k = w * g * taper;
-                    D += k;
-                    // d(k)/dx = w · [g' · taper + g · taper'], g' = −g·dx/σ², taper' = 2t · (−2dx/R²)
-                    double dk = w * (-g * inverseSigmaSq * taper - g * 4 * t * inverseRadiusSq);
-                    dDdx += dk * dx;
-                    dDdy += dk * dy;
-                }
-            }
-            double e = Math.Exp(-D);
-            dedx = -e * dDdx;
-            dedy = -e * dDdy;
-            return e;
-        }
-
         internal double Interpolate(double wx, double wy, out double dpdx, out double dpdy)
         {
             if (referenceInterpolation) return InterpolateReference(wx, wy, out dpdx, out dpdy);

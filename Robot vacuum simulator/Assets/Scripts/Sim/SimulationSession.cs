@@ -275,7 +275,6 @@ namespace RobotVacuum.Sim
                 endReason = reason,
                 levelName = Level.name,
                 seed = Settings.seed,
-                pattern = Settings.pattern,
                 algorithmId = Settings.algorithmId,
                 algorithmName = Control.AlgorithmCatalog.NameOf(Settings.algorithmId),
                 targetMaxClean = Settings.targetMaxClean,
@@ -300,6 +299,11 @@ namespace RobotVacuum.Sim
                 result.msPlanningPerSimSecond = brain.PlanningMsPerSimSecond;
                 result.msLongestStep = brain.LongestStepMs;
 
+                result.blockageEvents = brain.BlockageEvents;
+                result.endedByBlockage = brain.EndedByBlockage;
+                result.blockageLeftSquareMeters = brain.BlockageLeftSquareMeters;
+                result.blockageMessage = brain.BlockageReason ?? "";
+
                 var drift = brain.Drift;
                 if (Settings.slam && drift != null)
                 {
@@ -310,6 +314,17 @@ namespace RobotVacuum.Sim
                     result.driftMaxHeadingDegrees = drift.MaxDegrees;
                     result.driftP99HeadingDegrees = drift.HeadingPercentile(0.99f);
                     result.driftRmsHeadingDegrees = drift.RmsDegrees;
+
+                    var aligned = drift.Aligned();
+                    result.mapScalePercent = aligned.scalePercent;
+                    result.mapRotationDegrees = aligned.rotationDegrees;
+                    result.mapOffsetMeters = aligned.offsetMeters;
+                    result.localDriftMaxMeters = aligned.maxMeters;
+                    result.localDriftP99Meters = aligned.p99Meters;
+                    result.localDriftRmsMeters = aligned.rmsMeters;
+                    result.localDriftMaxHeadingDegrees = aligned.maxDegrees;
+                    result.localDriftP99HeadingDegrees = aligned.p99Degrees;
+                    result.localDriftRmsHeadingDegrees = aligned.rmsDegrees;
                 }
 
                 var tracking = brain.SlamTracking;

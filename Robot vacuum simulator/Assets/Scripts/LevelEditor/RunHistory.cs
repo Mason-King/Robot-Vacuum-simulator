@@ -31,16 +31,13 @@ namespace RobotVacuum.LevelEditor
         public string finishedAt;
         public string endReason;
 
-        public MovementPattern pattern;
-
         /// <summary>
         /// The <see cref="AlgorithmCatalog"/> id and name the run used. Empty in runs recorded before they existed;
-        /// <see cref="AlgorithmKey"/> and <see cref="AlgorithmName"/> fall back to <see cref="pattern"/> then.
+        /// <see cref="AlgorithmKey"/> and <see cref="AlgorithmName"/> fall back to the default (Random) then.
         /// </summary>
         public string algorithmId;
         public string algorithmName;
 
-        public bool mixedPatterns;
         public VacuumSettings vacuum;
 
         /// <summary>The random seed the run started from; the same seed and settings replay it exactly.</summary>
@@ -119,12 +116,10 @@ namespace RobotVacuum.LevelEditor
         public List<float> coverageSamples = new List<float>();
         public float sampleInterval = 1f;
 
-        public string PatternLabel => mixedPatterns ? "Mixed" : AlgorithmName;
-
         /// <summary>What runs are grouped by when algorithms are compared.</summary>
-        public string AlgorithmKey => !string.IsNullOrEmpty(algorithmId) ? algorithmId : AlgorithmCatalog.IdOf(pattern);
+        public string AlgorithmKey => AlgorithmCatalog.OrDefault(algorithmId);
 
-        public string AlgorithmName => !string.IsNullOrEmpty(algorithmName) ? algorithmName : MovementAlgorithms.LabelOf(pattern);
+        public string AlgorithmName => !string.IsNullOrEmpty(algorithmName) ? algorithmName : AlgorithmCatalog.NameOf(AlgorithmKey);
 
         public bool IsBatch => !string.IsNullOrEmpty(batchId);
 

@@ -18,7 +18,7 @@ namespace RobotVacuum.Tests
             ""schemaVersion"": 1,
             ""campaignName"": ""test"",
             ""floorPlans"": [ { ""name"": ""Plan A"", ""rooms"": [ " + room + @" ], ""robotSpawn"": {""x"":1,""y"":1} } ],
-            ""sweep"": { ""algorithms"": [""RandomBounce"", ""spiral""], ""seedStart"": 5, ""seedCount"": 3 }"
+            ""sweep"": { ""algorithms"": [""RandomBounce"", ""Mouse""], ""seedStart"": 5, ""seedCount"": 3 }"
             + extra + "}";
 
         [Test]
@@ -62,7 +62,7 @@ namespace RobotVacuum.Tests
         [Test]
         public void UnknownAlgorithmIsRejected()
         {
-            var job = HeadlessJob.Parse(Job().Replace("\"spiral\"", "\"Teleport\""), out var errors);
+            var job = HeadlessJob.Parse(Job().Replace("\"Mouse\"", "\"Teleport\""), out var errors);
             Assert.IsNull(job);
             Assert.IsTrue(errors.Any(e => e.Contains("Teleport")));
         }
@@ -90,19 +90,29 @@ namespace HeadlessTests
         [Test]
         public void AlgorithmNamesAreRecordedAsCatalogIds()
         {
-            var job = HeadlessJob.Parse(Job().Replace("\"spiral\"", "\"boustrophedon sweep\", \"Lawnmower\""), out var errors);
+            var job = HeadlessJob.Parse(Job().Replace("\"Mouse\"", "\"boustrophedon sweep\", \"sheep\""), out var errors);
             Assert.IsNotNull(job, string.Join("\n", errors));
-            CollectionAssert.AreEquivalent(new[] { "RandomBounce", "BoustrophedonSweep", "Legacy.Lawnmower" },
+            CollectionAssert.AreEquivalent(new[] { "RandomBounce", "BoustrophedonSweep", "Sheep" },
                 job.runs.Select(r => r.algorithm).Distinct().ToArray());
         }
 
         [Test]
-        public void SlamWithALegacyPatternIsRejected()
+        public void RemovedPatternNames_AreUnknownAlgorithms()
+        {
+            foreach (string name in new[] { "spiral", "Wall Follow", "Legacy.Lawnmower" })
+            {
+                var job = HeadlessJob.Parse(Job().Replace("\"Mouse\"", "\"" + name + "\""), out var errors);
+                Assert.IsNull(job, name);
+                Assert.IsTrue(errors.Any(e => e.Contains("unknown algorithm \"" + name + "\"")), string.Join("\n", errors));
+            }
+        }
+
+        [Test]
+        public void SlamRunsAreAccepted_ForEveryBuiltIn()
         {
             string configs = @", ""configurations"": [ { ""name"": ""slam"", ""sensing"": { ""slam"": true, ""noiseScale"": 2 } } ]";
             var job = HeadlessJob.Parse(Job(configs), out var errors);
-            Assert.IsNull(job);
-            Assert.IsTrue(errors.Any(e => e.Contains("SLAM") && e.Contains("Spiral")), string.Join("\n", errors));
+            Assert.IsNotNull(job, string.Join("\n", errors));
         }
 
         [Test]
@@ -125,7 +135,7 @@ namespace HeadlessTests
         [Test]
         public void CarriedAlgorithmSourceIsCompiledAndUsable()
         {
-            string json = Job(Carried("Headless/StandStill.cs", PluginSource)).Replace("\"spiral\"", "\"HeadlessTests.StandStill\"");
+            string json = Job(Carried("Headless/StandStill.cs", PluginSource)).Replace("\"Mouse\"", "\"HeadlessTests.StandStill\"");
             var job = HeadlessJob.Parse(json, out var errors);
             Assert.IsNotNull(job, string.Join("\n", errors));
             Assert.IsTrue(job.runs.Any(r => r.algorithm == "HeadlessTests.StandStill"));

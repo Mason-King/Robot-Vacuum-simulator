@@ -317,7 +317,7 @@ namespace RobotVacuum.Sim.Control
                 }
 
                 var algorithmType = type;
-                found.Add(new AlgorithmEntry(label, name, supportsSlam, unitName, null,
+                found.Add(new AlgorithmEntry(label, name, supportsSlam, unitName,
                     () => (ICleaningAlgorithm)Activator.CreateInstance(algorithmType)));
                 unit.algorithms.Add(name + (supportsSlam ? " (SLAM)" : ""));
             }

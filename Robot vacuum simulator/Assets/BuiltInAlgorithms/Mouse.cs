@@ -10,10 +10,11 @@ namespace RobotVacuum.Algorithms
     /// Room by room (map analysis's rooms; the room the robot is in first, then the nearest by path). In a room:
     ///   1. LOOK (SLAM only): a room is spiraled only once its outline is closed. While a cell of the room borders
     ///      unexplored floor, Mouse drives there first, and plans the rings from the newer map it then has.
-    ///   2. RINGS, outermost first. Ring 0 runs along the walls and around furniture: the cells where the body fits
-    ///      with a 4-neighbour where it doesn't (as Boustrophedon Crawl's edge). Ring k (k ≥ 1) is the line where the
-    ///      robot's center is BodyClearance + k × spacing from the nearest wall or furniture, so the rings follow the
-    ///      room's shape and wrap any furniture. All of one ring's pieces are done (nearest first) before the next ring
+    ///   2. RINGS, outermost first. Ring 0 runs along the walls and furniture against them: the cells where the body
+    ///      fits with a 4-neighbour where it doesn't (as Boustrophedon Crawl's edge). Ring k (k ≥ 1) is the line where the
+    ///      robot's center is BodyClearance + k × spacing from the nearest wall, so the rings follow the room's shape.
+    ///      Free-standing obstacles (a chair, a small table, the cat in the open: see FreeStanding) are left out: they
+    ///      get no ring of their own and bend no ring; a ring they cover is split there. All of one ring's pieces are done (nearest first) before the next ring
     ///      in: where furniture splits a ring, every branch is cleaned before Mouse moves inward, so no floor is cut off.
     ///      Each cell's ring is fixed when it is first planned: an obstacle that appears later (the cat, moved furniture)
     ///      only blocks the ring points it covers, which are skipped, and never makes new rings around itself.
@@ -102,6 +103,7 @@ namespace RobotVacuum.Algorithms
 
         AlgorithmContext context;
         IMapAnalysis analysis;
+        FreeStanding freeStanding; // obstacles the rings ignore (see FreeStanding)
         readonly List<Step> plan = new List<Step>();
         int planIndex;
         int ringFailures;
@@ -109,6 +111,7 @@ namespace RobotVacuum.Algorithms
         readonly Dictionary<long, (int change, int question)> skipped = new Dictionary<long, (int, int)>();
         readonly HashSet<long> ringed = new HashSet<long>();  // ring cells driven (and their neighbors)
         readonly HashSet<long> looked = new HashSet<long>();  // frontier cells visited (SLAM)
+        readonly List<(int row, int col)> runChain = new List<(int, int)>(); // the ring cells of the run being driven
         readonly Dictionary<long, int> plannedLevel = new Dictionary<long, int>(); // each cell's ring, fixed when first planned (-1: none)
         readonly Dictionary<long, int> patchVisits = new Dictionary<long, int>();
         readonly Dictionary<int, float> exposureAt = new Dictionary<int, float>();
@@ -140,6 +143,7 @@ namespace RobotVacuum.Algorithms
         {
             this.context = context;
             analysis = context.analysis ?? throw new InvalidOperationException("Mouse needs the controller's map analysis (AlgorithmContext.analysis).");
+            freeStanding = new FreeStanding(analysis);
             plan.Clear();
             planIndex = 0;
             ringFailures = 0;
@@ -176,10 +180,12 @@ namespace RobotVacuum.Algorithms
                     {
                         // One point of a ring (a corner the body can't quite get into): carry on along the ring.
                         context.Log($"ring: waypoint ({failed.point.x:F2}, {failed.point.y:F2}) {lastStatus}; going on to the next");
+                        ReleaseNear(failed.point);
                         planIndex++;
                         return Issue(plan[planIndex]);
                     }
                     context.Log($"{activity}: goal ({failed.point.x:F2}, {failed.point.y:F2}) {lastStatus}; skipping that piece of work");
+                    if (failed.ring) ReleaseRest(planIndex > 0 ? plan[planIndex - 1].point : pose.position, failed.point);
                     if (failed.look) MarkLooked(failed.point);
                     Skip(map, failed.skipKey);
                     planIndex = plan.Count;
@@ -447,12 +453,23 @@ namespace RobotVacuum.Algorithms
             // FIXED the first time it is planned (normally when Mouse starts the room; in SLAM once its outline is
             // closed): an obstacle that appears later (the cat, moved furniture) only blocks the ring points it covers,
             // which are skipped, and never makes new rings around itself.
+            //
+            // Rings follow the walls only: free-standing obstacles (a chair, the cat in the open; see FreeStanding) get no
+            // ring of their own and bend no ring. Distances are to the walls (FreeStanding.WallDistance), worked out only
+            // when some cell still needs its ring planned; where an obstacle covers a ring, the ring is split there and
+            // its pieces cleaned one after the other.
             var byLevel = new SortedDictionary<int, List<(int row, int col)>>();
-            float deepest = 0f;
+            bool unplanned = false;
             ForRoomCells(room, (row, col) =>
             {
-                if (analysis.BodyFits(row, col)) deepest = Math.Max(deepest, analysis.ObstacleDistance(row, col));
+                if (!unplanned && analysis.BodyFits(row, col) && !plannedLevel.ContainsKey(CellKey(row, col))) unplanned = true;
             });
+            float deepest = 0f;
+            if (unplanned)
+                ForRoomCells(room, (row, col) =>
+                {
+                    if (analysis.BodyFits(row, col)) deepest = Math.Max(deepest, freeStanding.WallDistance(row, col));
+                });
             float clearance = analysis.BodyClearance;
             int lastRing = spacing > 0f ? (int)Math.Floor((deepest - clearance) / spacing) : 0;
             float lastRingAt = clearance + lastRing * spacing;
@@ -467,12 +484,12 @@ namespace RobotVacuum.Algorithms
                 {
                     if (!fits) return; // not floor the body can use yet: planned when it is
                     level = -1;
-                    bool edge = !analysis.BodyFits(row + 1, col) || !analysis.BodyFits(row - 1, col) ||
-                                !analysis.BodyFits(row, col + 1) || !analysis.BodyFits(row, col - 1);
+                    bool edge = Wall(row + 1, col, room) || Wall(row - 1, col, room) ||
+                                Wall(row, col + 1, room) || Wall(row, col - 1, room);
                     if (edge) level = 0;
                     else
                     {
-                        float d = analysis.ObstacleDistance(row, col);
+                        float d = freeStanding.WallDistance(row, col);
                         int k = (int)Math.Round((d - clearance) / spacing);
                         if (k >= 1 && Math.Abs(d - (clearance + k * spacing)) <= half) level = k;
                         else if (middle && d >= deepest - 1.5f * half) level = MiddleLevel;
@@ -510,6 +527,9 @@ namespace RobotVacuum.Algorithms
             }
             return -1;
         }
+
+        /// <summary>A cell that shapes the rings: the body doesn't fit there, and it isn't a free-standing obstacle.</summary>
+        bool Wall(int row, int col, int room) => !analysis.BodyFits(row, col) && !freeStanding.Passable(row, col, room);
 
         /// <summary>
         /// A chain of ring cells from the cell needing a ring nearest by path, along the level's other cells (keeping
@@ -578,6 +598,8 @@ namespace RobotVacuum.Algorithms
                 return null;
             }
 
+            runChain.Clear();
+            runChain.AddRange(chain);
             var points = new List<Vec2>(chain.Count);
             foreach (var (row, col) in chain) points.Add(CellCenter(row, col));
             status = 1;
@@ -775,6 +797,73 @@ namespace RobotVacuum.Algorithms
                 return true;
             }
             return false;
+        }
+
+        // ---- Giving back ring cells that weren't driven ----
+        //
+        // A ring's cells are marked done when the run is planned. When the cat (or anything else) blocks part of the
+        // run, the cells it didn't get to are given back, so a later ring run picks them up once the way is clear.
+
+        /// <summary>One waypoint of the run was skipped: give back the ring cells around it.</summary>
+        void ReleaseNear(Vec2 point)
+        {
+            UnmarkNear(point);
+            RemarkDriven(-1, point);
+        }
+
+        // Wide enough that the cells given back around one point make a run (MinRingCells) rather than a stub.
+        const float ReleaseRadius = 0.25f;
+
+        void UnmarkNear(Vec2 point)
+        {
+            float rr = ReleaseRadius * ReleaseRadius;
+            for (int i = 0; i < runChain.Count; i++)
+                if ((CellCenter(runChain[i].row, runChain[i].col) - point).LengthSquared <= rr) Unmark(runChain[i]);
+        }
+
+        /// <summary>
+        /// The run was abandoned: give back every ring cell past the one nearest where the robot got to, and those
+        /// around the point that failed. The cells it did drive stay done.
+        /// </summary>
+        void ReleaseRest(Vec2 reached, Vec2 failedPoint)
+        {
+            if (runChain.Count == 0) return;
+            int nearest = 0;
+            float best = float.PositiveInfinity;
+            for (int i = 0; i < runChain.Count; i++)
+            {
+                float d = (CellCenter(runChain[i].row, runChain[i].col) - reached).LengthSquared;
+                if (d < best)
+                {
+                    best = d;
+                    nearest = i;
+                }
+            }
+            for (int i = nearest + 1; i < runChain.Count; i++) Unmark(runChain[i]);
+            UnmarkNear(failedPoint);
+            RemarkDriven(nearest, failedPoint);
+        }
+
+        void Unmark((int row, int col) cell)
+        {
+            for (int r = cell.row - 1; r <= cell.row + 1; r++)
+                for (int c = cell.col - 1; c <= cell.col + 1; c++)
+                    ringed.Remove(CellKey(r, c));
+        }
+
+        /// <summary>Marks again the driven cells (up to <paramref name="last"/>, or all when -1) away from the failed point, whose neighbors an unmark may have cleared.</summary>
+        void RemarkDriven(int last, Vec2 failedPoint)
+        {
+            float rr = ReleaseRadius * ReleaseRadius;
+            int end = last < 0 ? runChain.Count - 1 : last;
+            for (int i = 0; i <= end && i < runChain.Count; i++)
+            {
+                var cell = runChain[i];
+                if ((CellCenter(cell.row, cell.col) - failedPoint).LengthSquared <= rr) continue;
+                for (int r = cell.row - 1; r <= cell.row + 1; r++)
+                    for (int c = cell.col - 1; c <= cell.col + 1; c++)
+                        ringed.Add(CellKey(r, c));
+            }
         }
 
         static void Simplify(List<Vec2> points, int first, int last, List<int> keep)

@@ -93,6 +93,7 @@ namespace RobotVacuum.LevelEditor
         public VacuumRobot Robot => Runner?.Robot;
         public Battery Battery => Runner?.Battery;
         public VacuumCleaningController Cleaning => Runner?.Cleaning;
+        public MovementBrain Brain => Runner?.Brain;
 
         /// <summary>Simulated seconds since the current run began.</summary>
         public float SimTime => Session.SimulatedSeconds;
@@ -100,8 +101,6 @@ namespace RobotVacuum.LevelEditor
         public bool Running => Session.State == SimulationSession.Phase.Running;
 
         public int Seed => Session.Settings != null ? Session.Settings.seed : 0;
-
-        public MovementPattern Pattern => Session.Settings != null ? Session.Settings.pattern : MovementPattern.RandomBounce;
 
         public float Coverage => Cleaning != null && Cleaning.Grid != null ? Cleaning.CoveragePercent : 0f;
 
@@ -198,10 +197,7 @@ namespace RobotVacuum.LevelEditor
                 id = Guid.NewGuid().ToString("N"),
                 levelName = world.Level != null ? world.Level.name : "Floor plan",
                 levelPath = SimLauncher.SimulatedPath,
-                pattern = world.Pattern,
-                algorithmId = world.Session.Settings != null && !string.IsNullOrEmpty(world.Session.Settings.algorithmId)
-                    ? world.Session.Settings.algorithmId
-                    : AlgorithmCatalog.IdOf(world.Pattern),
+                algorithmId = AlgorithmCatalog.OrDefault(world.Session.Settings?.algorithmId),
                 seed = seed,
                 batchId = batchId,
                 trial = trial,
@@ -218,7 +214,8 @@ namespace RobotVacuum.LevelEditor
             if (world.Level != null)
                 replay.levelJson = LevelSnapshot.FromLevel(world.Level, report.levelName).ToJson(false);
 
-            telemetry.AppendLine("time_s,x_m,y_m,heading_deg,speed_mps,battery_units,coverage_pct");
+            // est_*: where the robot believed it was (SLAM's estimate); the same as the true pose in Normal.
+            telemetry.AppendLine("time_s,x_m,y_m,heading_deg,speed_mps,battery_units,coverage_pct,est_x_m,est_y_m,est_heading_deg");
             batteryAtStart = world.Battery != null ? world.Battery.Capacity : 0f;
 
             int roomCount = world.Level != null ? world.Level.Rooms.Count : 0;
@@ -284,8 +281,6 @@ namespace RobotVacuum.LevelEditor
 
             events.Add(new ParameterEvent { time = now, parameter = parameter, from = from, to = to });
         }
-
-        public void MarkMixedPatterns() => report.mixedPatterns = true;
 
         void HookGrid()
         {
@@ -370,6 +365,26 @@ namespace RobotVacuum.LevelEditor
             lastTime = time;
         }
 
+        /// <summary>
+        /// Where the robot believed it was, in the level's frame. The believed pose and the true pose it is compared
+        /// with are taken at the same physics step (as the run's drift is), and their difference is added to this
+        /// sample's true pose, so est - true in the CSV is exactly the drift, with its direction. Before the brain is
+        /// ready, in Normal, or with no brain, the estimate is the true pose.
+        /// </summary>
+        void Believed(Vector2 position, float heading, out Vector2 estimate, out float estimateHeading)
+        {
+            estimate = position;
+            estimateHeading = heading;
+            var brain = world.Brain;
+            var renderer = world.Renderer;
+            if (brain == null || !brain.Slam || brain.Model == null || renderer == null) return;
+
+            var believed = brain.BelievedPose;
+            var truth = brain.TrueAtBelief;
+            estimate = position + (renderer.WorldToLevel(believed.position) - renderer.WorldToLevel(truth.position));
+            estimateHeading = heading + Mathf.DeltaAngle(truth.heading, believed.heading);
+        }
+
         void WriteTelemetry(float time, float coverage)
         {
             var robot = world.Robot;
@@ -378,9 +393,12 @@ namespace RobotVacuum.LevelEditor
             float speed = robot != null ? robot.SpeedMetersPerSecond : 0f;
             float charge = world.Battery != null ? world.Battery.CurrentCharge : 0f;
 
+            Believed(position, heading, out Vector2 estimate, out float estimateHeading);
+
             telemetry.Append(F(time)).Append(',').Append(F(position.x)).Append(',').Append(F(position.y)).Append(',')
                 .Append(F(heading)).Append(',').Append(F(speed)).Append(',').Append(F(charge)).Append(',')
-                .Append(F(coverage)).Append('\n');
+                .Append(F(coverage)).Append(',').Append(F(estimate.x)).Append(',').Append(F(estimate.y)).Append(',')
+                .Append(F(estimateHeading)).Append('\n');
 
             // The replay keeps a bounded copy: when full it halves, then only takes every other sample.
             if (time + 1e-4f < nextReplaySample) return;

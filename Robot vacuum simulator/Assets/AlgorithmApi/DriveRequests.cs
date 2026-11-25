@@ -101,6 +101,12 @@ namespace RobotVacuum.AlgorithmApi
         /// asked again after this.
         /// </summary>
         public void Finish() => Finished = true;
+
+        /// <summary>
+        /// For the controller: takes back a Finish. Used when the robot was boxed in (by the cat, say) at the moment the
+        /// algorithm finished, so most of the floor only looked unreachable: after a wait, the algorithm is asked again.
+        /// </summary>
+        public void ClearFinish() => Finished = false;
     }
 
     /// <summary>

@@ -35,8 +35,6 @@ namespace RobotVacuum.Sim.Control
                 if (selectedIndex >= 0 && selectedIndex < entries.Count)
                 {
                     runSettings.algorithmId = entries[selectedIndex].Id;
-                    var pattern = AlgorithmCatalog.PatternOf(runSettings.algorithmId);
-                    if (pattern.HasValue) runSettings.pattern = pattern.Value;
                     settingsChanged?.Invoke();
                 }
             });

@@ -3,7 +3,7 @@ namespace RobotVacuum.Sim
     /// <summary>
     /// A small deterministic random source. The brains draw from one of these rather than
     /// <see cref="UnityEngine.Random"/>, whose global state anything in the app can disturb, so a run
-    /// depends only on its seed: the same level, pattern and seed drive the same route whether the run is
+    /// depends only on its seed: the same level, algorithm and seed drive the same route whether the run is
     /// watched in the simulator or stepped headless.
     /// </summary>
     public sealed class Rng

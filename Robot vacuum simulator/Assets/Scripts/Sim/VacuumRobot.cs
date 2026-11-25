@@ -16,7 +16,6 @@ namespace RobotVacuum.Sim
     ///
     /// The true pose (<see cref="Heading"/>, the rigidbody position) is for the sensors, the External Model and
     /// reporting. The controller's decision logic and the algorithms never read it; they use the believed pose.
-    /// (The legacy reactive patterns are the one exception, which is why they are refused in SLAM runs.)
     /// </summary>
     [ExecuteAlways]
     [RequireComponent(typeof(Rigidbody2D))]
@@ -49,20 +48,9 @@ namespace RobotVacuum.Sim
         [SerializeField] float reverseSpeed = 0.35f;
         [SerializeField] float turnSpeed = 320f;
 
-        [Header("Legacy patterns (Spiral, Wall follow, Lawnmower)")]
-        [SerializeField] float backupDuration = 0.28f;
-        [SerializeField] Vector2 turnAngleRange = new Vector2(70f, 250f);
-
-        [Tooltip("Small random heading drift so the robot does not retrace identical paths.")]
-        [SerializeField] float wanderDegreesPerSecond = 12f;
-
-        // The built-in, for older code. Hidden in the Inspector: the Algorithm dropdown below sets it for a built-in.
-        [HideInInspector]
-        [SerializeField] MovementPattern movementPattern = MovementPattern.RandomBounce;
-
         [Header("Movement")]
         [Tooltip("The algorithm: a built-in, or one from the Algorithms folder. The controller (MovementBrain) picks up a change at its next step.")]
-        [AlgorithmId(nameof(movementPattern))]
+        [AlgorithmId]
         [SerializeField] string algorithmId = "";
 
         [Tooltip("Seeds every random choice the vacuum makes. The same seed drives the same route each run.")]
@@ -88,7 +76,6 @@ namespace RobotVacuum.Sim
         float progressTimer;
         string stuckReason;
 
-        readonly RaycastHit2D[] probeHits = new RaycastHit2D[8];
 
         /// <summary>Raised at the end of <see cref="ResetToSpawn"/>, once the body is back on its spawn point. The controller starts its run here.</summary>
         public event System.Action Respawned;
@@ -98,7 +85,7 @@ namespace RobotVacuum.Sim
 
         /// <summary>
         /// Seconds of simulated time since the last reset, accumulated on the physics step while the battery can
-        /// operate. The legacy brains steer by this rather than <see cref="Time.time"/>.
+        /// operate. The run clock and read-outs use this rather than <see cref="Time.time"/>.
         /// </summary>
         public float SimTime { get; private set; }
 
@@ -142,32 +129,14 @@ namespace RobotVacuum.Sim
             levelRenderer != null ? levelRenderer.FloorTypeAtWorld(WorldPosition) : null;
 
         /// <summary>
-        /// The movement algorithm, as one of the built-in patterns. Setting it selects that built-in (and clears any
-        /// <see cref="AlgorithmId"/>). Switching mid-run: the controller carries on from where the robot is.
-        /// </summary>
-        public MovementPattern Pattern
-        {
-            get => movementPattern;
-            set
-            {
-                movementPattern = value;
-                algorithmId = "";
-            }
-        }
-
-        /// <summary>
         /// The movement algorithm, by catalog id (<see cref="Control.AlgorithmCatalog"/>): a built-in, or a plugin from the
-        /// Algorithms folder. Reads the pattern's id when no id was set. Setting a built-in's id also sets <see cref="Pattern"/>.
+        /// Algorithms folder. Empty = the default (Random). The controller (MovementBrain) picks up a change at its next step
+        /// and carries on from where the robot is.
         /// </summary>
         public string AlgorithmId
         {
-            get => string.IsNullOrEmpty(algorithmId) ? Control.AlgorithmCatalog.IdOf(movementPattern) : algorithmId;
-            set
-            {
-                var pattern = Control.AlgorithmCatalog.PatternOf(value);
-                if (pattern.HasValue) movementPattern = pattern.Value;
-                algorithmId = pattern.HasValue ? "" : value ?? "";
-            }
+            get => Control.AlgorithmCatalog.OrDefault(algorithmId);
+            set => algorithmId = value ?? "";
         }
 
         /// <summary>Seeds the vacuum's random choices. Takes effect at the next <see cref="ResetToSpawn"/>.</summary>
@@ -240,10 +209,6 @@ namespace RobotVacuum.Sim
         /// <summary>Width of floor cleaned in one pass, in metres.</summary>
         public float CleaningWidth => radius * 2f;
 
-        public Vector2 TurnAngleRange => turnAngleRange;
-        public float WanderDegreesPerSecond => wanderDegreesPerSecond;
-        public float BackupDuration => backupDuration;
-
         /// <summary>True while the battery has charge to move.</summary>
         public bool CanOperate => battery != null && battery.CanOperate;
 
@@ -280,8 +245,6 @@ namespace RobotVacuum.Sim
         void OnValidate()
         {
             radius = Mathf.Max(0.02f, radius);
-            turnAngleRange.x = Mathf.Max(5f, turnAngleRange.x);
-            turnAngleRange.y = Mathf.Max(turnAngleRange.x, turnAngleRange.y);
 
             if (!Application.isPlaying)
             {
@@ -507,7 +470,9 @@ namespace RobotVacuum.Sim
         /// </summary>
         void WatchProgress(float dt)
         {
-            if (Outcome != Control.RunOutcome.None || (Brain != null && Brain.Failed))
+            // Also not while the controller is holding still on purpose (waiting for a blockage, such as the cat, to
+            // clear): that wait can outlast NoProgressSeconds.
+            if (Outcome != Control.RunOutcome.None || (Brain != null && (Brain.Failed || Brain.WaitingForBlockage)))
             {
                 progressTimer = 0f;
                 return;
@@ -574,34 +539,6 @@ namespace RobotVacuum.Sim
         {
             var floor = CurrentFloor;
             return floor != null ? floor.speedMultiplier : 1f;
-        }
-
-        /// <summary>
-        /// LEGACY PATTERNS ONLY (Wall follow): distance from the robot's edge to the nearest wall or furniture along
-        /// <paramref name="direction"/>, or positive infinity when nothing is within <paramref name="maxDistance"/>.
-        /// It probes the TRUE world, which is why those patterns are refused in SLAM runs.
-        /// </summary>
-        public float ProbeDistance(Vector2 direction, float maxDistance)
-        {
-            if (body == null) return float.PositiveInfinity;
-
-            var filter = ContactFilter2D.noFilter;
-            filter.useTriggers = false;
-
-            // From the body's edge along that direction: the radius for a round body.
-            float edge = shape == VacuumShapeKind.Round ? radius : Shape.EdgeDistance(Vector2.SignedAngle(Forward, direction));
-
-            int count = Physics2D.Raycast(body.position, direction.normalized, filter, probeHits, maxDistance + edge);
-            float nearest = float.PositiveInfinity;
-
-            for (int i = 0; i < count; i++)
-            {
-                var hit = probeHits[i];
-                if (hit.collider == null || hit.collider.attachedRigidbody == body) continue;
-                nearest = Mathf.Min(nearest, Mathf.Max(0f, hit.distance - edge));
-            }
-
-            return nearest;
         }
 
         void OnCollisionEnter2D(Collision2D collision)

@@ -54,9 +54,8 @@ namespace RobotVacuum.Sim
 
         public string levelName;
         public int seed;
-        public MovementPattern pattern;
 
-        // The algorithm by catalog id and display name. For a plugin, pattern is just what the settings held; algorithmId is the truth.
+        // The algorithm by catalog id and display name.
         public string algorithmId;
         public string algorithmName;
 
@@ -112,6 +111,20 @@ namespace RobotVacuum.Sim
         public float driftP99HeadingDegrees;
         public float driftRmsHeadingDegrees;
 
+        // SLAM accuracy split in two (end of run, reporting only). Map drift: one best-fit scale, rotation and offset of
+        // the robot's whole track against the truth; its map is drawn from that track, so it carries the same distortion
+        // (scale below 0 = the map is drawn smaller than the home). Local drift: the position and heading error left once
+        // that distortion is removed, the way SLAM systems are usually scored.
+        public float mapScalePercent;
+        public float mapRotationDegrees;
+        public float mapOffsetMeters;
+        public float localDriftMaxMeters;
+        public float localDriftP99Meters;
+        public float localDriftRmsMeters;
+        public float localDriftMaxHeadingDegrees;
+        public float localDriftP99HeadingDegrees;
+        public float localDriftRmsHeadingDegrees;
+
         // SLAM loop closure (global SLAM): whether it ran, submap searches made, loop-closure links accepted, pose
         // graph solves, and its cost.
         public bool loopClosure;
@@ -130,6 +143,16 @@ namespace RobotVacuum.Sim
 
         // The longest single physics step the controller took (sense + pose + map + loop closure), real milliseconds.
         public float msLongestStep;
+
+        // Blockages (the cat): how many times the controller found floor cut off or blocked, or no way home, and
+        // waited; and whether the run ended by giving up on one (after the waits and the long hold). Then
+        // blockageLeftSquareMeters is the floor still to clean that was left behind (as the robot believed; 0 when
+        // the blocked way was home), and blockageMessage the warning. A run that gave up on a blockage while cleaning
+        // still ends Completed (it docked), and on the way home DockUnreachable: these fields say why.
+        public int blockageEvents;
+        public bool endedByBlockage;
+        public float blockageLeftSquareMeters;
+        public string blockageMessage;
 
         // Null/empty when a file wasn't produced (e.g. the run failed before
         // completing). heatmapImagePath is the older single-image field and

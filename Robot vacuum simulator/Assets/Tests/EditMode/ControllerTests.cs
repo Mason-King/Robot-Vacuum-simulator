@@ -301,22 +301,11 @@ namespace RobotVacuum.Tests
         public void TearDown() => Object.DestroyImmediate(level);
 
         [Test]
-        public void Catalog_OnlyRandomSupportsSlam_AndSlamRunsWithOthersAreRefused()
+        public void Catalog_EveryBuiltInSupportsSlam()
         {
-            Assert.IsTrue(AlgorithmCatalog.SupportsSlam(MovementPattern.RandomBounce));
-            Assert.IsNull(AlgorithmCatalog.SlamRefusal(MovementPattern.RandomBounce));
-
-            foreach (var legacy in new[] { MovementPattern.Spiral, MovementPattern.WallFollow, MovementPattern.Lawnmower })
-            {
-                Assert.IsFalse(AlgorithmCatalog.SupportsSlam(legacy));
-                Assert.That(AlgorithmCatalog.SlamRefusal(legacy), Does.Contain("does not support SLAM"));
-            }
-
-            var options = SimulationRunner.Options.Visible(MovementPattern.Spiral);
-            var slam = ControllerSettings.Default;
-            slam.slam = true;
-            options.controller = slam;
-            Assert.Throws<InvalidOperationException>(() => SimulationRunner.Start(level, options), "refused before anything is built");
+            Assert.IsTrue(AlgorithmCatalog.SupportsSlam(AlgorithmCatalog.RandomBounceId));
+            foreach (var entry in AlgorithmCatalog.BuiltIns)
+                Assert.IsNull(AlgorithmCatalog.Refusal(entry.Id, slam: true), entry.Name);
         }
 
         [Test]

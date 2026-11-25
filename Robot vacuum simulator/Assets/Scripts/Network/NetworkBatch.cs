@@ -13,7 +13,7 @@ namespace RobotVacuum.Network
 {
     /// <summary>
     /// Turns a batch set up in the GUI (one floor plan, some algorithms, N seeds) into a headless job, with the same
-    /// settings the in-app batch would use for every trial (<see cref="SimConfig.ToRunSettings(string, int?)"/>), so a
+    /// settings the in-app batch would use for every trial (<see cref="SimConfig.ToRunSettings"/>), so a
     /// batch gives the same results wherever it runs (2.1, 2.17).
     /// </summary>
     public static class NetworkJobBuilder

@@ -19,16 +19,14 @@ namespace RobotVacuum.Sim
             /// <summary>Floor, wall and furniture meshes, and the coverage heatmap. Off for headless runs.</summary>
             public bool visuals;
 
-            public MovementPattern pattern;
-
-            /// <summary>The algorithm by catalog id; null or empty = the built-in that <see cref="pattern"/> names.</summary>
+            /// <summary>The algorithm by catalog id; null or empty = the default (Random).</summary>
             public string algorithmId;
 
             /// <summary>The algorithm this run uses, by id.</summary>
-            public string AlgorithmId => string.IsNullOrEmpty(algorithmId) ? AlgorithmCatalog.IdOf(pattern) : algorithmId;
+            public string AlgorithmId => AlgorithmCatalog.OrDefault(algorithmId);
 
             /// <summary>
-            /// Seeds every random choice the vacuum makes. The same level, pattern and seed give the same
+            /// Seeds every random choice the vacuum makes. The same level, algorithm and seed give the same
             /// run whether it is watched or headless, so results can be reproduced and compared.
             /// </summary>
             public int seed;
@@ -61,7 +59,6 @@ namespace RobotVacuum.Sim
             public static Options From(RunSettings settings, bool headless) => new Options
             {
                 visuals = !headless,
-                pattern = settings.pattern,
                 algorithmId = settings.algorithmId,
                 seed = settings.seed,
                 targetMaxClean = settings.targetMaxClean,
@@ -73,14 +70,14 @@ namespace RobotVacuum.Sim
                 shape = settings.shape,
             };
 
-            public static Options Visible(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
+            public static Options Visible(string algorithmId = null, int seed = 0,
                 float targetMaxClean = 0f, HeatmapMode heatmapMode = HeatmapMode.FloorCleanliness) =>
-                new Options { visuals = true, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean, heatmapMode = heatmapMode };
+                new Options { visuals = true, algorithmId = algorithmId, seed = seed, targetMaxClean = targetMaxClean, heatmapMode = heatmapMode };
 
             /// <summary>Colliders and coverage only: no meshes, no heatmap.</summary>
-            public static Options Headless(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
+            public static Options Headless(string algorithmId = null, int seed = 0,
                 float targetMaxClean = 0f) =>
-                new Options { visuals = false, pattern = pattern, seed = seed, targetMaxClean = targetMaxClean };
+                new Options { visuals = false, algorithmId = algorithmId, seed = seed, targetMaxClean = targetMaxClean };
         }
 
         SimulationRunner(GameObject root, LevelRenderer level, VacuumRobot robot, VacuumCleaningController cleaning,
@@ -149,7 +146,6 @@ namespace RobotVacuum.Sim
             robotObject.transform.SetParent(root.transform, false);
             var robot = robotObject.AddComponent<VacuumRobot>();
             robot.ShapeKind = options.shape; // the hitbox first: everything after reads the body as built
-            robot.Pattern = options.pattern;
             robot.AlgorithmId = options.AlgorithmId;
             robot.Seed = options.seed;
 

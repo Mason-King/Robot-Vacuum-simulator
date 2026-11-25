@@ -374,8 +374,11 @@ namespace RobotVacuum.Sim.Control
                         if (!RestOfPathClear(pose))
                         {
                             if (!Plan(pose, input.view, first: false)) return;
+                            // Progress is measured along the new path from here, but the clock keeps running: the
+                            // map near a moving cat (or flickering chair legs) changes every few tenths of a second,
+                            // and restarting the clock on each re-plan let a pinned or wedged robot go on "driving"
+                            // forever (until the run's 120 s no-progress check stopped it).
                             bestDistance = Remaining(pose);
-                            lastProgressTime = input.simTime;
                         }
                     }
                 }

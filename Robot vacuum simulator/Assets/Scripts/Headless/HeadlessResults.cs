@@ -102,7 +102,7 @@ namespace RobotVacuum.Headless
         public string floorPlan;
         public int configurationIndex;
         public string configuration;
-        /// <summary>The algorithm's catalog id (RandomBounce, BoustrophedonSweep, Legacy.Spiral, or a plugin's Namespace.Class).</summary>
+        /// <summary>The algorithm's catalog id (RandomBounce, BoustrophedonSweep, or a plugin's Namespace.Class).</summary>
         public string algorithm;
 
         /// <summary>Its display name, for reports.</summary>

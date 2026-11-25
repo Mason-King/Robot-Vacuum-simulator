@@ -30,7 +30,6 @@ namespace RobotVacuum.LevelEditor
         [System.Serializable]
         public sealed class Data
         {
-            public MovementPattern pattern = MovementPattern.RandomBounce;
             public VacuumSettings vacuum = VacuumSettings.Defaults();
             public RunSettings runSettings = new RunSettings();
 
@@ -64,13 +63,10 @@ namespace RobotVacuum.LevelEditor
                     catch (System.ArgumentException) { data = new Data(); }
                 }
 
-                if (!MovementAlgorithms.IsDefined(data.pattern)) data.pattern = MovementPattern.RandomBounce;
                 if (data.vacuum == null || data.vacuum.driveSpeed <= 0f) data.vacuum = VacuumSettings.Defaults();
                 data.runSettings ??= new RunSettings();
                 if (AlgorithmCatalog.Find(data.runSettings.algorithmId) == null)
                     data.runSettings.algorithmId = AlgorithmCatalog.Entries[0].Id;
-                var builtInPattern = AlgorithmCatalog.PatternOf(data.runSettings.algorithmId);
-                if (builtInPattern.HasValue) data.pattern = builtInPattern.Value;
                 data.cellSize = data.cellSize > 0f ? Mathf.Clamp(data.cellSize, MinCellSize, MaxCellSize) : SimDefaults.CellSizeMeters;
                 data.telemetryInterval = data.telemetryInterval > 0f
                     ? Mathf.Clamp(data.telemetryInterval, MinTelemetryInterval, MaxTelemetryInterval) : 0.5f;
@@ -84,12 +80,6 @@ namespace RobotVacuum.LevelEditor
         static Data current;
 
         static Data Current => current ??= Load();
-
-        public static MovementPattern Pattern
-        {
-            get => Current.pattern;
-            set { Current.pattern = value; Save(); }
-        }
 
         /// <summary>The live settings. Change fields on it directly, then call <see cref="Save"/>.</summary>
         public static VacuumSettings Vacuum => Current.vacuum;
@@ -136,15 +126,15 @@ namespace RobotVacuum.LevelEditor
 
         /// <summary>
         /// The settings a <see cref="SimulationSession"/> run is started with: this configuration's algorithm,
-        /// seed policy, grid and vacuum. <paramref name="pattern"/> overrides the algorithm, e.g. for a batch.
+        /// seed policy, grid and vacuum. <paramref name="algorithmId"/> overrides the algorithm: any entry in
+        /// <see cref="AlgorithmCatalog"/>, plugins included. A batch starts each trial this way.
         /// </summary>
-        public static RunSettings ToRunSettings(MovementPattern? pattern = null, int? fixedSeed = null) => new RunSettings
+        public static RunSettings ToRunSettings(string algorithmId = null, int? fixedSeed = null) => new RunSettings
         {
-            pattern = pattern ?? Pattern,
             randomSeed = !fixedSeed.HasValue && RandomSeed,
             seed = fixedSeed ?? Seed,
             cellSizeMeters = CellSize,
-            algorithmId = pattern.HasValue ? AlgorithmCatalog.IdOf(pattern.Value) : RunSettings.algorithmId,
+            algorithmId = !string.IsNullOrEmpty(algorithmId) ? algorithmId : RunSettings.algorithmId,
             heatmapMode = RunSettings.heatmapMode,
             slam = RunSettings.slam,
             showBeliefOverlay = RunSettings.showBeliefOverlay,
@@ -156,18 +146,6 @@ namespace RobotVacuum.LevelEditor
             batteryCapacity = Vacuum.batteryCapacity,
             shape = Vacuum.shape,
         };
-
-        /// <summary>
-        /// <see cref="ToRunSettings"/> with the algorithm replaced by <paramref name="algorithmId"/>: any entry in
-        /// <see cref="AlgorithmCatalog"/>, plugins included. A batch starts each trial this way.
-        /// </summary>
-        public static RunSettings ToRunSettings(string algorithmId, int? fixedSeed)
-        {
-            var settings = ToRunSettings((MovementPattern?)null, fixedSeed);
-            settings.algorithmId = algorithmId;
-            settings.pattern = AlgorithmCatalog.PatternOf(algorithmId) ?? MovementPattern.RandomBounce;
-            return settings;
-        }
 
         /// <summary>The adjusted cleaning effort for a covering, or null when it uses the palette's value.</summary>
         public static float? CleaningEffortFor(string floor)
@@ -209,7 +187,7 @@ namespace RobotVacuum.LevelEditor
             return true;
         }
 
-        /// <summary>A one-line description for summaries, e.g. "Spiral · 0.65 m/s · 300 units".</summary>
+        /// <summary>A one-line description for summaries, e.g. "Random · 0.65 m/s · 300 units".</summary>
         public static string Summary =>
             $"{AlgorithmCatalog.NameOf(RunSettings.algorithmId)} · {Vacuum.FormatSpeed(Vacuum.driveSpeed)} · {VacuumSettings.FormatCapacity(Vacuum.batteryCapacity)}";
 

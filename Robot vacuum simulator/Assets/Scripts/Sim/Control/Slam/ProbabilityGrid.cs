@@ -31,19 +31,11 @@ namespace RobotVacuum.Sim.Control
         internal float[] probability = new float[0];
         int[] stamp = new int[0];
 
-        // Where hits actually landed, per cell: their count and the sum of their positions (relative to the anchor).
-        // The hit-field matcher scores scan points against these instead of against cell centres.
-        internal int[] hitCount = new int[0];
-        internal double[] hitSumX = new double[0], hitSumY = new double[0];
         internal int minRow, minCol, rows, cols;
         int scanId;
 
-        // ---- Diagnostics only (tests): hit/miss probability experiments. 0 = the constants. ----
-        internal static float HitProbabilityOverride = 0f;
-        internal static float MissProbabilityOverride = 0f;
-
-        static float HitProbability => HitProbabilityOverride > 0f ? HitProbabilityOverride : S.HitProbability;
-        static float MissProbability => MissProbabilityOverride > 0f ? MissProbabilityOverride : S.MissProbability;
+        static float HitProbability => S.HitProbability;
+        static float MissProbability => S.MissProbability;
         static float HitOdds => Odds(HitProbability);
         static float MissOdds => Odds(MissProbability);
 
@@ -121,18 +113,14 @@ namespace RobotVacuum.Sim.Control
                 if (!rays[i].hit || rays[i].range > maxRange) continue;
                 Vector2 end = pose.position + RobotPose.DirectionOf(pose.heading + rays[i].bearing) * rays[i].range;
                 if (!TryCell(end, out int row, out int col) || !Ensure(row, col, out int index)) continue;
-                float offsetX = end.x - anchor.x, offsetY = end.y - anchor.y;
-                hitCount[index]++;
-                hitSumX[index] += offsetX;
-                hitSumY[index] += offsetY;
                 if (stamp[index] == scanId)
                 {
-                    record?.Add(row, col, ScanCells.HitAgain, false, offsetX, offsetY);
+                    record?.Add(row, col, ScanCells.HitAgain, false);
                     continue;
                 }
                 stamp[index] = scanId;
                 bool didChange = Update(index, row, col, hitOdds, hitProbability, changed);
-                record?.Add(row, col, ScanCells.Hit, didChange, offsetX, offsetY);
+                record?.Add(row, col, ScanCells.Hit, didChange);
             }
 
             // Then the free space each ray passed through.
@@ -188,9 +176,6 @@ namespace RobotVacuum.Sim.Control
                     Update(index, cell.row, cell.col, missOdds, missProbability, cell.changedThere ? null : changed);
                     continue;
                 }
-                hitCount[index]++;
-                hitSumX[index] += cell.offsetX;
-                hitSumY[index] += cell.offsetY;
                 if (cell.kind == ScanCells.Hit)
                     Update(index, cell.row, cell.col, hitOdds, hitProbability, cell.changedThere ? null : changed);
             }
@@ -206,7 +191,6 @@ namespace RobotVacuum.Sim.Control
                 public int row, col;
                 public byte kind;
                 public bool changedThere;     // the recording grid's probability changed
-                public float offsetX, offsetY; // a hit's position relative to the anchor
             }
 
             internal Cell[] cells = new Cell[4096];
@@ -214,10 +198,10 @@ namespace RobotVacuum.Sim.Control
 
             internal void Clear() => count = 0;
 
-            internal void Add(int row, int col, byte kind, bool changedThere, float offsetX, float offsetY)
+            internal void Add(int row, int col, byte kind, bool changedThere)
             {
                 if (count == cells.Length) Array.Resize(ref cells, cells.Length * 2);
-                cells[count++] = new Cell { row = row, col = col, kind = kind, changedThere = changedThere, offsetX = offsetX, offsetY = offsetY };
+                cells[count++] = new Cell { row = row, col = col, kind = kind, changedThere = changedThere };
             }
         }
 
@@ -284,7 +268,7 @@ namespace RobotVacuum.Sim.Control
                     {
                         stamp[index] = scanId;
                         bool didChange = Update(index, row, col, missOdds, missProbability, changed);
-                        record?.Add(row, col, ScanCells.Miss, didChange, 0f, 0f);
+                        record?.Add(row, col, ScanCells.Miss, didChange);
                     }
                 }
                 if (atEnd) return;
@@ -303,16 +287,6 @@ namespace RobotVacuum.Sim.Control
         }
 
         static float Odds(float p) => p / (1f - p);
-
-        /// <summary>Forgets every observation (the extent is kept): for rebuilding the grid from its scans.</summary>
-        public void Clear()
-        {
-            Array.Clear(probability, 0, probability.Length);
-            Array.Clear(hitCount, 0, hitCount.Length);
-            Array.Clear(hitSumX, 0, hitSumX.Length);
-            Array.Clear(hitSumY, 0, hitSumY.Length);
-            ScanCount = 0;
-        }
 
         // ---- Storage -----------------------------------------------------------------------------------------
 
@@ -357,9 +331,6 @@ namespace RobotVacuum.Sim.Control
             int newRows = newMaxRow - newMinRow + 1, newCols = newMaxCol - newMinCol + 1;
             probability = Regrow(probability, newMinRow, newMinCol, newRows, newCols);
             stamp = Regrow(stamp, newMinRow, newMinCol, newRows, newCols);
-            hitCount = Regrow(hitCount, newMinRow, newMinCol, newRows, newCols);
-            hitSumX = Regrow(hitSumX, newMinRow, newMinCol, newRows, newCols);
-            hitSumY = Regrow(hitSumY, newMinRow, newMinCol, newRows, newCols);
             minRow = newMinRow;
             minCol = newMinCol;
             rows = newRows;
