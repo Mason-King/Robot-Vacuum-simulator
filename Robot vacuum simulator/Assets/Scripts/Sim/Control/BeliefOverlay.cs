@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace RobotVacuum.Sim.Control
@@ -138,8 +139,10 @@ namespace RobotVacuum.Sim.Control
 
             float markerZ = MarkerDepth();
             var pose = brain.BelievedPose;
+            MatchMarkerToBody();
             poseMarker.position = new Vector3(pose.position.x, pose.position.y, markerZ);
-            poseMarker.rotation = Quaternion.identity;
+            // A round ring looks the same at any heading; the other outlines turn with the believed heading.
+            poseMarker.rotation = markerShape == VacuumShapeKind.Round ? Quaternion.identity : Quaternion.Euler(0f, 0f, pose.heading);
 
             var waypoint = brain.CurrentWaypoint;
             waypointMarker.gameObject.SetActive(waypoint.HasValue);
@@ -308,6 +311,52 @@ namespace RobotVacuum.Sim.Control
 
             go.SetActive(false);
             return go.transform;
+        }
+
+        VacuumShapeKind markerShape = VacuumShapeKind.Round;
+
+        /// <summary>Gives the believed-pose marker the body's outline (3.3) the first time a non-round body is seen.</summary>
+        void MatchMarkerToBody()
+        {
+            var robot = brain.GetComponent<VacuumRobot>();
+            var kind = robot != null ? robot.ShapeKind : VacuumShapeKind.Round;
+            if (kind == markerShape) return;
+
+            markerShape = kind;
+            var filter = poseMarker.GetComponent<MeshFilter>();
+            filter.sharedMesh = kind == VacuumShapeKind.Round
+                ? BuildRing(0.17f, 0.025f, 40)
+                : BuildOutlineRing(robot.Shape.Outline(6), 0.025f);
+        }
+
+        /// <summary>A band of <paramref name="width"/> along a convex outline (the body's), centred on it.</summary>
+        static Mesh BuildOutlineRing(List<Vector2> outline, float width)
+        {
+            int n = outline.Count;
+            var vertices = new Vector3[n * 2];
+            var triangles = new int[n * 6];
+            for (int i = 0; i < n; i++)
+            {
+                // Outward along the bisector of the two edges at this corner (the outline runs counter-clockwise).
+                Vector2 previous = outline[(i - 1 + n) % n], here = outline[i], next = outline[(i + 1) % n];
+                Vector2 edgeIn = (here - previous).normalized, edgeOut = (next - here).normalized;
+                Vector2 normal = (new Vector2(edgeIn.y, -edgeIn.x) + new Vector2(edgeOut.y, -edgeOut.x)).normalized;
+                vertices[i * 2] = here - normal * (width * 0.5f);
+                vertices[i * 2 + 1] = here + normal * (width * 0.5f);
+
+                int following = (i + 1) % n;
+                int t = i * 6;
+                triangles[t] = i * 2;
+                triangles[t + 1] = following * 2;
+                triangles[t + 2] = i * 2 + 1;
+                triangles[t + 3] = i * 2 + 1;
+                triangles[t + 4] = following * 2;
+                triangles[t + 5] = following * 2 + 1;
+            }
+
+            var mesh = new Mesh { name = "BeliefOverlayOutline", vertices = vertices, triangles = triangles };
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         static Mesh BuildRing(float radius, float width, int segments)

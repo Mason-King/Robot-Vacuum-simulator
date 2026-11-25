@@ -19,6 +19,10 @@ namespace RobotVacuum.Sim.Control
     /// Roslyn comes from the com.unity.pipeline package (Microsoft.CodeAnalysis 3.11), which ships in player builds.
     /// 3.11 means C# 9 at most: no file-scoped namespaces or global usings.
     ///
+    /// After a successful compile, and before the assembly is loaded, <see cref="AlgorithmSourceSandbox"/> checks
+    /// every type and member the code uses against the plugin sandbox (<see cref="AlgorithmSandbox"/>, requirement
+    /// 4.8): code that reaches for files, the network, reflection, threads or clocks is refused and never runs.
+    ///
     /// Mono cannot unload an assembly, so every compile that succeeds stays in memory until the simulator closes.
     /// <see cref="AlgorithmLoader"/> caches by content, so an unchanged file is never compiled twice.
     /// </summary>
@@ -84,8 +88,45 @@ namespace RobotVacuum.Sim.Control
 
         static void CompileWithRoslyn(string unitName, IReadOnlyList<KeyValuePair<string, string>> sources, Result result)
         {
+            byte[] image = Emit(unitName, sources, result.errors, result.warnings, out var compilation);
+            if (image == null) return;
+
+            // 4.8: the sandbox. Checked after a successful compile, so the semantic model is complete, and before
+            // anything is loaded, so refused code never runs.
+            int before = result.errors.Count;
+            AlgorithmSourceSandbox.Check(compilation, result.errors);
+            if (result.errors.Count > before)
+            {
+                result.errors.Add(AlgorithmSandbox.Summary);
+                return;
+            }
+
+            result.assembly = Assembly.Load(image);
+        }
+
+        /// <summary>
+        /// Compiles to an assembly image WITHOUT the sandbox check and without loading it. Only for tests, which
+        /// use it to build plugin DLLs (refused ones included) for <see cref="AlgorithmSandbox.CheckDll"/>.
+        /// </summary>
+        internal static byte[] EmitUnchecked(string unitName, IReadOnlyList<KeyValuePair<string, string>> sources, List<string> errors)
+        {
+            try
+            {
+                return Emit(unitName, sources, errors, new List<string>(), out _);
+            }
+            catch (Exception exception)
+            {
+                errors.Add($"{exception.GetType().Name}: {exception.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>Compiles <paramref name="sources"/> to an assembly image, or returns null with the errors.</summary>
+        static byte[] Emit(string unitName, IReadOnlyList<KeyValuePair<string, string>> sources, List<string> errors,
+                           List<string> warnings, out Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation)
+        {
             var refs = References();
-            if (referenceProblem != null) result.warnings.Add(referenceProblem);
+            if (referenceProblem != null) warnings.Add(referenceProblem);
 
             var parse = new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp9);
             var trees = new List<Microsoft.CodeAnalysis.SyntaxTree>();
@@ -105,7 +146,7 @@ namespace RobotVacuum.Sim.Control
 
             // A fresh name every compile: Mono keeps every loaded assembly, and two with one name confuse type lookup.
             string assemblyName = "Algorithm_" + Sanitize(unitName) + "_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-            var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(assemblyName, trees,
+            compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(assemblyName, trees,
                 refs.Cast<Microsoft.CodeAnalysis.MetadataReference>(), options);
 
             using (var stream = new MemoryStream())
@@ -113,17 +154,17 @@ namespace RobotVacuum.Sim.Control
                 var emitted = compilation.Emit(stream);
                 foreach (var diagnostic in emitted.Diagnostics)
                 {
-                    if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error) result.errors.Add(Describe(diagnostic));
-                    else if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Warning) result.warnings.Add(Describe(diagnostic));
+                    if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error) errors.Add(Describe(diagnostic));
+                    else if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Warning) warnings.Add(Describe(diagnostic));
                 }
                 if (!emitted.Success)
                 {
-                    if (result.errors.Count == 0) result.errors.Add("Did not compile (no error was reported).");
-                    if (result.errors.Any(e => e.Contains("UnityEngine")))
-                        result.errors.Add("Algorithms cannot use UnityEngine: use the types in RobotVacuum.AlgorithmApi (Vec2, Pose2, IBeliefMap).");
-                    return;
+                    if (errors.Count == 0) errors.Add("Did not compile (no error was reported).");
+                    if (errors.Any(e => e.Contains("UnityEngine")))
+                        errors.Add("Algorithms cannot use UnityEngine: use the types in RobotVacuum.AlgorithmApi (Vec2, Pose2, IBeliefMap).");
+                    return null;
                 }
-                result.assembly = Assembly.Load(stream.ToArray());
+                return stream.ToArray();
             }
         }
 

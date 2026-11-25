@@ -95,8 +95,43 @@ namespace RobotVacuum.LevelEditor
             AddSlider(panel, "Drive speed", 0.05f, 2f, settings.driveSpeed, settings.FormatSpeed, v => settings.driveSpeed = v);
             AddSlider(panel, "Reverse speed", 0.05f, 1.5f, settings.reverseSpeed, settings.FormatSpeed, v => settings.reverseSpeed = v);
             AddSlider(panel, "Turn speed", 30f, 720f, settings.turnSpeed, v => $"{v:0} °/s", v => settings.turnSpeed = v);
-            AddSlider(panel, "Battery capacity", 10f, 1800f, settings.batteryCapacity, VacuumSettings.FormatCapacity,
+            AddSlider(panel, "Battery capacity", 10f, Battery.MaxCapacity, settings.batteryCapacity, VacuumSettings.FormatCapacity,
                 v => settings.batteryCapacity = v);
+
+            AddShape(panel, settings);
+        }
+
+        /// <summary>The body's outline (3.3). Before a run only: unlike the sliders above, it can't change mid-run.</summary>
+        static void AddShape(VisualElement panel, VacuumSettings settings)
+        {
+            var kinds = (VacuumShapeKind[])Enum.GetValues(typeof(VacuumShapeKind));
+            var labels = Array.ConvertAll(kinds, VacuumShape.Label);
+
+            Ui.Text(panel, "Body shape", "le-field-label le-panel__gap");
+            var choice = new Segmented(labels, Mathf.Max(0, Array.IndexOf(kinds, settings.shape)));
+            panel.Add(choice);
+            var hint = Ui.Text(panel, ShapeHint(settings.shape), "le-empty-hint");
+
+            choice.SelectionChanged += index =>
+            {
+                settings.shape = kinds[index];
+                SimConfig.Save();
+                hint.text = ShapeHint(settings.shape);
+            };
+        }
+
+        static string ShapeHint(VacuumShapeKind kind)
+        {
+            var shape = VacuumShape.For(kind);
+            string size = SimConfig.UseFeet
+                ? $"{shape.Width * VacuumSettings.MetresToFeet * 12f:0.#} × {shape.Length * VacuumSettings.MetresToFeet * 12f:0.#} in, needs {shape.TurnRadius * 2f * VacuumSettings.MetresToFeet * 12f:0.#} in to turn in place"
+                : $"{shape.Width * 100f:0} × {shape.Length * 100f:0} cm, needs {shape.TurnRadius * 200f:0} cm to turn in place";
+            string about = kind == VacuumShapeKind.Round
+                ? "The original disc."
+                : kind == VacuumShapeKind.DShaped
+                    ? "Round back, flat front that reaches into corners."
+                    : "Long axis front to back; it must line up to fit narrow gaps.";
+            return $"{about} {size}. Set before a run; it can't change mid-run.";
         }
 
         void BuildFloors(VisualElement panel)

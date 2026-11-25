@@ -27,8 +27,11 @@ namespace RobotVacuum.Sim.Sensors
         /// <summary>Where the robot really faces: degrees counter-clockwise, 0 = +y (the VacuumRobot convention).</summary>
         public readonly float trueHeading;
 
-        /// <summary>The robot's body radius, metres.</summary>
+        /// <summary>The robot's body radius (half its width), metres.</summary>
         public readonly float robotRadius;
+
+        /// <summary>The robot's body outline (3.3), in its own frame. Round with <see cref="robotRadius"/> unless the run chose another.</summary>
+        public readonly VacuumShape shape;
 
         /// <summary>The robot's own body, so its collider is never mistaken for an obstacle.</summary>
         public readonly Rigidbody2D self;
@@ -57,10 +60,19 @@ namespace RobotVacuum.Sim.Sensors
         public SensorContext(Vector2 truePosition, float trueHeading, float robotRadius, Rigidbody2D self,
             LevelRenderer level, bool collidedThisStep, Vector2 collisionPoint, float simTime,
             bool slam, float noiseScale, RandomProvider random)
+            : this(truePosition, trueHeading, VacuumShape.Round(robotRadius), self, level, collidedThisStep, collisionPoint,
+                simTime, slam, noiseScale, random)
+        {
+        }
+
+        public SensorContext(Vector2 truePosition, float trueHeading, VacuumShape shape, Rigidbody2D self,
+            LevelRenderer level, bool collidedThisStep, Vector2 collisionPoint, float simTime,
+            bool slam, float noiseScale, RandomProvider random)
         {
             this.truePosition = truePosition;
             this.trueHeading = trueHeading;
-            this.robotRadius = robotRadius;
+            this.robotRadius = shape.halfWidth;
+            this.shape = shape;
             this.self = self;
             this.level = level;
             this.collidedThisStep = collidedThisStep;

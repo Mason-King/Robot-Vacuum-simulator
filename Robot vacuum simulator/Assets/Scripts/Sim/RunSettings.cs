@@ -50,6 +50,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Battery capacity in work units. 0 = the battery's own default.")]
         public float batteryCapacity;
 
+        [Tooltip("The body's outline (3.3): Round (the original disc, the default), D-shaped or Rectangular. Fixed for the run.")]
+        public VacuumShapeKind shape = VacuumShapeKind.Round;
+
         [Header("Sensing")]
         [Tooltip("SLAM on: the robot starts with no map, its sensors and odometry are noisy, and it must build its map and track its own position. SLAM off (Normal): the map is preloaded and readings are exact.")]
         public bool slam;
@@ -92,6 +95,9 @@ namespace RobotVacuum.Sim
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
 
+        [Tooltip("Ends the run (as TimeCap) after this many simulated seconds if the battery hasn't run out. 0 = the program's safety cap (SimDefaults.MaxSimulatedSeconds). Never above that cap.")]
+        public float maxSimulatedSeconds;
+
         /// <summary>The highest noise scale allowed.</summary>
         public const float MaxNoiseScale = 10f;
 
@@ -123,6 +129,9 @@ namespace RobotVacuum.Sim
             if (!IsSet(resolved.targetMaxClean)) resolved.targetMaxClean = HeatmapDefaults.TargetMaxClean;
             if (!IsSet(resolved.cellSizeMeters)) resolved.cellSizeMeters = SimDefaults.CellSizeMeters;
             if (!IsSet(resolved.vacuumPower)) resolved.vacuumPower = HeatmapDefaults.BaseVacuumPower;
+            resolved.maxSimulatedSeconds = IsSet(resolved.maxSimulatedSeconds)
+                ? Mathf.Min(resolved.maxSimulatedSeconds, SimDefaults.MaxSimulatedSeconds)
+                : SimDefaults.MaxSimulatedSeconds;
 
             // Sensing. The noise scale is touched ONLY when SLAM is on (clamped to 0–MaxNoiseScale). In a Normal
             // run it is neither read nor changed: it is recorded exactly as set, and nothing uses it.
@@ -161,6 +170,7 @@ namespace RobotVacuum.Sim
                 driveSpeed = robot.DriveSpeedMetersPerSecond;
                 reverseSpeed = robot.ReverseSpeedMetersPerSecond;
                 turnSpeed = robot.TurnSpeedDegreesPerSecond;
+                shape = robot.ShapeKind;
             }
 
             if (battery != null) batteryCapacity = battery.Capacity;

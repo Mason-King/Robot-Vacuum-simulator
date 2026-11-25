@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using RobotVacuum.Level;
+using RobotVacuum.Network;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -27,6 +31,9 @@ namespace RobotVacuum.LevelEditor
 
         FloorPalette Palette => palette != null ? palette : runtimePalette;
 
+        /// <summary>The program's name as shown on screen.</summary>
+        public const string AppName = "VACSim Vacuum Autonomous Controller";
+
         void Start()
         {
             if (palette == null) runtimePalette = FloorPalette.CreateDefault();
@@ -37,6 +44,7 @@ namespace RobotVacuum.LevelEditor
 
             if (root.panel != null) HookKeyboard(root.panel);
             else root.RegisterCallback<AttachToPanelEvent>(evt => HookKeyboard(evt.destinationPanel));
+            NetworkCampaign.Ended += OnNetworkBatchEnded;
 
             Show(SimLauncher.TakeStartPage());
         }
@@ -47,7 +55,33 @@ namespace RobotVacuum.LevelEditor
             overlay.Dismiss();
             app.Clear();
             app.Add(BuildPage(next));
+            app.Add(new NetworkBatchBar(overlay, OpenRun)); // a network batch carries on whichever page is open (3.9)
             app.Add(overlay);
+        }
+
+        void OpenRun(string runId)
+        {
+            SimLauncher.FocusRun(runId);
+            Show(StartPage.Analysis);
+        }
+
+        void OnNetworkBatchEnded(NetworkCampaign campaign)
+        {
+            if (overlay == null) return;
+            switch (campaign.Phase)
+            {
+                case NetworkCampaign.PhaseFinished:
+                    overlay.Toast($"Network batch finished: {campaign.Imported?.imported ?? 0} run(s) are in Analysis.", "Open",
+                        () => OpenRun(CampaignImport.RunIdFor(campaign.CampaignId, 0)));
+                    if (page == StartPage.Analysis) Show(StartPage.Analysis);
+                    break;
+                case NetworkCampaign.PhaseCancelled:
+                    overlay.Toast("Network batch cancelled. The runs that came back can be brought in with Analysis > Import results.");
+                    break;
+                default:
+                    overlay.Toast("The network batch stopped. See Details on the bar at the bottom.");
+                    break;
+            }
         }
 
         VisualElement BuildPage(StartPage next)
@@ -83,6 +117,13 @@ namespace RobotVacuum.LevelEditor
                     return view;
                 }
 
+                case StartPage.Settings:
+                {
+                    var view = new SettingsView(overlay);
+                    view.BackRequested += () => Show(StartPage.Home);
+                    return view;
+                }
+
                 default:
                     return BuildHome();
             }
@@ -102,7 +143,7 @@ namespace RobotVacuum.LevelEditor
             mark.AddToClassList("le-start__mark");
             hero.Add(mark);
 
-            Ui.Text(hero, "Robot Vacuum Simulator", "le-start__title");
+            Ui.Text(hero, AppName, "le-start__title");
             Ui.Text(hero, "Configure the vacuum, draw a floor plan, run it and compare how well each algorithm cleans.", "le-start__text");
 
             int levels = LevelLibrary.LoadAll().Count;
@@ -125,7 +166,7 @@ namespace RobotVacuum.LevelEditor
             return screen;
         }
 
-        static void BuildHeader(VisualElement screen)
+        void BuildHeader(VisualElement screen)
         {
             var header = Ui.Div(screen, "le-topbar");
             var brand = Ui.Div(header, "le-brand");
@@ -134,13 +175,32 @@ namespace RobotVacuum.LevelEditor
             brand.Add(mark);
 
             var titles = Ui.Div(brand, "le-library__title-block");
-            Ui.Text(titles, "Robot Vacuum Simulator", "le-library__title");
+            Ui.Text(titles, AppName, "le-library__title");
 
             Ui.Div(header, "le-topbar__spacer");
 
+            // Settings: network workers (3.9), the cloud connection (5.5) and program-wide options. Opening it touches no network (1.1.1).
+            Ui.Button(header, "Settings", IconKind.Sliders, () => Show(StartPage.Settings), "le-btn--ghost");
+
             // Quitting does nothing inside the Unity Editor, so only offer it in builds.
             if (!Application.isEditor)
-                Ui.Button(header, "Quit", IconKind.Close, Application.Quit, "le-btn--ghost");
+                Ui.Button(header, "Quit", IconKind.Close, ConfirmQuit, "le-btn--ghost");
+        }
+
+        /// <summary>Quitting stops a running network batch, so it asks first (C.9).</summary>
+        void ConfirmQuit()
+        {
+            var campaign = NetworkCampaign.Current;
+            if (campaign == null || campaign.IsOver)
+            {
+                Application.Quit();
+                return;
+            }
+            overlay.ShowDialog("Quit during a network batch?",
+                "The batch stops on every computer. The runs that already came back stay in its folder and can be imported later.",
+                null,
+                new DialogButton("Keep running", ButtonStyle.Ghost, null),
+                new DialogButton("Quit", ButtonStyle.Danger, Application.Quit));
         }
 
         static void BuildStep(VisualElement parent, int number, IconKind icon, string title, string text, string status,
@@ -197,21 +257,52 @@ namespace RobotVacuum.LevelEditor
 
             var body = Ui.Div(null, "le-batch-setup");
             Ui.Text(body, "Algorithms", "le-field-label");
-            var chips = Ui.Div(body, "le-chip-row");
-            for (int i = 0; i < MovementAlgorithms.Count; i++)
-            {
-                var pattern = (MovementPattern)i;
 
-                spec.patterns.Add(pattern);
-                VisualElement chip = null;
-                chip = Ui.Button(chips, MovementAlgorithms.LabelOf(pattern), null, () =>
+            // One dropdown per algorithm in the batch; + adds another, × takes one out. Starts with the configured one.
+            var entries = AlgorithmCatalog.Entries.ToList();
+            var names = entries.Select(entry => entry.Name).ToList();
+            var chosen = new List<string>();
+            string configured = SimConfig.RunSettings.algorithmId;
+            chosen.Add(entries.Exists(entry => entry.Id == configured) ? configured : entries[0].Id);
+
+            var algorithmList = Ui.Div(body, "le-settings-panel le-batch-algorithms");
+            void RebuildAlgorithmRows()
+            {
+                algorithmList.Clear();
+                for (int i = 0; i < chosen.Count; i++)
                 {
-                    bool on = !spec.patterns.Contains(pattern);
-                    if (on) spec.patterns.Add(pattern);
-                    else spec.patterns.Remove(pattern);
-                    Ui.SetClass(chip, "le-chip--on", on);
-                }, "le-chip le-chip--on");
+                    int row = i;
+                    var line = Ui.Div(algorithmList, "le-batch-algorithm-row");
+
+                    var dropdown = new DropdownField(names, Mathf.Max(0, entries.FindIndex(entry => entry.Id == chosen[row])));
+                    dropdown.RegisterValueChangedCallback(_ =>
+                    {
+                        if (dropdown.index >= 0 && dropdown.index < entries.Count) chosen[row] = entries[dropdown.index].Id;
+                    });
+                    line.Add(dropdown);
+
+                    if (chosen.Count > 1)
+                        Ui.IconButton(line, IconKind.Close, "Remove this algorithm from the batch", () =>
+                        {
+                            chosen.RemoveAt(row);
+                            RebuildAlgorithmRows();
+                        }, "le-btn--ghost");
+
+                    if (row == chosen.Count - 1)
+                        Ui.IconButton(line, IconKind.Plus, "Add another algorithm to the batch", () =>
+                        {
+                            var unused = entries.Find(entry => !chosen.Contains(entry.Id));
+                            if (unused == null)
+                            {
+                                overlay.Toast("Every algorithm is already in the batch.");
+                                return;
+                            }
+                            chosen.Add(unused.Id);
+                            RebuildAlgorithmRows();
+                        }, "le-btn--ghost");
+                }
             }
+            RebuildAlgorithmRows();
 
             Ui.Text(body, "Seeds per algorithm", "le-field-label le-panel__gap");
             var trials = new ValueSlider(1f, 100f, spec.trials, v => $"{Mathf.Round(v):0}", true);
@@ -230,19 +321,128 @@ namespace RobotVacuum.LevelEditor
             limit.ValueChanged += value => spec.maxMinutes = Mathf.Round(value);
             body.Add(limit);
 
-            var headless = new SwitchToggle("Headless: don't draw, run as fast as possible", spec.headless);
-            headless.ValueChanged += value => spec.headless = value;
-            body.Add(headless);
+            // Run on (3.9): this PC alone runs the batch in the app, as before. With network workers chosen it becomes one
+            // headless batch split across them (and this PC, if on), brought into Analysis when it's done.
+            var workers = WorkerRegistry.Workers();
+            bool onThisPc = true;
+            var onWorkers = new HashSet<string>();
+            Label networkNote = null;
+            VisualElement headless = null;
+            void UpdateRunOn()
+            {
+                bool network = onWorkers.Count > 0;
+                if (headless != null) Ui.SetVisible(headless, !network);
+                if (networkNote == null) return;
+                networkNote.text = network
+                    ? "Runs headless on the chosen computers, split by how many simulations each runs at once, and comes into Analysis " +
+                      "when it's done. Each run's full per-cell model (external_model.json) stays behind; everything Analysis shows comes back."
+                    : onThisPc ? string.Empty : "Choose at least one computer.";
+                Ui.SetVisible(networkNote, networkNote.text.Length > 0);
+            }
 
-            Ui.Text(body, "Every algorithm runs on the same seeds, so they're compared like for like. Results open in Analysis.", "le-empty-hint");
+            if (workers.Count > 0)
+            {
+                Ui.Text(body, "Run on", "le-field-label le-panel__gap");
+                var thisPc = new SwitchToggle("This PC", true);
+                thisPc.ValueChanged += value =>
+                {
+                    onThisPc = value;
+                    UpdateRunOn();
+                };
+                body.Add(thisPc);
+                foreach (var worker in workers)
+                {
+                    string id = worker.workerId;
+                    var toggle = new SwitchToggle($"{worker.name} ({worker.Address})", false);
+                    toggle.ValueChanged += value =>
+                    {
+                        if (value) onWorkers.Add(id);
+                        else onWorkers.Remove(id);
+                        UpdateRunOn();
+                    };
+                    body.Add(toggle);
+                }
+                networkNote = Ui.Text(body, string.Empty, "le-empty-hint");
+            }
+
+            var headlessToggle = new SwitchToggle("Headless: don't draw, run as fast as possible", spec.headless);
+            headlessToggle.ValueChanged += value => spec.headless = value;
+            body.Add(headlessToggle);
+            headless = headlessToggle;
+            UpdateRunOn();
+
+            Ui.Text(body, "Every algorithm runs on the same seeds, so they're compared like for like. Results open in Analysis." +
+                          (workers.Count == 0 ? " To split batches across other computers, pair them in Settings." : ""), "le-empty-hint");
 
             overlay.ShowDialog("Batch experiment", level.name, body, null,
                 new DialogButton("Cancel", ButtonStyle.Ghost, null),
                 new DialogButton("Run batch", ButtonStyle.Primary, () =>
                 {
-                    if (spec.patterns.Count == 0) overlay.Toast("Pick at least one algorithm.");
-                    else RunBatch(level, path, spec);
+                    string problem = BatchAlgorithmProblem(chosen);
+                    if (problem != null)
+                    {
+                        overlay.Toast(problem);
+                        return;
+                    }
+
+                    if (!onThisPc && onWorkers.Count == 0)
+                    {
+                        overlay.Toast("Choose at least one computer to run the batch on.");
+                        return;
+                    }
+
+                    spec.algorithmIds.AddRange(chosen);
+                    if (onWorkers.Count == 0)
+                    {
+                        RunBatch(level, path, spec);
+                        return;
+                    }
+
+                    var targets = new List<CampaignTarget>();
+                    if (onThisPc) targets.Add(new CampaignTarget());
+                    targets.AddRange(workers.Where(w => onWorkers.Contains(w.workerId)).Select(w => new CampaignTarget { worker = w }));
+                    RunNetworkBatch(level, path, spec, targets);
                 }));
+        }
+
+        /// <summary>Sends a batch to network workers (and this PC) as one headless campaign (3.9), after the same checks as a run.</summary>
+        void RunNetworkBatch(LevelSnapshot level, string path, BatchSpec spec, List<CampaignTarget> targets)
+        {
+            if (level == null || level.ValidRoomCount == 0)
+            {
+                overlay.Toast("Draw a room in this floor plan before running it.");
+                return;
+            }
+
+            RunChecks.ConfirmThen(overlay, RunChecks.Problems(level), () =>
+            {
+                var job = NetworkJobBuilder.FromBatch(level, spec, Palette, out string problem);
+                var campaign = job != null ? NetworkCampaign.TryStart(job, targets, out problem) : null;
+                if (campaign == null)
+                {
+                    overlay.Toast(problem);
+                    return;
+                }
+                overlay.Toast($"Network batch started: {campaign.TotalRuns} runs on {targets.Count} computer(s). It carries on while you use the app.");
+            }, "Fix in editor", () => SimLauncher.OpenLevelEditor(path));
+        }
+
+        /// <summary>Why the chosen algorithms can't run as a batch, or null when they can.</summary>
+        static string BatchAlgorithmProblem(List<string> algorithmIds)
+        {
+            if (algorithmIds.Count == 0) return "Add at least one algorithm.";
+
+            var seen = new HashSet<string>();
+            foreach (string id in algorithmIds)
+            {
+                if (!seen.Add(id)) return $"{AlgorithmCatalog.NameOf(id)} is in the batch twice. Pick a different algorithm or remove one.";
+
+                // Every trial uses the configured SLAM setting, so an algorithm that can't run with it would fail every seed.
+                string refusal = AlgorithmCatalog.Refusal(id, SimConfig.RunSettings.slam);
+                if (!string.IsNullOrEmpty(refusal)) return refusal;
+            }
+
+            return null;
         }
 
         /// <summary>Runs a batch experiment on <paramref name="level"/>, after the same checks as a single run.</summary>
@@ -283,6 +483,7 @@ namespace RobotVacuum.LevelEditor
 
         void OnDestroy()
         {
+            NetworkCampaign.Ended -= OnNetworkBatchEnded;
             if (runtimePalette != null)
             {
                 foreach (var floor in runtimePalette.Entries) Destroy(floor);

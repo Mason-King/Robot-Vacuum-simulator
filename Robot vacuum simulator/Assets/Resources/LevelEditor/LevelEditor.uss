@@ -18,6 +18,9 @@
     --danger-soft: rgba(239, 90, 103, 0.14);
     --success: #3CCB8A;
     --warning: #F2B34C;
+    --input-bg: #0F1217;
+    --input-border: #3B4250;
+    --input-border-hover: #525B6E;
 
     position: absolute;
     left: 0;
@@ -309,6 +312,8 @@
     --unity-selection-color: rgba(91, 141, 239, 0.45);
 }
 
+/* Text boxes are always visible as boxes: a dark inset field with a clear border, brighter on hover, accent when
+   typing in it. (They used to be invisible until hovered.) */
 .le-input #unity-text-input,
 .le-input .unity-base-text-field__input {
     min-height: 32px;
@@ -316,8 +321,8 @@
     margin: 0;
     border-width: 1px;
     border-radius: 8px;
-    border-color: rgba(0, 0, 0, 0);
-    background-color: rgba(0, 0, 0, 0);
+    border-color: var(--input-border);
+    background-color: var(--input-bg);
     color: var(--text);
     font-size: 14px;
     -unity-font-style: bold;
@@ -327,15 +332,17 @@
 
 .le-input:hover #unity-text-input,
 .le-input:hover .unity-base-text-field__input {
-    background-color: var(--surface-2);
+    border-color: var(--input-border-hover);
 }
 
 .le-input:focus #unity-text-input,
 .le-input:focus .unity-base-text-field__input {
-    background-color: var(--bg);
+    background-color: var(--input-bg);
     border-color: var(--accent);
 }
 
+/* A name edited in place (a room or a piece of furniture): reads as a title, with a light outline so it is still
+   clearly editable. */
 .le-input--title {
     margin: 0 16px 4px 10px;
 }
@@ -345,6 +352,20 @@
     font-size: 18px;
     min-height: 38px;
     padding: 0 6px;
+    border-color: var(--border-strong);
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.le-input--title:hover #unity-text-input,
+.le-input--title:hover .unity-base-text-field__input {
+    border-color: var(--input-border-hover);
+    background-color: var(--surface-2);
+}
+
+.le-input--title:focus #unity-text-input,
+.le-input--title:focus .unity-base-text-field__input {
+    border-color: var(--accent);
+    background-color: var(--input-bg);
 }
 
 /* ------------------------------------------------------------ editor body */
@@ -1125,8 +1146,8 @@
     padding: 0 7px;
     border-width: 1px;
     border-radius: 6px;
-    border-color: var(--border-strong);
-    background-color: var(--surface-2);
+    border-color: var(--input-border);
+    background-color: var(--input-bg);
     color: var(--text);
     font-size: 16px;
     -unity-font-style: bold;
@@ -1134,13 +1155,13 @@
 
 .le-slider__input:hover #unity-text-input,
 .le-slider__input:hover .unity-base-text-field__input {
-    background-color: var(--surface-3);
+    border-color: var(--input-border-hover);
 }
 
 .le-slider__input:focus #unity-text-input,
 .le-slider__input:focus .unity-base-text-field__input {
     border-color: var(--accent);
-    background-color: var(--surface);
+    background-color: var(--input-bg);
     color: var(--text);
 }
 
@@ -1801,11 +1822,11 @@
 .le-panel__titles {
     flex-grow: 1;
     flex-shrink: 1;
-    margin-left: 12px;
 }
 
-.le-panel__titles:first-child {
-    margin-left: 0;
+/* USS has no :first-child, so the gap belongs to the icon: titles after an icon get 12px, titles alone start flush. */
+.le-panel__header > .le-start__step-icon {
+    margin-right: 12px;
 }
 
 .le-panel__title {
@@ -1963,8 +1984,12 @@
 }
 
 .le-compare-row__label {
-    width: 100px;
+    width: 160px;
+    margin-right: 12px;
     -unity-font-style: bold;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .le-compare-row__track {
@@ -1989,7 +2014,7 @@
 
 .le-compare-row__meta {
     width: 100%;
-    margin: 4px 0 0 100px;
+    margin: 4px 0 0 172px;
     font-size: 12px;
 }
 
@@ -2059,8 +2084,17 @@
 }
 
 .le-run-speed {
-    width: 170px;
+    width: 220px;
     margin: 0 6px;
+}
+
+/* The typed box already shows the speed, so the read-out beside the track would repeat it. */
+.le-run-speed .le-slider__value {
+    display: none;
+}
+
+.le-run-speed .le-slider__input {
+    width: 64px;
 }
 
 .le-run-furniture {
@@ -2238,15 +2272,31 @@
     overflow: visible;
 }
 
-/* The confidence interval: a bracket over the bar from mean − CI to mean + CI. */
+/* The confidence interval: an error bar |—| centred on the bar, from mean − CI to mean + CI. */
 .le-compare-row__ci {
     position: absolute;
-    top: -3px;
-    height: 14px;
+    top: -4px;
+    height: 16px;
     border-left-width: 2px;
     border-right-width: 2px;
-    border-top-width: 2px;
-    border-color: var(--text);
+    border-color: var(--text-2);
+}
+
+.le-compare-row__ci-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 7px;
+    height: 2px;
+    background-color: var(--text-2);
+}
+
+.le-compare-row__value--ci {
+    width: 104px;
+}
+
+.le-analysis__chart-note {
+    margin-top: 6px;
 }
 
 .le-table {
@@ -2326,7 +2376,8 @@
     background-color: var(--surface-2);
 }
 
-.le-kpi:last-child {
+/* USS has no :last-child; AnalysisView marks the last tile. */
+.le-kpi--last {
     margin-right: 0;
 }
 
@@ -2632,4 +2683,571 @@
 
 .le-app .unity-scroller--vertical .unity-base-slider__dragger:hover {
     background-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ------------------------------------------------------------ run settings (algorithm, heatmap, SLAM) */
+
+/* Labels sit above their fields so long algorithm names get the full width of the popover. */
+.le-settings-panel {
+    min-width: 260px;
+    max-width: 320px;
+    margin-bottom: 4px;
+}
+
+.le-settings-panel .unity-base-field {
+    margin: 0 0 10px 0;
+    padding: 0;
+}
+
+.le-settings-panel .unity-base-popup-field {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.le-settings-panel .unity-base-field__label {
+    min-width: 0;
+    width: auto;
+    margin: 0 0 6px 0;
+    padding: 0;
+    font-size: 12px;
+    color: var(--text-2);
+}
+
+.le-settings-panel .unity-base-popup-field__input {
+    min-height: 32px;
+    margin: 0;
+    padding: 0 8px 0 10px;
+    border-width: 1px;
+    border-radius: 8px;
+    border-color: var(--border-strong);
+    background-color: var(--surface-2);
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-settings-panel .unity-base-popup-field__input:hover {
+    border-color: var(--input-border-hover);
+    background-color: var(--surface-3);
+}
+
+.le-settings-panel .unity-base-popup-field__text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    margin: 0;
+    padding: 0;
+    color: var(--text);
+    font-size: 13px;
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-settings-panel .unity-base-popup-field__arrow {
+    -unity-background-image-tint-color: var(--text-2);
+    margin-left: 6px;
+}
+
+/* Other settings locked mid-run (SLAM) dim, but stay readable. Must come before the algorithm's rule below. */
+.le-settings-panel .unity-base-field:disabled {
+    opacity: 0.6;
+}
+
+/* Locked mid-run: still fully legible, just flat, so the reader can see which algorithm is running. */
+.le-settings-panel .le-settings-panel__locked:disabled,
+.le-settings-panel .le-settings-panel__locked:disabled .unity-base-field__label,
+.le-settings-panel .le-settings-panel__locked:disabled .unity-base-popup-field__input,
+.le-settings-panel .le-settings-panel__locked:disabled .unity-base-popup-field__text,
+.le-settings-panel .le-settings-panel__locked.unity-disabled,
+.le-settings-panel .le-settings-panel__locked.unity-disabled .unity-base-field__label,
+.le-settings-panel .le-settings-panel__locked.unity-disabled .unity-base-popup-field__input,
+.le-settings-panel .le-settings-panel__locked.unity-disabled .unity-base-popup-field__text {
+    opacity: 1;
+}
+
+.le-settings-panel .le-settings-panel__locked .unity-base-popup-field__input {
+    background-color: var(--surface);
+    border-color: var(--border);
+}
+
+.le-settings-panel .le-settings-panel__locked .unity-base-popup-field__arrow {
+    display: none;
+}
+
+.le-settings-panel .le-settings-panel__hint {
+    margin: -6px 0 10px 0;
+}
+
+.le-settings-panel .unity-toggle {
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-settings-panel .unity-toggle .unity-base-field__label {
+    flex-grow: 1;
+    margin: 0;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.le-settings-panel .unity-toggle__checkmark {
+    width: 16px;
+    height: 16px;
+    border-width: 1px;
+    border-radius: 4px;
+    border-color: var(--border-strong);
+    background-color: var(--surface-2);
+    -unity-background-image-tint-color: var(--text);
+}
+
+.le-settings-panel .unity-foldout__text {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.le-settings-panel .unity-foldout__checkmark {
+    -unity-background-image-tint-color: var(--text-2);
+}
+
+.le-settings-panel .unity-foldout__content {
+    margin-left: 0;
+    margin-top: 8px;
+}
+
+/* The dropdown's option list opens on the panel root, outside .le-app, so it uses literal colours. */
+.unity-base-dropdown .unity-base-dropdown__container-outer {
+    border-width: 1px;
+    border-radius: 8px;
+    border-color: #353B47;
+    background-color: #1C2028;
+}
+
+.unity-base-dropdown .unity-base-dropdown__container-inner {
+    background-color: #1C2028;
+    padding: 4px;
+}
+
+.unity-base-dropdown .unity-base-dropdown__item {
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.unity-base-dropdown .unity-base-dropdown__item:hover {
+    background-color: #262B35;
+}
+
+.unity-base-dropdown .unity-base-dropdown__label {
+    color: #E8EAEE;
+    font-size: 13px;
+}
+
+.unity-base-dropdown .unity-base-dropdown__checkmark {
+    -unity-background-image-tint-color: #5B8DEF;
+}
+
+/* ------------------------------------------------------------ batch setup: algorithm rows */
+
+/* Reuses the settings-panel dropdown look, but spans the dialog instead of a popover. */
+.le-settings-panel.le-batch-algorithms {
+    min-width: 0;
+    max-width: none;
+    margin-bottom: 0;
+}
+
+.le-batch-algorithm-row {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.le-batch-algorithm-row .unity-base-field {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+    margin: 0 6px 0 0;
+}
+
+/* ---------------------------------------------------------------- Settings page (cloud connection) */
+
+.le-settings__row {
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-settings__label {
+    width: 150px;
+    flex-shrink: 0;
+    margin: 0;
+}
+
+.le-settings__grow {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.le-settings__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.le-settings__actions > * {
+    margin-right: 8px;
+    margin-bottom: 8px;
+}
+
+.le-settings__warn {
+    color: var(--warning);
+}
+
+.le-settings__checks {
+    margin-top: 8px;
+}
+
+.le-settings__check {
+    flex-direction: row;
+    padding: 5px 0;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-settings__check-status {
+    width: 64px;
+    flex-shrink: 0;
+    -unity-font-style: bold;
+}
+
+.le-settings__check--ok .le-settings__check-status {
+    color: var(--success);
+}
+
+.le-settings__check--warn .le-settings__check-status {
+    color: var(--warning);
+}
+
+.le-settings__check--fail .le-settings__check-status {
+    color: var(--danger);
+}
+
+.le-settings__check-name {
+    width: 130px;
+    flex-shrink: 0;
+    color: var(--text);
+}
+
+.le-settings__check-message {
+    flex-grow: 1;
+    flex-shrink: 1;
+    white-space: normal;
+    color: var(--text-2);
+}
+
+.le-settings__output {
+    margin-top: 8px;
+    padding: 8px;
+    border-radius: 6px;
+    background-color: var(--canvas);
+}
+
+.le-settings__output-line {
+    white-space: normal;
+    font-size: 11px;
+    color: var(--text-2);
+}
+
+/* A wrapping line of text with a button to its right (the footer's "Show folder", the running command's "Stop"). */
+.le-settings__footer {
+    margin-top: 4px;
+    padding: 0 2px;
+}
+
+.le-settings__row .le-settings__row-text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+    margin: 0 12px 0 0;
+    white-space: normal;
+    -unity-text-align: middle-left;
+}
+
+/* "Browse..." beside a text box: the box takes the room, the button keeps its size. */
+.le-settings__row .le-settings__browse {
+    flex-shrink: 0;
+    height: 32px;
+    margin-left: 8px;
+    padding: 0 12px;
+}
+
+/* A text button sized to its words; never squeezed by the text beside it. */
+.le-settings__inline-btn {
+    flex-shrink: 0;
+    height: 28px;
+    padding: 0 12px;
+}
+
+/* ---------------------------------------------------------------- Analysis: import campaign results */
+
+.le-import__list {
+    max-height: 340px;
+    margin-top: 8px;
+}
+
+.le-import__row {
+    align-items: center;
+}
+
+
+/* ---------------------------------------------------------------- Network workers (3.9) */
+
+.le-network__list {
+    margin-top: 6px;
+}
+
+.le-network__row {
+    flex-direction: row;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-app .le-network__row-name {
+    width: 170px;
+    flex-shrink: 0;
+    margin: 0 8px 0 0;
+    color: var(--text);
+    white-space: normal;
+}
+
+.le-app .le-network__row-text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+    margin: 0 12px 0 0;
+    white-space: normal;
+    color: var(--text-2);
+}
+
+.le-network__dot {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    margin-right: 10px;
+    border-radius: 4px;
+    background-color: var(--border-strong);
+}
+
+.le-network__dot--ok {
+    background-color: var(--success);
+}
+
+.le-network__dot--warn {
+    background-color: var(--warning);
+}
+
+.le-network__dot--fail {
+    background-color: var(--danger);
+}
+
+/* The pairing code, large enough to read across a desk. */
+.le-app .le-network__code {
+    margin: 10px 0 2px 0;
+    font-size: 26px;
+    letter-spacing: 4px;
+    -unity-font-style: bold;
+    color: var(--text);
+}
+
+/* The strip that follows a running network batch, at the bottom right of the start screen. */
+.le-netbar {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    flex-direction: row;
+    align-items: center;
+    min-height: 40px;
+    padding: 4px 6px 4px 14px;
+    border-radius: 10px;
+    background-color: #2B303A;
+    border-width: 1px;
+    border-color: var(--border-strong);
+}
+
+.le-app .le-netbar__text {
+    margin-right: 10px;
+    white-space: nowrap;
+}
+
+.le-netbar__buttons {
+    flex-direction: row;
+    align-items: center;
+}
+
+.le-netbar__buttons > * {
+    margin-left: 6px;
+}
+
+
+/* ---------------------------------------------------------------- Settings tabs */
+
+.le-tabs {
+    flex-direction: row;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 0 16px;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+    background-color: var(--surface);
+}
+
+.le-tabs__tab {
+    flex-direction: row;
+    align-items: center;
+    height: 44px;
+    margin: 0 4px;
+    padding: 0 14px;
+    border-bottom-width: 2px;
+    border-color: rgba(0, 0, 0, 0);
+    transition-property: border-color, background-color;
+    transition-duration: 120ms;
+}
+
+.le-tabs__tab:hover {
+    background-color: var(--surface-2);
+}
+
+.le-tabs__tab .le-icon {
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+    color: var(--text-3);
+}
+
+.le-app .le-tabs__label {
+    font-size: 13px;
+    -unity-font-style: bold;
+    color: var(--text-2);
+}
+
+.le-tabs__tab:hover .le-icon,
+.le-app .le-tabs__tab:hover .le-tabs__label {
+    color: var(--text);
+}
+
+.le-tabs__tab--selected {
+    border-color: var(--accent);
+}
+
+.le-tabs__tab--selected .le-icon,
+.le-app .le-tabs__tab--selected .le-tabs__label {
+    color: var(--accent-hover);
+}
+
+/* ---------------------------------------------------------------- Settings: data and storage */
+
+.le-storage__row {
+    align-items: flex-start;
+    padding: 10px 0;
+}
+
+.le-storage__names {
+    width: 170px;
+    flex-shrink: 0;
+    margin-right: 8px;
+}
+
+.le-app .le-storage__name {
+    width: auto;
+    margin: 0;
+}
+
+.le-app .le-storage__size {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--accent-hover);
+}
+
+.le-storage__texts {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+    margin-right: 12px;
+}
+
+.le-app .le-storage__path {
+    margin-bottom: 2px;
+    font-size: 12px;
+    white-space: normal;
+    color: var(--text);
+}
+
+/* ---------------------------------------------------------------- Settings: about */
+
+.le-about__hero {
+    align-items: center;
+    padding: 28px 24px 24px 24px;
+}
+
+.le-about__mark {
+    width: 56px;
+    height: 56px;
+    margin-bottom: 10px;
+    color: var(--accent);
+}
+
+.le-app .le-about__title {
+    font-size: 34px;
+    letter-spacing: 2px;
+    -unity-font-style: bold;
+    color: var(--text);
+}
+
+.le-app .le-about__subtitle {
+    margin-top: 2px;
+    font-size: 15px;
+    color: var(--accent-hover);
+}
+
+.le-app .le-about__text {
+    max-width: 480px;
+    margin-top: 14px;
+    white-space: normal;
+    -unity-text-align: middle-center;
+    color: var(--text-2);
+}
+
+.le-about__credits {
+    align-items: center;
+}
+
+.le-app .le-about__eyebrow {
+    margin-bottom: 8px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    -unity-font-style: bold;
+    color: var(--text-3);
+}
+
+.le-app .le-about__eyebrow--gap {
+    margin-top: 18px;
+}
+
+.le-about__names {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.le-app .le-about__name {
+    margin: 2px 10px;
+    font-size: 15px;
+    -unity-font-style: bold;
+    color: var(--text);
+}
+
+.le-app .le-about__place {
+    margin-top: 2px;
+    color: var(--text-2);
 }
