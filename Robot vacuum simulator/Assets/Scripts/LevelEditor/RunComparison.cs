@@ -134,8 +134,11 @@ namespace RobotVacuum.LevelEditor
         public static bool HigherIsBetter(CompareMetric metric) =>
             metric != CompareMetric.TimeTo90 && metric != CompareMetric.BatteryUsed;
 
-        /// <summary>The run's value on <paramref name="metric"/>, or null when it has none (e.g. never reached 90%).</summary>
-        public static double? Value(RunReport run, CompareMetric metric) => metric switch
+        /// <summary>
+        /// The run's value on <paramref name="metric"/>, or null when it has none: it never reached 90%, or its
+        /// algorithm failed (failed runs stay out of the statistics, as in the batch tables, 2.8).
+        /// </summary>
+        public static double? Value(RunReport run, CompareMetric metric) => !BatchStats.Succeeded(run) ? null : metric switch
         {
             CompareMetric.TimeTo90 => run.timeTo90 >= 0f ? run.timeTo90 : (double?)null,
             CompareMetric.CoveragePerMinute => run.durationSeconds > 0f ? run.CoveragePerMinute : (double?)null,
@@ -188,7 +191,7 @@ namespace RobotVacuum.LevelEditor
                     {
                         // A run that switched algorithm part-way says nothing about any one algorithm.
                         if (run.mixedPatterns) continue;
-                        Group(run.pattern.ToString(), MovementAlgorithms.LabelOf(run.pattern)).AddRun(run);
+                        Group(run.AlgorithmKey, run.AlgorithmName).AddRun(run);
                     }
                     else Group(run.id, $"{run.PatternLabel} · seed {run.seed}").AddRun(run);
                     continue;
@@ -196,18 +199,19 @@ namespace RobotVacuum.LevelEditor
 
                 var batch = source.batch;
                 var reports = batch.Reports();
-                var patterns = new List<MovementPattern>();
+                var keys = new List<string>();
                 foreach (var run in reports)
-                    if (!patterns.Contains(run.pattern)) patterns.Add(run.pattern);
+                    if (!keys.Contains(run.AlgorithmKey)) keys.Add(run.AlgorithmKey);
 
-                foreach (var pattern in patterns)
+                foreach (string key in keys)
                 {
-                    var trials = reports.FindAll(run => run.pattern == pattern);
-                    string algorithm = MovementAlgorithms.LabelOf(pattern);
+                    var trials = reports.FindAll(run => run.AlgorithmKey == key);
+                    string algorithm = trials[0].AlgorithmName;
+                    string pick = batch.IsImported ? $"{batch.SourceLabel} {batch.campaignName}" : $"Batch {batch.FinishedAt:d MMM HH:mm}";
                     var group = grouping == CompareGrouping.Algorithm
-                        ? Group(pattern.ToString(), algorithm)
-                        : Group($"{batch.batchId}/{pattern}", $"Batch {batch.FinishedAt:d MMM HH:mm} · {algorithm}");
-                    group.AddBatchRuns(trials, batch.Algorithm(pattern));
+                        ? Group(key, algorithm)
+                        : Group($"{batch.batchId}|{key}", $"{pick} · {algorithm}");
+                    group.AddBatchRuns(trials, batch.Algorithm(key));
                 }
             }
 
@@ -250,7 +254,7 @@ namespace RobotVacuum.LevelEditor
                              $"{second.label} {Format(metric, second.metric.mean)} ± {FormatSpread(metric, second.metric.ci95)}.";
 
             if (best.metric.count < 2 || second.metric.count < 2)
-                return new CompareVerdict($"{best.label} leads on {name}, from too few runs to be sure",
+                return new CompareVerdict($"{best.label} leads on {name}, from too few successful runs to be sure",
                     numbers + " With one run per group the difference could be chance. Compare batches, which run each algorithm on many seeds.", false);
 
             bool higher = HigherIsBetter(metric);
@@ -276,17 +280,22 @@ namespace RobotVacuum.LevelEditor
 
             var vacuums = new HashSet<string>();
             var cells = new HashSet<string>();
+            var configurations = new HashSet<string>();
             int mixed = 0;
             foreach (var source in sources)
             {
                 var v = source.Vacuum;
                 if (v != null) vacuums.Add($"{v.driveSpeed:0.###}/{v.reverseSpeed:0.###}/{v.turnSpeed:0}/{v.batteryCapacity:0}");
                 if (source.CellSize > 0f) cells.Add($"{source.CellSize:0.####}");
+                string configuration = source.single != null ? source.single.configuration : source.batch.configuration;
+                if (!string.IsNullOrEmpty(configuration)) configurations.Add(configuration);
                 if (source.single != null && source.single.mixedPatterns) mixed++;
             }
 
             if (vacuums.Count > 1)
                 caveats.Add("The vacuum's speed or battery settings differ between these runs.");
+            if (configurations.Count > 1)
+                caveats.Add($"These runs come from {configurations.Count} different campaign configurations.");
             if (cells.Count > 1)
                 caveats.Add("The coverage grid cell size differs between these runs.");
             if (mixed > 0 && grouping == CompareGrouping.Algorithm)

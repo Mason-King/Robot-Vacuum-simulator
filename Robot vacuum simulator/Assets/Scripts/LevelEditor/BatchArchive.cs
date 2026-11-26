@@ -18,6 +18,8 @@ namespace RobotVacuum.LevelEditor
         public string runId;
         public string dataFolder;
         public MovementPattern pattern;
+        public string algorithmId;
+        public string algorithmName;
         public int seed;
         public int trial;
         public string endReason;
@@ -47,6 +49,8 @@ namespace RobotVacuum.LevelEditor
             runId = run.id,
             dataFolder = run.dataFolder,
             pattern = run.pattern,
+            algorithmId = run.AlgorithmKey,
+            algorithmName = run.AlgorithmName,
             seed = run.seed,
             trial = run.trial,
             endReason = run.endReason,
@@ -74,10 +78,15 @@ namespace RobotVacuum.LevelEditor
     [Serializable]
     public sealed class BatchAlgorithm
     {
-        public MovementPattern pattern;
+        /// <summary>The algorithm's <see cref="RunReport.AlgorithmKey"/>.</summary>
+        public string algorithmId;
+        public string name;
         public int runs;
 
-        /// <summary>Mean coverage percent at evenly spaced times from 0 to <see cref="curveDuration"/>.</summary>
+        /// <summary>
+        /// Mean coverage percent at evenly spaced times from 0 to <see cref="curveDuration"/>, over the trials that
+        /// recorded a timeline. Empty when none did (runs imported from their numbers alone).
+        /// </summary>
         public List<float> curve = new List<float>();
         public float curveDuration;
 
@@ -113,6 +122,11 @@ namespace RobotVacuum.LevelEditor
         public bool headless;
         public VacuumSettings vacuum;
         public float cellSize;
+
+        /// <summary>For a campaign imported from the cloud or headless runs (see <see cref="RunReport.source"/>); empty otherwise.</summary>
+        public string source;
+        public string campaignName;
+        public string configuration;
 
         public List<string> roomNames = new List<string>();
         public List<float> roomArea = new List<float>();
@@ -150,7 +164,15 @@ namespace RobotVacuum.LevelEditor
             }
         }
 
-        public BatchAlgorithm Algorithm(MovementPattern pattern) => algorithms.Find(a => a.pattern == pattern);
+        public BatchAlgorithm Algorithm(string algorithmId) => algorithms.Find(a => a.algorithmId == algorithmId);
+
+        public bool IsImported => !string.IsNullOrEmpty(source);
+
+        /// <summary>"Cloud", "Headless" or "Network" for an imported campaign; empty otherwise.</summary>
+        public string SourceLabel => source == "cloud" ? "Cloud" : source == "headless" ? "Headless" : source == "network" ? "Network" : string.Empty;
+
+        /// <summary>The batch's name in lists: the campaign for an imported one, else the floor plan.</summary>
+        public string Title => IsImported ? $"{SourceLabel} · {campaignName}" : $"Batch · {levelName}";
 
         /// <summary>
         /// The trials as run reports, for the statistics and tables that work on reports. They carry the
@@ -176,6 +198,11 @@ namespace RobotVacuum.LevelEditor
                     vacuum = vacuum,
                     cellSize = cellSize,
                     pattern = t.pattern,
+                    algorithmId = t.algorithmId,
+                    algorithmName = t.algorithmName,
+                    source = source,
+                    campaignName = campaignName,
+                    configuration = configuration,
                     seed = t.seed,
                     trial = t.trial,
                     endReason = t.endReason,
@@ -212,7 +239,19 @@ namespace RobotVacuum.LevelEditor
 
         public static string DefaultFolder => Path.Combine(Application.persistentDataPath, "Batches");
 
-        static string PathFor(string folder, string batchId) => Path.Combine(folder, batchId + ".json");
+        static string PathFor(string folder, string batchId) => Path.Combine(folder, FileNameFor(batchId) + ".json");
+
+        /// <summary>
+        /// A batch id as a file name. Imported campaigns' ids hold slashes (campaign/floor plan/configuration), so
+        /// anything a file name can't have becomes an underscore; the real id is kept inside the file.
+        /// </summary>
+        public static string FileNameFor(string batchId)
+        {
+            var name = new StringBuilder(batchId.Length);
+            var invalid = Path.GetInvalidFileNameChars();
+            foreach (char c in batchId) name.Append(c == '/' || c == '\\' || Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+            return name.ToString();
+        }
 
         /// <summary>Condenses a batch's finished trials into one result: compact trials plus per-algorithm averages.</summary>
         public static BatchResult Build(string batchId, IReadOnlyList<RunReport> runs)
@@ -231,6 +270,9 @@ namespace RobotVacuum.LevelEditor
             result.headless = first.headless;
             result.vacuum = first.vacuum;
             result.cellSize = first.cellSize;
+            result.source = first.source;
+            result.campaignName = first.campaignName;
+            result.configuration = first.configuration;
 
             var withRooms = new List<RunReport>(runs).Find(r => r.HasRoomEnergy);
             if (withRooms != null)
@@ -255,8 +297,12 @@ namespace RobotVacuum.LevelEditor
 
             foreach (var summary in BatchStats.Summarise(runs))
             {
-                var algorithm = new BatchAlgorithm { pattern = summary.pattern, runs = summary.runs.Count };
-                algorithm.curve.AddRange(BatchStats.AverageCurve(summary.runs, CurvePoints, out algorithm.curveDuration));
+                var algorithm = new BatchAlgorithm { algorithmId = summary.algorithmId, name = summary.name, runs = summary.runs.Count };
+
+                // Only trials that recorded a timeline: one imported from its numbers alone would count its final
+                // coverage from the first second.
+                var timed = summary.runs.FindAll(r => r.coverageSamples != null && r.coverageSamples.Count > 0);
+                if (timed.Count > 0) algorithm.curve.AddRange(BatchStats.AverageCurve(timed, CurvePoints, out algorithm.curveDuration));
 
                 var map = BatchStats.AverageMap(summary.runs, out var shape);
                 if (map != null)
@@ -276,7 +322,10 @@ namespace RobotVacuum.LevelEditor
             return result;
         }
 
-        /// <summary>Writes the batch's file, and a CSV of its trials beside it for spreadsheets.</summary>
+        /// <summary>
+        /// Writes the batch's file, and beside it a CSV of every trial and the per-algorithm statistics, in the same
+        /// columns as vacuumctl's campaign_runs.csv (<see cref="BatchStats.ToCsv"/>).
+        /// </summary>
         public static void Save(BatchResult batch, string folder = null)
         {
             folder ??= DefaultFolder;
@@ -288,7 +337,7 @@ namespace RobotVacuum.LevelEditor
             if (File.Exists(path)) File.Delete(path);
             File.Move(temp, path);
 
-            try { File.WriteAllText(Path.Combine(folder, batch.batchId + ".csv"), TrialsCsv(batch), Encoding.UTF8); }
+            try { File.WriteAllText(Path.Combine(folder, FileNameFor(batch.batchId) + ".csv"), BatchStats.ToCsv(batch.Reports()), Encoding.UTF8); }
             catch (Exception exception) { Debug.LogWarning($"Batch archive: could not write the CSV: {exception.Message}"); }
         }
 
@@ -343,7 +392,7 @@ namespace RobotVacuum.LevelEditor
             catch (Exception) { }
 
             File.Delete(path);
-            string csv = Path.Combine(folder, batchId + ".csv");
+            string csv = Path.Combine(folder, FileNameFor(batchId) + ".csv");
             if (File.Exists(csv)) File.Delete(csv);
 
             if (batch == null) return;
@@ -365,26 +414,10 @@ namespace RobotVacuum.LevelEditor
             foreach (var batch in LoadAll(folder)) Delete(batch.batchId, folder);
         }
 
-        /// <summary>One row per trial, for spreadsheets and plotting tools.</summary>
-        public static string TrialsCsv(BatchResult batch)
-        {
-            var csv = new StringBuilder("algorithm,seed,trial,end_reason,coverage_pct,duration_s,battery_used,battery_emptied,distance_m,revisits,time_to_50_s,time_to_75_s,time_to_90_s,run_id\n");
-            foreach (var t in batch.trials)
-            {
-                csv.Append(MovementAlgorithms.LabelOf(t.pattern)).Append(',').Append(t.seed).Append(',').Append(t.trial).Append(',')
-                    .Append((t.endReason ?? string.Empty).Replace(',', ' ')).Append(',')
-                    .Append(F(t.coveragePercent)).Append(',').Append(F(t.durationSeconds)).Append(',')
-                    .Append(F(t.batteryUsed)).Append(',').Append(t.batteryEmptied ? 1 : 0).Append(',')
-                    .Append(F(t.distanceMeters)).Append(',').Append(t.revisitCount).Append(',')
-                    .Append(F(t.timeTo50)).Append(',').Append(F(t.timeTo75)).Append(',').Append(F(t.timeTo90)).Append(',')
-                    .Append(t.runId).Append('\n');
-            }
-            return csv.ToString();
-        }
-
         /// <summary>
-        /// Moves batch trials an older version stored as full reports in the run history into batch files,
-        /// and takes them out of the history. Their data folders are kept.
+        /// Moves batch trials stored as full reports in the run history into batch files, and takes them out of the
+        /// history; their data folders are kept. That covers batches recorded by older versions and campaigns
+        /// brought in by <see cref="CampaignImport"/>, which imports into the history.
         /// </summary>
         static void MigrateLegacy()
         {
@@ -408,7 +441,5 @@ namespace RobotVacuum.LevelEditor
                 Debug.LogWarning($"Batch archive: could not move older batches out of the run history: {exception.Message}");
             }
         }
-
-        static string F(float value) => value.ToString("0.####", CultureInfo.InvariantCulture);
     }
 }

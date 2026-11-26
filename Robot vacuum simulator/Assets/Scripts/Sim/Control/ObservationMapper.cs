@@ -381,6 +381,35 @@ namespace RobotVacuum.Sim.Control
         /// cleaning is credited. Updating only the cell under the sensor left nearly every cell at the default 1.0,
         /// so on easier floors (0.7–0.8) the robot credited itself 25–40% less cleaning than it did and cleaned on.
         /// </summary>
+        public void ApplyFootprint(RobotPose pose, VacuumShape shape, float dt, float vacuumPower)
+        {
+            if (shape.IsRound)
+            {
+                ApplyFootprint(pose, shape.halfWidth, dt, vacuumPower);
+                return;
+            }
+
+            // A D-shaped or rectangular body (3.3): the same rules over the cells inside its outline at the BELIEVED
+            // heading. "Well inside" is at least one cell in from the edge, as for the disc.
+            var grid = writer.Grid;
+            Vector2 p = pose.position;
+            float reach = shape.TurnRadius;
+
+            if (!grid.TryWorldToGridIndex(p - new Vector2(reach, reach), out int minRow, out int minCol)) return;
+            if (!grid.TryWorldToGridIndex(p + new Vector2(reach, reach), out int maxRow, out int maxCol)) return;
+
+            for (int row = minRow; row <= maxRow; row++)
+            {
+                for (int col = minCol; col <= maxCol; col++)
+                {
+                    float edge = shape.SignedDistance(VacuumShape.ToLocal(grid.GridIndexToWorldCenter(row, col) - p, pose.heading));
+                    if (edge > 0f) continue;
+                    CreditFootprintCell(row, col, edge <= -cellSize, dt, vacuumPower);
+                }
+            }
+        }
+
+        /// <summary>The round body's footprint (see the shape overload above).</summary>
         public void ApplyFootprint(RobotPose pose, float radius, float dt, float vacuumPower)
         {
             var grid = writer.Grid;
@@ -399,21 +428,26 @@ namespace RobotVacuum.Sim.Control
                 {
                     float distanceSq = (grid.GridIndexToWorldCenter(row, col) - p).sqrMagnitude;
                     if (distanceSq > coverRadiusSq) continue;
-
-                    if (distanceSq <= solidSq)
-                    {
-                        if (writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
-                            writer.SetTraversability(row, col, writer.EaseAt(row, col));
-                    }
-
-                    if (slam && sensedResistance.HasValue)
-                        writer.SetVacuumResistance(row, col, BeliefRules.Step(writer.Get(row, col).vacuumResistanceBelief,
-                            sensedResistance.Value, C.FloorSensorAlpha, 0f, 0f, snapToZero: false));
-
-                    float resistance = Mathf.Max(0.01f, writer.Get(row, col).vacuumResistanceBelief);
-                    writer.AddDwellAndCleanliness(row, col, dt, dt * vacuumPower / resistance);
+                    CreditFootprintCell(row, col, distanceSq <= solidSq, dt, vacuumPower);
                 }
             }
+        }
+
+        /// <summary>One footprint cell: unblock it if it is well inside the body, then the floor belief and the cleaning credit.</summary>
+        void CreditFootprintCell(int row, int col, bool wellInside, float dt, float vacuumPower)
+        {
+            if (wellInside)
+            {
+                if (writer.Traversability(row, col) <= 0f && !writer.IsPermanent(row, col))
+                    writer.SetTraversability(row, col, writer.EaseAt(row, col));
+            }
+
+            if (slam && sensedResistance.HasValue)
+                writer.SetVacuumResistance(row, col, BeliefRules.Step(writer.Get(row, col).vacuumResistanceBelief,
+                    sensedResistance.Value, C.FloorSensorAlpha, 0f, 0f, snapToZero: false));
+
+            float resistance = Mathf.Max(0.01f, writer.Get(row, col).vacuumResistanceBelief);
+            writer.AddDwellAndCleanliness(row, col, dt, dt * vacuumPower / resistance);
         }
     }
 }

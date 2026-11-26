@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "campaignName": "slam and custom algorithm",
+  "description": "Normal vs SLAM sensing, with the built-in Boustrophedon Sweep and a custom algorithm carried as source (algorithmFiles). 2 configurations x 3 algorithms x 5 seeds = 30 runs.",
+
+  "floorPlans": [ { "file": "floorplans/two-rooms.json" } ],
+
+  "algorithmFiles": [ "algorithms/LongStraights.cs" ],
+
+  "configurations": [
+    {
+      "name": "normal",
+      "simulation": { "maxSimulatedSeconds": 900 }
+    },
+    {
+      "name": "slam-budget-lidar",
+      "simulation": { "maxSimulatedSeconds": 900 },
+      "sensing": {
+        "slam": true,
+        "noiseScale": 1.0,
+        "lidarRangeMeters": 6,
+        "lidarHalfAngleDegrees": 135,
+        "lidarRayCount": 180,
+        "slamCorrectionQuality": "Balanced",
+        "slamLoopClosure": true
+      }
+    }
+  ],
+
+  "sweep": {
+    "algorithms": [ "RandomBounce", "BoustrophedonSweep", "CampaignAlgorithms.LongStraights" ],
+    "seedStart": 1,
+    "seedCount": 5
+  },
+
+  "execution": { "shardCount": 4, "saveExternalModel": false }
+}

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using RobotVacuum.Sim;
 using UnityEngine;
 
@@ -25,6 +27,10 @@ namespace RobotVacuum.LevelEditor
 
         public double StandardDeviation => Math.Sqrt(variance);
 
+        /// <summary>The 95% confidence interval of the mean: mean − ci95 to mean + ci95.</summary>
+        public double Low => mean - ci95;
+        public double High => mean + ci95;
+
         public static Summary Of(IReadOnlyList<double> values)
         {
             int n = values?.Count ?? 0;
@@ -44,14 +50,27 @@ namespace RobotVacuum.LevelEditor
         }
     }
 
-    /// <summary>One algorithm's results across a batch's seeds, or any other group of runs being compared.</summary>
+    /// <summary>
+    /// One algorithm's results across a batch's seeds, or any other group of runs being compared.
+    /// <see cref="runs"/> holds every trial, failed ones included, so each can be opened; the statistics use only
+    /// the trials that succeeded (<see cref="succeeded"/>), the same rule as the cloud's campaign_results.json, so
+    /// both report the same numbers for the same runs (2.8).
+    /// </summary>
     public sealed class AlgorithmSummary
     {
-        public MovementPattern pattern;
+        /// <summary>The algorithm's <see cref="RunReport.AlgorithmKey"/>; runs are grouped by it.</summary>
+        public string algorithmId;
 
-        /// <summary>A name for a group that isn't simply one algorithm; null shows the algorithm's name.</summary>
-        public string label;
+        /// <summary>The algorithm's name, or the group's when it isn't simply one algorithm.</summary>
+        public string name;
+        public MovementPattern pattern;
         public List<RunReport> runs = new List<RunReport>();
+
+        /// <summary>The trials the statistics are computed from: those whose algorithm didn't fail.</summary>
+        public List<RunReport> succeeded = new List<RunReport>();
+
+        /// <summary>Trials left out of the statistics because the algorithm failed.</summary>
+        public int failed;
         public Summary coverage;
         public Summary seconds;
         public Summary batteryUsed;
@@ -59,7 +78,7 @@ namespace RobotVacuum.LevelEditor
         public Summary revisits;
         public Summary timeTo90;
 
-        public string Label => label ?? MovementAlgorithms.LabelOf(pattern);
+        public string Label => name;
     }
 
     /// <summary>Aggregates batch results: per-algorithm statistics, averaged coverage curves and heatmaps.</summary>
@@ -85,15 +104,16 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Per-algorithm statistics for one batch's runs, best mean coverage first.</summary>
         public static List<AlgorithmSummary> Summarise(IEnumerable<RunReport> runs)
         {
-            var byPattern = new Dictionary<MovementPattern, AlgorithmSummary>();
+            var byAlgorithm = new Dictionary<string, AlgorithmSummary>();
             foreach (var run in runs)
             {
-                if (!byPattern.TryGetValue(run.pattern, out var group))
-                    byPattern[run.pattern] = group = new AlgorithmSummary { pattern = run.pattern };
+                string key = run.AlgorithmKey;
+                if (!byAlgorithm.TryGetValue(key, out var group))
+                    byAlgorithm[key] = group = new AlgorithmSummary { algorithmId = key, name = run.AlgorithmName, pattern = run.pattern };
                 group.runs.Add(run);
             }
 
-            var result = new List<AlgorithmSummary>(byPattern.Values);
+            var result = new List<AlgorithmSummary>(byAlgorithm.Values);
             foreach (var group in result) Fill(group);
 
             result.Sort((a, b) => b.coverage.mean.CompareTo(a.coverage.mean));
@@ -103,9 +123,13 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Statistics for any group of runs, named <paramref name="label"/>.</summary>
         public static AlgorithmSummary SummariseGroup(string label, IEnumerable<RunReport> runs)
         {
-            var group = new AlgorithmSummary { label = label };
+            var group = new AlgorithmSummary { name = label };
             group.runs.AddRange(runs);
-            if (group.runs.Count > 0) group.pattern = group.runs[0].pattern;
+            if (group.runs.Count > 0)
+            {
+                group.algorithmId = group.runs[0].AlgorithmKey;
+                group.pattern = group.runs[0].pattern;
+            }
             Fill(group);
             return group;
         }
@@ -113,13 +137,64 @@ namespace RobotVacuum.LevelEditor
         static void Fill(AlgorithmSummary group)
         {
             group.runs.Sort((a, b) => a.seed.CompareTo(b.seed));
-            group.coverage = Summary.Of(group.runs.ConvertAll(r => (double)r.coveragePercent));
-            group.seconds = Summary.Of(group.runs.ConvertAll(r => (double)r.durationSeconds));
-            group.batteryUsed = Summary.Of(group.runs.ConvertAll(r => (double)r.batteryUsed));
-            group.distance = Summary.Of(group.runs.ConvertAll(r => (double)r.distanceMeters));
-            group.revisits = Summary.Of(group.runs.ConvertAll(r => (double)r.revisitCount));
-            var reached = group.runs.FindAll(r => r.timeTo90 >= 0f);
+            group.succeeded = group.runs.FindAll(Succeeded);
+            group.failed = group.runs.Count - group.succeeded.Count;
+            var good = group.succeeded;
+            group.coverage = Summary.Of(good.ConvertAll(r => (double)r.coveragePercent));
+            group.seconds = Summary.Of(good.ConvertAll(r => (double)r.durationSeconds));
+            group.batteryUsed = Summary.Of(good.ConvertAll(r => (double)r.batteryUsed));
+            group.distance = Summary.Of(good.ConvertAll(r => (double)r.distanceMeters));
+            group.revisits = Summary.Of(good.ConvertAll(r => (double)r.revisitCount));
+            var reached = good.FindAll(r => r.timeTo90 >= 0f);
             group.timeTo90 = Summary.Of(reached.ConvertAll(r => (double)r.timeTo90));
+        }
+
+        /// <summary>True for a run whose algorithm didn't fail; only these count toward the statistics.</summary>
+        public static bool Succeeded(RunReport run) => run != null && string.IsNullOrEmpty(run.failure);
+
+        /// <summary>
+        /// A batch as CSV, for checking the statistics by hand (AT-2.8-2) or analysing them elsewhere (2.19): one
+        /// "run" row per trial, then one "summary" row per algorithm and measure (coverage, time, battery) with the
+        /// count, mean, sample variance, standard deviation and the 95% confidence interval. Same columns as the
+        /// campaign_runs.csv vacuumctl writes. Invariant culture, so it opens the same in any locale.
+        /// </summary>
+        public static string ToCsv(IEnumerable<RunReport> runs)
+        {
+            var list = new List<RunReport>(runs);
+            var summaries = Summarise(list);
+            var csv = new StringBuilder();
+            csv.AppendLine("section,algorithm,seed,succeeded,coverage_percent,time_s,battery_used,distance_m,revisits,time_to_90_s,floor_plan,configuration,end_reason");
+            foreach (var summary in summaries)
+                foreach (var run in summary.runs)
+                    csv.AppendLine(string.Join(",", "run", Field(summary.name), Num(run.seed), Succeeded(run) ? "true" : "false",
+                        Num(run.coveragePercent), Num(run.durationSeconds), Num(run.batteryUsed), Num(run.distanceMeters),
+                        Num(run.revisitCount), run.timeTo90 >= 0f ? Num(run.timeTo90) : string.Empty, Field(run.levelName),
+                        Field(run.configuration), Field(run.endReason)));
+
+            csv.AppendLine();
+            csv.AppendLine("section,algorithm,measure,n,mean,variance,sd,ci95_half_width,ci95_low,ci95_high,t_critical,floor_plan,configuration");
+            foreach (var summary in summaries)
+            {
+                var first = summary.runs[0];
+                AppendSummary(csv, summary.name, "coverage_percent", summary.coverage, first);
+                AppendSummary(csv, summary.name, "time_s", summary.seconds, first);
+                AppendSummary(csv, summary.name, "battery_used", summary.batteryUsed, first);
+            }
+            return csv.ToString();
+        }
+
+        static void AppendSummary(StringBuilder csv, string algorithm, string measure, Summary s, RunReport first) =>
+            csv.AppendLine(string.Join(",", "summary", Field(algorithm), measure, Num(s.count), Num(s.mean), Num(s.variance),
+                Num(s.StandardDeviation), Num(s.ci95), Num(s.Low), Num(s.High), Num(TCritical95(s.count - 1)),
+                Field(first.levelName), Field(first.configuration)));
+
+        static string Num(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+        static string Num(long value) => value.ToString(CultureInfo.InvariantCulture);
+
+        static string Field(string text)
+        {
+            text ??= string.Empty;
+            return text.IndexOfAny(new[] { ',', '"', '\n', '\r' }) < 0 ? text : "\"" + text.Replace("\"", "\"\"") + "\"";
         }
 
         /// <summary>

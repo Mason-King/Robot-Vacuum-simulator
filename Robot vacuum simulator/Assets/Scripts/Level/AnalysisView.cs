@@ -15,7 +15,8 @@ namespace RobotVacuum.LevelEditor
     /// coverage and the log of settings changed mid-run. A batch shows each algorithm's mean, variance and
     /// 95% confidence interval on identical seeds, an averaged heatmap and an averaged coverage curve. The
     /// comparison pools the picked runs per algorithm (or keeps each pick apart), ranks them on a chosen
-    /// metric and says whether the leader is clearly best.
+    /// metric and says whether the leader is clearly best. Cloud and local headless campaigns are brought in with
+    /// Import results (<see cref="CampaignImport"/>) and shown, and compared, the same way as batches.
     /// </summary>
     public sealed class AnalysisView : VisualElement
     {
@@ -28,7 +29,7 @@ namespace RobotVacuum.LevelEditor
         List<BatchResult> batches = new List<BatchResult>();
         RunReport selectedRun;
         BatchResult selectedBatch;
-        MovementPattern batchPattern;
+        string batchAlgorithm;
 
         // Runs and batches picked for comparison, by id, and how the comparison is shown.
         readonly HashSet<string> picked = new HashSet<string>();
@@ -54,6 +55,8 @@ namespace RobotVacuum.LevelEditor
             var folder = Ui.Button(header, "Data folder", IconKind.Save,
                 () => FloorPlanFiles.Reveal(Application.persistentDataPath), "le-btn--ghost");
             Ui.Tooltip(folder, "Open the folder holding every run's telemetry CSVs and replays, and each batch's results file and CSV");
+            var import = Ui.Button(header, "Import results", IconKind.Plus, () => CampaignImportView.Show(overlay, Reload), "le-btn--ghost");
+            Ui.Tooltip(import, "Bring in a cloud campaign fetched with vacuumctl, or a local headless campaign");
             clearButton = Ui.Button(header, "Clear history", IconKind.Trash, ConfirmClear, "le-btn--ghost");
             Ui.Button(header, "Start simulation", IconKind.Play, () => SimulateRequested?.Invoke(), "le-btn--primary");
 
@@ -109,8 +112,8 @@ namespace RobotVacuum.LevelEditor
         {
             selectedBatch = batch;
             selectedRun = null;
-            if (batch.algorithms.Count > 0 && batch.Algorithm(batchPattern) == null)
-                batchPattern = BatchStats.Summarise(batch.Reports())[0].pattern;
+            if (batch.algorithms.Count > 0 && batch.Algorithm(batchAlgorithm) == null)
+                batchAlgorithm = BatchStats.Summarise(batch.Reports())[0].algorithmId;
         }
 
         void Rebuild()
@@ -124,7 +127,8 @@ namespace RobotVacuum.LevelEditor
                 icon.AddToClassList("le-empty__icon");
                 empty.Add(icon);
                 Ui.Text(empty, "No runs yet", "le-empty__title");
-                Ui.Text(empty, "Run a floor plan in the simulator and press Finish, or start a batch experiment from a floor plan's card. Results land here.",
+                Ui.Text(empty, "Run a floor plan in the simulator and press Finish, start a batch experiment from a floor plan's card, " +
+                               "or import a cloud or headless campaign with Import results. Results land here.",
                     "le-empty__text");
                 Ui.Button(Ui.Div(empty, "le-empty__actions"), "Start simulation", IconKind.Play,
                     () => SimulateRequested?.Invoke(), "le-btn--primary");
@@ -264,8 +268,9 @@ namespace RobotVacuum.LevelEditor
 
             var summaries = BatchStats.Summarise(batch.Reports());
             var text = Ui.Div(row, "le-run-row__text");
-            Ui.Text(text, $"Batch · {batch.levelName}", "le-run-row__title");
-            Ui.Text(text, $"{summaries.Count} algorithm(s) · {batch.trials.Count} runs · {FormatWhen(batch.FinishedAt)}", "le-run-row__meta");
+            Ui.Text(text, batch.Title, "le-run-row__title");
+            Ui.Text(text, (batch.IsImported ? $"{batch.levelName} · {batch.configuration} · " : string.Empty) +
+                          $"{summaries.Count} algorithm(s) · {batch.trials.Count} runs · {FormatWhen(batch.FinishedAt)}", "le-run-row__meta");
             if (summaries.Count > 0)
                 Ui.Text(row, $"{summaries[0].coverage.mean:0.0}%",
                     $"le-run-row__value le-tone-text--{CoverageTone((float)summaries[0].coverage.mean)}");
@@ -407,17 +412,10 @@ namespace RobotVacuum.LevelEditor
 
                 var fill = Ui.Div(track, i == 0 ? "le-compare-row__fill le-compare-row__fill--best" : "le-compare-row__fill");
                 fill.style.width = Length.Percent(Mathf.Clamp((float)(group.metric.mean / scale * 100), 0f, 100f));
-                if (group.metric.count > 1)
-                {
-                    var whisker = Ui.Div(track, "le-compare-row__ci");
-                    float low = Mathf.Clamp((float)((group.metric.mean - group.metric.ci95) / scale * 100), 0f, 100f);
-                    float high = Mathf.Clamp((float)((group.metric.mean + group.metric.ci95) / scale * 100), 0f, 100f);
-                    whisker.style.left = Length.Percent(low);
-                    whisker.style.width = Length.Percent(Mathf.Max(0.4f, high - low));
-                }
+                if (HasInterval(group.metric)) ErrorBar(track, group.metric.Low, group.metric.High, scale);
 
                 Ui.Text(row, RunComparison.Format(compareMetric, group.metric.mean), "le-compare-row__value");
-                string spread = group.metric.count > 1 ? $"± {RunComparison.FormatSpread(compareMetric, group.metric.ci95)} · " : string.Empty;
+                string spread = HasInterval(group.metric) ? $"± {RunComparison.FormatSpread(compareMetric, group.metric.ci95)} · " : string.Empty;
                 string counted = group.metric.count < group.runs.Count ? $"{group.metric.count} of {group.runs.Count} runs" : $"{group.runs.Count} run(s)";
                 Ui.Text(row, spread + counted, "le-compare-row__meta le-compare-row__meta--wide");
             }
@@ -438,9 +436,18 @@ namespace RobotVacuum.LevelEditor
             var panel = Ui.Div(column, "le-panel");
             var header = Ui.Div(panel, "le-panel__header");
             var titles = Ui.Div(header, "le-panel__titles");
-            Ui.Text(titles, $"Batch experiment · {batch.levelName}", "le-panel__title");
-            Ui.Text(titles, $"{batch.FinishedAt:d MMM yyyy, HH:mm} · {members.Count} runs · seeds {batch.MinSeed}–{batch.MaxSeed}" +
-                            (batch.headless ? " · headless" : string.Empty), "le-panel__text");
+            if (batch.IsImported)
+            {
+                Ui.Text(titles, $"{batch.SourceLabel} campaign · {batch.campaignName}", "le-panel__title");
+                Ui.Text(titles, $"{batch.levelName} · configuration {batch.configuration} · {batch.FinishedAt:d MMM yyyy, HH:mm} · " +
+                                $"{members.Count} runs · seeds {batch.MinSeed}–{batch.MaxSeed}", "le-panel__text");
+            }
+            else
+            {
+                Ui.Text(titles, $"Batch experiment · {batch.levelName}", "le-panel__title");
+                Ui.Text(titles, $"{batch.FinishedAt:d MMM yyyy, HH:mm} · {members.Count} runs · seeds {batch.MinSeed}–{batch.MaxSeed}" +
+                                (batch.headless ? " · headless" : string.Empty), "le-panel__text");
+            }
 
             var compare = Ui.Button(header, "Compare", IconKind.Chart, () =>
             {
@@ -454,47 +461,53 @@ namespace RobotVacuum.LevelEditor
             if (!string.IsNullOrEmpty(batch.levelPath) && File.Exists(batch.levelPath))
                 Ui.IconButton(header, IconKind.Pen, "Open in level editor", () => EditRequested?.Invoke(batch.levelPath),
                     "le-btn--ghost le-btn--small");
+            Ui.IconButton(header, IconKind.Save, "Export every trial and the statistics as CSV, to check or analyse them elsewhere",
+                () => ExportCsv(batch), "le-btn--ghost le-btn--small");
             Ui.IconButton(header, IconKind.Trash, "Delete this batch", () => ConfirmDeleteBatch(batch),
                 "le-btn--ghost le-btn--small");
 
-            Ui.Text(panel, "ALGORITHMS ON IDENTICAL SEEDS · MEAN ± 95% CONFIDENCE INTERVAL", "le-section__title");
+            Ui.Text(panel, "PER-ALGORITHM STATISTICS · IDENTICAL SEEDS", "le-section__title");
             BuildStatsTable(panel, summaries);
 
-            // Coverage bars with the confidence interval as a whisker, so overlaps read at a glance.
+            // Coverage bars with the confidence interval as an error bar (|—|), so overlaps read at a glance. No error bar
+            // when there is no interval: one run, or every run identical (a deterministic algorithm on fixed seeds).
             Ui.Text(panel, "COVERAGE", "le-section__title le-analysis__chart-title");
             foreach (var summary in summaries)
             {
                 var row = Ui.Div(panel, "le-compare-row");
-                Ui.Text(row, summary.Label, "le-compare-row__label");
+                var name = Ui.Text(row, summary.Label, "le-compare-row__label");
+                Ui.Tooltip(name, summary.Label);
                 var track = Ui.Div(row, "le-compare-row__track le-compare-row__track--ci");
                 var fill = Ui.Div(track, "le-compare-row__fill");
-                fill.style.width = Length.Percent(Mathf.Clamp((float)summary.coverage.mean, 0f, 100f));
-                var whisker = Ui.Div(track, "le-compare-row__ci");
-                float low = Mathf.Clamp((float)(summary.coverage.mean - summary.coverage.ci95), 0f, 100f);
-                float high = Mathf.Clamp((float)(summary.coverage.mean + summary.coverage.ci95), 0f, 100f);
-                whisker.style.left = Length.Percent(low);
-                whisker.style.width = Length.Percent(Mathf.Max(0.4f, high - low));
-                Ui.Text(row, $"{summary.coverage.mean:0.0}%", "le-compare-row__value");
+                double mean = summary.coverage.mean, ci = summary.coverage.ci95;
+                fill.style.width = Length.Percent(Mathf.Clamp((float)mean, 0f, 100f));
+
+                bool hasInterval = HasInterval(summary.coverage) && ci >= 0.05;
+                if (hasInterval) ErrorBar(track, mean - ci, mean + ci, 100);
+
+                Ui.Text(row, hasInterval ? $"{mean:0.0}% ± {ci:0.0}" : $"{mean:0.0}%", "le-compare-row__value le-compare-row__value--ci");
             }
+            Ui.Text(panel, "Bar: mean coverage. |—|: its 95% confidence interval (none when every run came out the same). Few seeds give wide intervals.",
+                "le-empty-hint le-analysis__chart-note");
 
             // Averaged heatmap and coverage curve for one algorithm at a time.
             var mapPanel = Ui.Div(column, "le-panel");
             var mapHeader = Ui.Div(mapPanel, "le-panel__header");
             var mapTitles = Ui.Div(mapHeader, "le-panel__titles");
             Ui.Text(mapTitles, "Averaged across seeds", "le-panel__title");
-            var chosen = summaries.Find(s => s.pattern == batchPattern) ?? summaries[0];
+            var chosen = summaries.Find(s => s.algorithmId == batchAlgorithm) ?? summaries[0];
             Ui.Text(mapTitles, $"{chosen.Label}: mean coverage map and curve over {chosen.runs.Count} runs", "le-panel__text");
 
             var labels = summaries.ConvertAll(s => s.Label).ToArray();
             var picker = new Segmented(labels, summaries.IndexOf(chosen));
             picker.SelectionChanged += index =>
             {
-                batchPattern = summaries[index].pattern;
+                batchAlgorithm = summaries[index].algorithmId;
                 Rebuild();
             };
             mapPanel.Add(picker);
 
-            var averages = batch.Algorithm(chosen.pattern);
+            var averages = batch.Algorithm(chosen.algorithmId);
             var level = LoadLevelFor(chosen.runs);
             var map = averages != null ? BatchStats.DecodeMap(averages.map, batch.mapWidth * batch.mapHeight) : null;
             if (level != null && map != null)
@@ -508,7 +521,8 @@ namespace RobotVacuum.LevelEditor
             else Ui.Text(mapPanel, "No coverage maps were saved for these runs.", "le-empty-hint");
 
             Ui.Text(mapPanel, "MEAN COVERAGE OVER TIME", "le-section__title le-analysis__chart-title");
-            if (averages != null) mapPanel.Add(new CoverageChart(averages.curve, averages.curveDuration));
+            if (averages != null && averages.curve.Count > 1) mapPanel.Add(new CoverageChart(averages.curve, averages.curveDuration));
+            else Ui.Text(mapPanel, "These runs were imported without their coverage timelines.", "le-empty-hint");
 
             BuildBatchRoomTable(column, chosen);
 
@@ -538,38 +552,109 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            if (string.IsNullOrEmpty(full.batchId)) full.batchId = trial.batchId;
+            // The batch's record of what was run wins: an imported trial's own summary.json predates the import.
+            full.id = trial.id;
+            full.batchId = trial.batchId;
+            full.algorithmId = trial.algorithmId;
+            full.algorithmName = trial.algorithmName;
+            full.seed = trial.seed;
+            full.failure = trial.failure;
+            full.source = trial.source;
+            full.campaignName = trial.campaignName;
+            full.configuration = trial.configuration;
+            if (string.IsNullOrEmpty(full.levelName)) full.levelName = trial.levelName;
             selectedRun = full;
             selectedBatch = null;
             comparing = false;
             Rebuild();
         }
 
+        /// <summary>
+        /// Requirement 2.8: for each algorithm (or compared group), the mean, sample variance, standard deviation and
+        /// 95% confidence interval of coverage, time and battery used, over the trials that succeeded. Then the other measures.
+        /// </summary>
         void BuildStatsTable(VisualElement parent, List<AlgorithmSummary> summaries)
         {
             var table = Ui.Div(parent, "le-table");
             var head = Ui.Div(table, "le-table__row le-table__row--head");
-            foreach (string heading in new[] { "Group", "Runs", "Coverage", "SD", "Time", "Battery used", "Path length", "Revisits", "To 90%" })
+            foreach (string heading in new[] { "Algorithm", "Measure", "Runs", "Mean", "Variance", "SD", "95% CI" })
                 Ui.Text(head, heading, "le-table__cell");
 
             foreach (var s in summaries)
             {
-                var row = Ui.Div(table, "le-table__row");
-                var name = Ui.Text(row, s.Label, "le-table__cell le-table__cell--strong");
-                Ui.Tooltip(name, s.Label);
-                Ui.Text(row, s.runs.Count.ToString(), "le-table__cell");
-                Ui.Text(row, $"{s.coverage.mean:0.0} ± {s.coverage.ci95:0.0}%", "le-table__cell");
-                Ui.Text(row, $"{s.coverage.StandardDeviation:0.0}", "le-table__cell");
-                Ui.Text(row, $"{VacuumSettings.FormatDuration((float)s.seconds.mean)} ± {s.seconds.ci95:0}s", "le-table__cell");
-                Ui.Text(row, $"{s.batteryUsed.mean:0} ± {s.batteryUsed.ci95:0}", "le-table__cell");
-                Ui.Text(row, $"{Ui.FormatLength((float)s.distance.mean)}", "le-table__cell");
-                Ui.Text(row, $"{s.revisits.mean:0}", "le-table__cell");
-                Ui.Text(row, s.timeTo90.count > 0 ? $"{VacuumSettings.FormatDuration((float)s.timeTo90.mean)} ({s.timeTo90.count}/{s.runs.Count})" : "never",
-                    "le-table__cell");
+                string runs = s.failed > 0 ? $"{s.coverage.count} (+{s.failed} failed)" : s.coverage.count.ToString();
+                StatsRow(table, s.Label, "Coverage (%)", runs, s.coverage, "0.00");
+                StatsRow(table, string.Empty, "Time (s)", string.Empty, s.seconds, "0.0");
+                StatsRow(table, string.Empty, "Battery used", string.Empty, s.batteryUsed, "0.0");
             }
 
-            Ui.Text(parent, "± is the 95% confidence interval of the mean (Student's t). SD is the standard deviation across runs; variance is its square. Battery used is in work units.",
-                "le-empty-hint");
+            Ui.Text(parent, "Variance is the sample variance (n − 1) across seeds and SD its square root. The 95% confidence interval " +
+                            "is for the mean, using Student's t with n − 1 degrees of freedom. Time is simulated seconds; battery is " +
+                            "in work units. Failed runs are listed but left out of the statistics.", "le-empty-hint");
+
+            var more = Ui.Div(parent, "le-table le-panel__gap");
+            var moreHead = Ui.Div(more, "le-table__row le-table__row--head");
+            foreach (string heading in new[] { "Algorithm", "Path length", "Revisits", "To 90%" })
+                Ui.Text(moreHead, heading, "le-table__cell");
+            foreach (var s in summaries)
+            {
+                var row = Ui.Div(more, "le-table__row");
+                var name = Ui.Text(row, s.Label, "le-table__cell le-table__cell--strong");
+                Ui.Tooltip(name, s.Label);
+                Ui.Text(row, s.distance.count > 0 ? Ui.FormatLength((float)s.distance.mean) : "—", "le-table__cell");
+                Ui.Text(row, s.revisits.count > 0 ? $"{s.revisits.mean:0}" : "—", "le-table__cell");
+                Ui.Text(row, s.timeTo90.count > 0 ? $"{VacuumSettings.FormatDuration((float)s.timeTo90.mean)} ({s.timeTo90.count}/{s.succeeded.Count})" : "never",
+                    "le-table__cell");
+            }
+        }
+
+        static void StatsRow(VisualElement table, string algorithm, string measure, string runs, Summary summary, string format)
+        {
+            var row = Ui.Div(table, "le-table__row");
+            var name = Ui.Text(row, algorithm, "le-table__cell le-table__cell--strong");
+            if (!string.IsNullOrEmpty(algorithm)) Ui.Tooltip(name, algorithm);
+            Ui.Text(row, measure, "le-table__cell");
+            Ui.Text(row, runs, "le-table__cell");
+            if (summary.count == 0)
+            {
+                for (int i = 0; i < 4; i++) Ui.Text(row, "—", "le-table__cell");
+                return;
+            }
+            Ui.Text(row, summary.mean.ToString(format), "le-table__cell le-table__cell--strong");
+            Ui.Text(row, summary.variance.ToString(format), "le-table__cell");
+            Ui.Text(row, summary.StandardDeviation.ToString(format), "le-table__cell");
+            Ui.Text(row, summary.count > 1 ? $"{summary.Low.ToString(format)} – {summary.High.ToString(format)}" : "needs 2+ runs", "le-table__cell");
+        }
+
+        /// <summary>True when a summary has a confidence interval worth drawing: two or more runs that didn't all come out the same.</summary>
+        static bool HasInterval(Summary summary) =>
+            summary.count >= 2 && !double.IsNaN(summary.ci95) && !double.IsInfinity(summary.ci95) && summary.ci95 > 0;
+
+        /// <summary>An error bar (|—|) from <paramref name="low"/> to <paramref name="high"/> on a track that spans 0 to <paramref name="scale"/>.</summary>
+        static void ErrorBar(VisualElement track, double low, double high, double scale)
+        {
+            var whisker = Ui.Div(track, "le-compare-row__ci");
+            Ui.Div(whisker, "le-compare-row__ci-line");
+            float from = Mathf.Clamp((float)(low / scale * 100), 0f, 100f);
+            float to = Mathf.Clamp((float)(high / scale * 100), 0f, 100f);
+            whisker.style.left = Length.Percent(from);
+            whisker.style.width = Length.Percent(Mathf.Max(0.4f, to - from));
+        }
+
+        void ExportCsv(BatchResult batch)
+        {
+            string name = batch.IsImported ? $"{batch.campaignName} {batch.levelName} {batch.configuration}" : $"batch {batch.levelName}";
+            try
+            {
+                string path = FloorPlanFiles.PickSavePath("Export batch results", name, "csv");
+                if (path == null) return;
+                File.WriteAllText(path, BatchStats.ToCsv(batch.Reports()));
+                overlay.Toast($"Saved to {path}", "Show", () => FloorPlanFiles.Reveal(Path.GetDirectoryName(path)));
+            }
+            catch (Exception exception)
+            {
+                overlay.Toast($"Couldn't export: {exception.Message}");
+            }
         }
 
         LevelSnapshot LoadLevelFor(IEnumerable<RunReport> group)
@@ -598,7 +683,7 @@ namespace RobotVacuum.LevelEditor
             if (parentBatch != null)
                 Ui.Button(header, "Batch", IconKind.Back, () =>
                 {
-                    batchPattern = run.pattern;
+                    batchAlgorithm = run.AlgorithmKey;
                     SelectBatch(parentBatch);
                     Rebuild();
                 }, "le-btn--ghost");
@@ -630,6 +715,7 @@ namespace RobotVacuum.LevelEditor
                 run.batteryEmptied ? $"{run.batteryUsed:0} units · ran flat" : $"{run.batteryUsed:0} units",
                 run.BatteryUsedPercent / 100f, run.batteryEmptied ? "low" : "battery");
             Kpi(kpis, "Path length", Ui.FormatLength(run.distanceMeters), $"{Ui.FormatLength(run.AverageSpeed)}/s average");
+            if (kpis.childCount > 0) kpis[kpis.childCount - 1].AddToClassList("le-kpi--last"); // USS has no :last-child
 
             // How quickly the run got there.
             var milestones = Ui.Div(panel, "le-milestones");
@@ -677,7 +763,7 @@ namespace RobotVacuum.LevelEditor
             {
                 var v = run.vacuum;
                 Ui.Text(log,
-                    $"Final settings: drive {v.FormatSpeed(v.driveSpeed)} · reverse {v.FormatSpeed(v.reverseSpeed)} · turn {v.turnSpeed:0} °/s · " +
+                    $"Final settings: {VacuumShape.Label(v.shape).ToLowerInvariant()} body · drive {v.FormatSpeed(v.driveSpeed)} · reverse {v.FormatSpeed(v.reverseSpeed)} · turn {v.turnSpeed:0} °/s · " +
                     $"battery {VacuumSettings.FormatCapacity(v.batteryCapacity)} · grid {Ui.FormatSmallLength(run.cellSize)} · " +
                     $"telemetry every {run.telemetryInterval:0.##} s",
                     "le-empty-hint");
@@ -982,7 +1068,7 @@ namespace RobotVacuum.LevelEditor
             slider.SetValueWithoutNotify(time);
 
             int index = Mathf.Clamp(Mathf.RoundToInt(time / Mathf.Max(1e-4f, replay.sampleInterval)), 0, replay.SampleCount - 1);
-            map.SetPath(path, index + 1, replay.heading[index], replay.robotRadius);
+            map.SetPath(path, index + 1, replay.heading[index], replay.robotRadius, replay.robotShape);
 
             var keyframe = replay.KeyframeAt(time);
             if (keyframe != null && keyframe != shownKeyframe)

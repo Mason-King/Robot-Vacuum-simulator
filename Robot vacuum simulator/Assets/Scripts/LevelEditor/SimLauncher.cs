@@ -6,7 +6,7 @@ using UnityEngine.SceneManagement;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>The pages of the start screen, which other scenes can ask it to open on.</summary>
-    public enum StartPage { Home, Configuration, Simulate, Analysis }
+    public enum StartPage { Home, Configuration, Simulate, Analysis, Settings }
 
     /// <summary>Where a simulation was started from, and so where leaving it goes back to.</summary>
     public enum SimOrigin { Editor, StartScreen }
@@ -77,6 +77,9 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>The run the Analysis page should select, handed out once.</summary>
+        /// <summary>Selects <paramref name="runId"/> the next time the Analysis page opens, without changing scene.</summary>
+        public static void FocusRun(string runId) => focusedRunId = runId;
+
         public static string TakeFocusedRun()
         {
             string id = focusedRunId;
@@ -101,6 +104,13 @@ namespace RobotVacuum.LevelEditor
                 return false;
             }
 
+            if (LevelGeometry.HasSpawnFurnitureCollision(level))
+            {
+                Debug.LogWarning("Simulation cannot start because the vacuum starts inside furniture. Move the vacuum or the furniture and try again.");
+                Object.Destroy(level);
+                return false;
+            }
+
             LevelHandoff.Send(level);
             SimulatedPath = filePath;
             Origin = origin;
@@ -117,7 +127,7 @@ namespace RobotVacuum.LevelEditor
         /// </summary>
         public static bool RunBatch(LevelSnapshot snapshot, FloorPalette palette, string filePath, BatchSpec spec)
         {
-            if (spec == null || spec.patterns.Count == 0 || spec.trials < 1) return false;
+            if (spec == null || spec.algorithmIds.Count == 0 || spec.trials < 1) return false;
 
             pendingBatch = spec;
             if (Simulate(snapshot, palette, filePath, SimOrigin.StartScreen)) return true;

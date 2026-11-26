@@ -167,6 +167,49 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
+        public void FailedRuns_StayOutOfTheStatistics_ButCountAsRuns()
+        {
+            var trials = new[]
+            {
+                Trial(MovementPattern.Lawnmower, 1, 80f, "b"),
+                Trial(MovementPattern.Lawnmower, 2, 90f, "b"),
+                Trial(MovementPattern.Lawnmower, 3, 5f, "b"),
+            };
+            trials[2].failure = "boom";
+
+            var groups = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", trials)) },
+                CompareGrouping.Algorithm, CompareMetric.Coverage);
+
+            Assert.AreEqual(3, groups[0].runs.Count);
+            Assert.AreEqual(2, groups[0].metric.count);
+            Assert.AreEqual(85f, groups[0].metric.mean, 1e-4);
+            Assert.AreEqual(1, groups[0].stats.failed);
+        }
+
+        [Test]
+        public void Runs_GroupByAlgorithmId_SoPluginsWithTheSamePatternStayApart()
+        {
+            var plugin = Run("Flat", MovementPattern.RandomBounce, 70f, 60f);
+            plugin.id = "plugin";
+            plugin.algorithmId = "my-plugin";
+            plugin.algorithmName = "My plugin";
+            var builtIn = Run("Flat", MovementPattern.RandomBounce, 50f, 60f);
+            builtIn.id = "builtin";
+
+            var groups = RunComparison.Build(new[] { CompareSource.Of(plugin), CompareSource.Of(builtIn) },
+                CompareGrouping.Algorithm, CompareMetric.Coverage);
+
+            Assert.AreEqual(2, groups.Count);
+            Assert.AreEqual("My plugin", groups[0].label);
+        }
+
+        [Test]
+        public void ImportedBatchIds_BecomeSafeFileNames()
+        {
+            Assert.AreEqual("camp_Flat_base", BatchArchive.FileNameFor("camp/Flat/base"));
+        }
+
+        [Test]
         public void LowerIsBetter_RanksSmallestFirst_AndRunsWithoutAValueGoLast()
         {
             var fast = Run("Flat", MovementPattern.Spiral, 95f, 60f);
@@ -224,7 +267,7 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(1, loaded.Count);
             Assert.AreEqual(2, loaded[0].trials.Count);
             Assert.AreEqual(1, loaded[0].algorithms.Count);
-            Assert.AreEqual(85f, loaded[0].Algorithm(MovementPattern.Lawnmower).CoverageAt(60f), 1e-3f, "the mean curve ends at the mean coverage");
+            Assert.AreEqual(85f, loaded[0].algorithms[0].CoverageAt(60f), 1e-3f, "the mean curve ends at the mean coverage");
             Assert.IsTrue(File.Exists(Path.Combine(folder, "b2.csv")));
 
             BatchArchive.Delete("b2", folder);

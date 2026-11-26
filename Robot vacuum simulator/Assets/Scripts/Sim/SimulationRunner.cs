@@ -54,6 +54,9 @@ namespace RobotVacuum.Sim
             /// <summary>Show the debug overlay of the robot's beliefs at the start (graphics runs only; it can be switched during the run).</summary>
             public bool showBeliefOverlay;
 
+            /// <summary>The vacuum's body outline (3.3). Round, the default, is the original disc.</summary>
+            public VacuumShapeKind shape;
+
             /// <summary>The build options for a run described by already-resolved settings.</summary>
             public static Options From(RunSettings settings, bool headless) => new Options
             {
@@ -67,6 +70,7 @@ namespace RobotVacuum.Sim
                 vacuumPower = settings.vacuumPower,
                 controller = ControllerSettings.From(settings),
                 showBeliefOverlay = settings.showBeliefOverlay,
+                shape = settings.shape,
             };
 
             public static Options Visible(MovementPattern pattern = MovementPattern.RandomBounce, int seed = 0,
@@ -144,6 +148,7 @@ namespace RobotVacuum.Sim
             var robotObject = new GameObject("Vacuum Robot");
             robotObject.transform.SetParent(root.transform, false);
             var robot = robotObject.AddComponent<VacuumRobot>();
+            robot.ShapeKind = options.shape; // the hitbox first: everything after reads the body as built
             robot.Pattern = options.pattern;
             robot.AlgorithmId = options.AlgorithmId;
             robot.Seed = options.seed;

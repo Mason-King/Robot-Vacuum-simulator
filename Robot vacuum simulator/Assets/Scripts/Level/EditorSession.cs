@@ -1175,10 +1175,16 @@ namespace RobotVacuum.LevelEditor
                         message = $"Critical: {obstacle.name} overlaps a wall. Clear the collision before starting a simulation.",
                     });
 
+                if (LevelGeometry.SpawnOverlapsFurniture(Level, obstacle))
+                    issues.Add(new LevelIssue
+                    {
+                        severity = IssueSeverity.Critical,
+                        roomIndex = -1,
+                        message = $"Critical: the vacuum starts inside {obstacle.name}. Move the vacuum or the furniture before starting a simulation.",
+                    });
+
                 if (Level.RoomIndexAt(obstacle.center) < 0)
                     issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = $"{obstacle.name} isn't inside any room." });
-                else if (obstacle.blocksVacuum && obstacle.Contains(Level.RobotSpawn))
-                    issues.Add(new LevelIssue { severity = IssueSeverity.Warning, roomIndex = -1, message = $"The vacuum starts inside {obstacle.name}." });
             }
 
             if (Level.Rooms.Count == 0)
