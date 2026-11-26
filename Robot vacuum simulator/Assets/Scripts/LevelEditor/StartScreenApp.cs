@@ -107,6 +107,7 @@ namespace RobotVacuum.LevelEditor
 
             int levels = LevelLibrary.LoadAll().Count;
             int runs = RunHistory.LoadAll().Count;
+            foreach (var batch in BatchArchive.LoadAll()) runs += batch.trials.Count;
 
             var steps = Ui.Div(body, "le-start__steps");
             BuildStep(steps, 1, IconKind.Sliders, "Configuration",

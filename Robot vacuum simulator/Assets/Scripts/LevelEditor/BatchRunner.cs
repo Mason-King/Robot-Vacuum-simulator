@@ -221,7 +221,8 @@ namespace RobotVacuum.LevelEditor
             complete = true;
             try
             {
-                if (finished.Count > 0) RunHistory.AddRange(finished);
+                // One file for the whole batch: compact trials plus each algorithm's averages.
+                if (finished.Count > 0) BatchArchive.Save(BatchArchive.Build(spec.batchId, finished));
             }
             catch (Exception exception)
             {

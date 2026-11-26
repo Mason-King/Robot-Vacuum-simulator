@@ -65,7 +65,9 @@ namespace RobotVacuum.LevelEditor
             }
 
             var runsByLevel = new Dictionary<string, List<RunReport>>();
-            foreach (var run in RunHistory.LoadAll())
+            var allRuns = RunHistory.LoadAll();
+            foreach (var batch in BatchArchive.LoadAll()) allRuns.AddRange(batch.Reports());
+            foreach (var run in allRuns)
             {
                 if (string.IsNullOrEmpty(run.levelPath)) continue;
                 if (!runsByLevel.TryGetValue(run.levelPath, out var list)) runsByLevel[run.levelPath] = list = new List<RunReport>();

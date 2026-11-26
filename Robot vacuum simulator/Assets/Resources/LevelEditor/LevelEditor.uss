@@ -2633,3 +2633,159 @@
 .le-app .unity-scroller--vertical .unity-base-slider__dragger:hover {
     background-color: rgba(255, 255, 255, 0.22);
 }
+
+/* ------------------------------------------------------------ analysis: comparing runs */
+
+/* The list column: the compare bar stays put above the scrolling list. */
+.le-analysis__scroll {
+    flex-grow: 1;
+}
+
+.le-analysis__compare-bar {
+    flex-direction: row;
+    align-items: center;
+    min-height: 40px;
+    margin-bottom: 6px;
+    padding: 4px 4px 8px 8px;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-analysis__compare-text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    margin-right: 6px;
+}
+
+.le-analysis__compare-plan {
+    font-size: 13px;
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-analysis__compare-hint {
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-analysis__compare-hint {
+    color: var(--text-2);
+}
+
+.le-analysis__compare-bar > .le-btn {
+    margin-left: 4px;
+}
+
+/* A labelled button sized to sit in the bar beside the small icon button. */
+.le-analysis__compare-button {
+    height: 28px;
+    padding: 0 12px 0 10px;
+}
+
+.le-analysis__compare-button .le-icon {
+    width: 16px;
+    height: 16px;
+}
+
+/* The tick box at the start of each run row. */
+.le-run-row__check {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    margin-right: 10px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    border-width: 1.5px;
+    border-color: var(--border-strong);
+    background-color: var(--surface-2);
+}
+
+.le-run-row__check:hover {
+    border-color: var(--text-3);
+}
+
+.le-run-row__check--on,
+.le-run-row__check--on:hover {
+    border-color: var(--accent);
+    background-color: var(--accent);
+}
+
+/* On another floor plan than the picks: can't be ticked. */
+.le-run-row__check--off,
+.le-run-row__check--off:hover {
+    opacity: 0.3;
+    border-color: var(--border-strong);
+}
+
+.le-run-row__check .le-icon {
+    width: 14px;
+    height: 14px;
+}
+
+.le-app .le-run-row__check .le-icon {
+    color: #FFFFFF;
+}
+
+/* The answer: which group leads, and whether the lead is clear. */
+.le-compare__verdict {
+    margin: 14px 0 12px 0;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border-left-width: 3px;
+    border-color: var(--warning);
+    background-color: var(--surface-2);
+}
+
+.le-compare__verdict--clear {
+    border-color: var(--success);
+}
+
+.le-compare__verdict-title {
+    font-size: 15px;
+    -unity-font-style: bold;
+    white-space: normal;
+}
+
+.le-compare__verdict-text {
+    margin-top: 4px;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.le-app .le-compare__verdict-text {
+    color: var(--text-2);
+}
+
+.le-compare-row__label--wide {
+    width: 180px;
+    padding-right: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-compare-row__meta--wide {
+    margin-left: 180px;
+}
+
+.le-compare-row__fill--best {
+    background-color: var(--success);
+}
+
+/* The comparison chart: a legend that wraps above the plot. */
+.le-chart--compare {
+    height: 280px;
+}
+
+.le-chart__legend--wrap {
+    left: 40px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.le-chart__legend--wrap .le-chart__legend-item {
+    margin-bottom: 4px;
+}

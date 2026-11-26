@@ -9,11 +9,13 @@ using UnityEngine.UIElements;
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
-    /// The start screen's Analysis page. On the left, every recorded run, with batch experiments grouped into
-    /// one entry. On the right, the selection's results. A single run shows its metrics, a replay you can
-    /// scrub through, coverage over time, per-room coverage and the log of settings changed mid-run. A batch
-    /// shows the same results interface aggregated over its trials: each algorithm's mean, variance and 95%
-    /// confidence interval on identical seeds, an averaged heatmap and an averaged coverage curve.
+    /// The start screen's Analysis page. On the left, every recorded run and batch experiment, each with a
+    /// box to pick it for comparison. On the right, the selection's results, or the comparison of the picked
+    /// runs. A single run shows its metrics, a replay you can scrub through, coverage over time, per-room
+    /// coverage and the log of settings changed mid-run. A batch shows each algorithm's mean, variance and
+    /// 95% confidence interval on identical seeds, an averaged heatmap and an averaged coverage curve. The
+    /// comparison pools the picked runs per algorithm (or keeps each pick apart), ranks them on a chosen
+    /// metric and says whether the leader is clearly best.
     /// </summary>
     public sealed class AnalysisView : VisualElement
     {
@@ -23,10 +25,16 @@ namespace RobotVacuum.LevelEditor
         readonly Label subtitle;
         readonly VisualElement clearButton;
         List<RunReport> runs = new List<RunReport>();
+        List<BatchResult> batches = new List<BatchResult>();
         RunReport selectedRun;
-        string selectedBatch;
+        BatchResult selectedBatch;
         MovementPattern batchPattern;
-        bool compareAllLevels;
+
+        // Runs and batches picked for comparison, by id, and how the comparison is shown.
+        readonly HashSet<string> picked = new HashSet<string>();
+        bool comparing;
+        CompareMetric compareMetric = CompareMetric.Coverage;
+        CompareGrouping compareGrouping = CompareGrouping.Algorithm;
 
         public event Action BackRequested;
         public event Action SimulateRequested;
@@ -44,8 +52,8 @@ namespace RobotVacuum.LevelEditor
 
             var header = Ui.PageHeader(this, "Analysis", "Start screen", () => BackRequested?.Invoke(), out subtitle);
             var folder = Ui.Button(header, "Data folder", IconKind.Save,
-                () => FloorPlanFiles.Reveal(Path.GetDirectoryName(RunHistory.DataFolderFor("x"))), "le-btn--ghost");
-            Ui.Tooltip(folder, "Open the folder holding every run's telemetry CSVs, replays and summaries");
+                () => FloorPlanFiles.Reveal(Application.persistentDataPath), "le-btn--ghost");
+            Ui.Tooltip(folder, "Open the folder holding every run's telemetry CSVs and replays, and each batch's results file and CSV");
             clearButton = Ui.Button(header, "Clear history", IconKind.Trash, ConfirmClear, "le-btn--ghost");
             Ui.Button(header, "Start simulation", IconKind.Play, () => SimulateRequested?.Invoke(), "le-btn--primary");
 
@@ -56,44 +64,60 @@ namespace RobotVacuum.LevelEditor
         void Reload(string focusId)
         {
             runs = RunHistory.LoadAll();
+            batches = BatchArchive.LoadAll();
             selectedRun = null;
             selectedBatch = null;
+            picked.RemoveWhere(id => !runs.Exists(run => run.id == id) && !batches.Exists(batch => batch.batchId == id));
+            if (picked.Count == 0) comparing = false;
 
-            if (!string.IsNullOrEmpty(focusId) && runs.Exists(run => run.batchId == focusId)) SelectBatch(focusId);
+            var focusedBatch = batches.Find(batch => batch.batchId == focusId);
+            if (focusedBatch != null) SelectBatch(focusedBatch);
             else selectedRun = runs.Find(run => run.id == focusId);
 
-            if (selectedRun == null && selectedBatch == null && runs.Count > 0)
+            if (selectedRun == null && selectedBatch == null)
             {
-                if (runs[0].IsBatch) SelectBatch(runs[0].batchId);
-                else selectedRun = runs[0];
+                var newest = Entries();
+                if (newest.Count > 0)
+                {
+                    if (newest[0].batch != null) SelectBatch(newest[0].batch);
+                    else selectedRun = newest[0].single;
+                }
             }
 
-            int batches = 0;
-            var seen = new HashSet<string>();
-            foreach (var run in runs)
-                if (run.IsBatch && seen.Add(run.batchId)) batches++;
-            subtitle.text = $"{(runs.Count == 1 ? "1 recorded run" : $"{runs.Count} recorded runs")}" +
-                            (batches > 0 ? $" · {batches} batch{(batches == 1 ? "" : "es")}" : string.Empty);
-            Ui.SetVisible(clearButton, runs.Count > 0);
+            int trials = 0;
+            foreach (var batch in batches) trials += batch.trials.Count;
+            subtitle.text = $"{(runs.Count == 1 ? "1 run" : $"{runs.Count} runs")}" +
+                            (batches.Count > 0 ? $" · {batches.Count} batch{(batches.Count == 1 ? "" : "es")} of {trials} trials" : string.Empty) +
+                            " · tick runs on one floor plan to compare them";
+            Ui.SetVisible(clearButton, runs.Count > 0 || batches.Count > 0);
             Rebuild();
         }
 
-        void SelectBatch(string batchId)
+        /// <summary>Single runs and batches together, newest first.</summary>
+        List<CompareSource> Entries()
         {
-            selectedBatch = batchId;
-            selectedRun = null;
-            var members = BatchRuns(batchId);
-            var summaries = BatchStats.Summarise(members);
-            if (summaries.Count > 0 && !summaries.Exists(s => s.pattern == batchPattern)) batchPattern = summaries[0].pattern;
+            var entries = new List<CompareSource>(runs.Count + batches.Count);
+            foreach (var run in runs) entries.Add(CompareSource.Of(run));
+            foreach (var batch in batches) entries.Add(CompareSource.Of(batch));
+            entries.Sort((a, b) => FinishedAt(b).CompareTo(FinishedAt(a)));
+            return entries;
         }
 
-        List<RunReport> BatchRuns(string batchId) => runs.FindAll(run => run.batchId == batchId);
+        static DateTime FinishedAt(CompareSource source) => source.single != null ? source.single.FinishedAt : source.batch.FinishedAt;
+
+        void SelectBatch(BatchResult batch)
+        {
+            selectedBatch = batch;
+            selectedRun = null;
+            if (batch.algorithms.Count > 0 && batch.Algorithm(batchPattern) == null)
+                batchPattern = BatchStats.Summarise(batch.Reports())[0].pattern;
+        }
 
         void Rebuild()
         {
             body.Clear();
 
-            if (runs.Count == 0)
+            if (runs.Count == 0 && batches.Count == 0)
             {
                 var empty = Ui.Div(body, "le-empty le-analysis__empty");
                 var icon = new IconElement(IconKind.Chart);
@@ -107,17 +131,16 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            var list = new ScrollView(ScrollViewMode.Vertical);
-            list.AddToClassList("le-analysis__list");
-            list.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
-            body.Add(list);
+            var side = Ui.Div(body, "le-analysis__list");
+            BuildCompareBar(side);
 
-            var listedBatches = new HashSet<string>();
-            foreach (var run in runs)
-            {
-                if (!run.IsBatch) list.Add(BuildRunRow(run));
-                else if (listedBatches.Add(run.batchId)) list.Add(BuildBatchRow(run.batchId));
-            }
+            var list = new ScrollView(ScrollViewMode.Vertical);
+            list.AddToClassList("le-analysis__scroll");
+            list.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
+            side.Add(list);
+
+            foreach (var entry in Entries())
+                list.Add(entry.batch != null ? BuildBatchRow(entry.batch) : BuildRunRow(entry.single));
 
             var detail = new ScrollView(ScrollViewMode.Vertical);
             detail.AddToClassList("le-analysis__detail");
@@ -125,23 +148,93 @@ namespace RobotVacuum.LevelEditor
             body.Add(detail);
 
             var column = Ui.Div(detail, "le-page__column le-page__column--wide");
-            if (selectedBatch != null)
-            {
-                BuildBatchDetail(column, BatchRuns(selectedBatch));
-            }
-            else if (selectedRun != null)
-            {
-                BuildRunDetail(column, selectedRun);
-                BuildComparison(Ui.Div(column, "le-panel"));
-            }
+            if (comparing && picked.Count > 0) BuildCompare(column);
+            else if (selectedBatch != null) BuildBatchDetail(column, selectedBatch);
+            else if (selectedRun != null) BuildRunDetail(column, selectedRun);
         }
 
         // ---------------------------------------------------------------- list
 
+        /// <summary>The bar above the list: which floor plan is being compared, how much is ticked, and Compare.</summary>
+        void BuildCompareBar(VisualElement side)
+        {
+            var bar = Ui.Div(side, "le-analysis__compare-bar");
+            var sources = PickedSources();
+            var text = Ui.Div(bar, "le-analysis__compare-text");
+
+            if (sources.Count == 0)
+            {
+                Ui.Text(text, "Tick runs or batches on one floor plan to compare them", "le-analysis__compare-hint");
+                return;
+            }
+
+            int runCount = 0;
+            foreach (var source in sources) runCount += source.RunCount;
+            Ui.Text(text, sources[0].LevelName, "le-analysis__compare-plan");
+            Ui.Text(text, $"{sources.Count} picked · {(runCount == 1 ? "1 run" : $"{runCount} runs")}", "le-analysis__compare-hint");
+
+            Ui.IconButton(bar, IconKind.Close, "Untick everything", () =>
+            {
+                picked.Clear();
+                comparing = false;
+                Rebuild();
+            }, "le-btn--ghost le-btn--small");
+
+            if (!comparing)
+            {
+                var compare = Ui.Button(bar, "Compare", IconKind.Chart, () =>
+                {
+                    comparing = true;
+                    Rebuild();
+                }, "le-btn--primary le-analysis__compare-button");
+                Ui.Tooltip(compare, "Rank the ticked runs and batches, per algorithm");
+            }
+        }
+
+        /// <summary>The floor plan the current picks are on, or null when nothing is picked.</summary>
+        string PickedPlan()
+        {
+            var sources = PickedSources();
+            return sources.Count > 0 ? sources[0].PlanKey : null;
+        }
+
+        /// <summary>The box that ticks a row for comparison, without opening it. Rows on another floor plan than the picks can't be ticked.</summary>
+        VisualElement PickBox(VisualElement row, CompareSource source)
+        {
+            string id = source.Id;
+            bool on = picked.Contains(id);
+            string plan = PickedPlan();
+            bool allowed = on || plan == null || plan == source.PlanKey;
+
+            var box = Ui.Div(row, "le-run-row__check");
+            if (on)
+            {
+                box.AddToClassList("le-run-row__check--on");
+                box.Add(new IconElement(IconKind.Check));
+            }
+            if (!allowed) box.AddToClassList("le-run-row__check--off");
+            Ui.Tooltip(box, on ? "Take out of the comparison"
+                : allowed ? "Add to the comparison"
+                : "Only runs on the same floor plan can be compared. Untick the current picks to compare this plan instead.");
+
+            // Handled here and stopped, so ticking doesn't also open the row.
+            box.RegisterCallback<PointerDownEvent>(evt =>
+            {
+                evt.StopPropagation();
+                if (!allowed) return;
+                if (!picked.Remove(id)) picked.Add(id);
+                if (picked.Count == 0) comparing = false;
+                Rebuild();
+            });
+            box.RegisterCallback<PointerUpEvent>(evt => evt.StopPropagation());
+            return box;
+        }
+
         VisualElement BuildRunRow(RunReport run)
         {
             var row = Ui.Div(null, "le-run-row");
-            if (run == selectedRun) row.AddToClassList("le-run-row--selected");
+            if (!comparing && run == selectedRun) row.AddToClassList("le-run-row--selected");
+            PickBox(row, CompareSource.Of(run));
 
             var text = Ui.Div(row, "le-run-row__text");
             Ui.Text(text, run.levelName, "le-run-row__title");
@@ -153,64 +246,215 @@ namespace RobotVacuum.LevelEditor
             {
                 selectedRun = run;
                 selectedBatch = null;
+                comparing = false;
                 Rebuild();
             }));
             return row;
         }
 
-        VisualElement BuildBatchRow(string batchId)
+        VisualElement BuildBatchRow(BatchResult batch)
         {
-            var members = BatchRuns(batchId);
-            var summaries = BatchStats.Summarise(members);
-            var first = members[0];
-
             var row = Ui.Div(null, "le-run-row le-run-row--batch");
-            if (batchId == selectedBatch) row.AddToClassList("le-run-row--selected");
+            if (!comparing && batch == selectedBatch) row.AddToClassList("le-run-row--selected");
+            PickBox(row, CompareSource.Of(batch));
 
             var icon = new IconElement(IconKind.Chart);
             icon.AddToClassList("le-run-row__icon");
             row.Add(icon);
 
+            var summaries = BatchStats.Summarise(batch.Reports());
             var text = Ui.Div(row, "le-run-row__text");
-            Ui.Text(text, $"Batch · {first.levelName}", "le-run-row__title");
-            Ui.Text(text, $"{summaries.Count} algorithm(s) · {members.Count} runs · {FormatWhen(first.FinishedAt)}", "le-run-row__meta");
+            Ui.Text(text, $"Batch · {batch.levelName}", "le-run-row__title");
+            Ui.Text(text, $"{summaries.Count} algorithm(s) · {batch.trials.Count} runs · {FormatWhen(batch.FinishedAt)}", "le-run-row__meta");
             if (summaries.Count > 0)
                 Ui.Text(row, $"{summaries[0].coverage.mean:0.0}%",
                     $"le-run-row__value le-tone-text--{CoverageTone((float)summaries[0].coverage.mean)}");
 
             row.AddManipulator(new Clickable(() =>
             {
-                SelectBatch(batchId);
+                SelectBatch(batch);
+                comparing = false;
                 Rebuild();
             }));
             return row;
         }
 
-        // ---------------------------------------------------------------- batch
+        // ---------------------------------------------------------------- comparison
 
-        void BuildBatchDetail(VisualElement column, List<RunReport> members)
+        /// <summary>The picked runs and batches, in list order.</summary>
+        List<CompareSource> PickedSources() => Entries().FindAll(entry => picked.Contains(entry.Id));
+
+        void BuildCompare(VisualElement column)
         {
-            if (members.Count == 0) return;
-            var first = members[0];
-            var summaries = BatchStats.Summarise(members);
-
-            int minSeed = int.MaxValue, maxSeed = int.MinValue;
-            foreach (var run in members)
-            {
-                minSeed = Math.Min(minSeed, run.seed);
-                maxSeed = Math.Max(maxSeed, run.seed);
-            }
+            var sources = PickedSources();
+            var groups = RunComparison.Build(sources, compareGrouping, compareMetric);
 
             var panel = Ui.Div(column, "le-panel");
             var header = Ui.Div(panel, "le-panel__header");
             var titles = Ui.Div(header, "le-panel__titles");
-            Ui.Text(titles, $"Batch experiment · {first.levelName}", "le-panel__title");
-            Ui.Text(titles, $"{first.FinishedAt:d MMM yyyy, HH:mm} · {members.Count} runs · seeds {minSeed}–{maxSeed}" +
-                            (first.headless ? " · headless" : string.Empty), "le-panel__text");
-            if (!string.IsNullOrEmpty(first.levelPath) && File.Exists(first.levelPath))
-                Ui.IconButton(header, IconKind.Pen, "Open in level editor", () => EditRequested?.Invoke(first.levelPath),
+            int runCount = 0;
+            foreach (var source in sources) runCount += source.RunCount;
+            Ui.Text(titles, $"Comparison · {sources[0].LevelName}", "le-panel__title");
+            Ui.Text(titles, $"{sources.Count} pick(s) · {runCount} runs · {groups.Count} group(s)", "le-panel__text");
+
+            var grouping = new Segmented(new[] { "By algorithm", "By pick" }, (int)compareGrouping);
+            grouping.SelectionChanged += index =>
+            {
+                compareGrouping = (CompareGrouping)index;
+                Rebuild();
+            };
+            Ui.Tooltip(grouping, "Pool every picked run of the same algorithm, or keep each pick (and each algorithm within a batch) apart");
+            header.Add(grouping);
+
+            Ui.Text(panel, "RANK BY", "le-section__title");
+            var metricLabels = Array.ConvertAll(RunComparison.Metrics, RunComparison.Label);
+            var metric = new Segmented(metricLabels, Array.IndexOf(RunComparison.Metrics, compareMetric));
+            metric.SelectionChanged += index =>
+            {
+                compareMetric = RunComparison.Metrics[index];
+                Rebuild();
+            };
+            panel.Add(metric);
+
+            if (groups.Count == 0)
+            {
+                Ui.Text(panel, "None of the picked runs can be grouped by algorithm: they all switched algorithm part-way. Try grouping by pick.",
+                    "le-empty-hint");
+                return;
+            }
+
+            var verdict = RunComparison.Judge(groups, compareMetric);
+            var callout = Ui.Div(panel, verdict.clear ? "le-compare__verdict le-compare__verdict--clear" : "le-compare__verdict");
+            Ui.Text(callout, verdict.headline, "le-compare__verdict-title");
+            Ui.Text(callout, verdict.detail, "le-compare__verdict-text");
+
+            foreach (string caveat in RunComparison.Caveats(sources, compareGrouping))
+                Ui.Text(panel, caveat, "le-analysis__failure");
+
+            BuildMetricBars(panel, groups);
+
+            Ui.Text(panel, "EVERY MEASURE · MEAN ± 95% CONFIDENCE INTERVAL", "le-section__title le-analysis__chart-title");
+            BuildStatsTable(panel, groups.ConvertAll(g => g.stats));
+
+            // Mean coverage over time, one line per group, on one time axis.
+            var curvePanel = Ui.Div(column, "le-panel");
+            Ui.Text(curvePanel, "MEAN COVERAGE OVER TIME", "le-section__title");
+            float duration = 0f;
+            foreach (var group in groups) duration = Mathf.Max(duration, group.CurveDuration);
+            var series = new List<(string, float[])>();
+            foreach (var group in groups) series.Add((group.label, group.Curve(BatchArchive.CurvePoints, duration)));
+            curvePanel.Add(new CompareChart(series, duration));
+            Ui.Text(curvePanel, "A run that has ended holds its final coverage, so every line runs to the end.", "le-empty-hint");
+
+            // What's in the comparison, with a way to take each pick out.
+            var picks = Ui.Div(column, "le-panel");
+            Ui.Text(picks, "PICKED", "le-section__title");
+            foreach (var source in sources)
+            {
+                var row = Ui.Div(picks, "le-run-row");
+                var text = Ui.Div(row, "le-run-row__text");
+                if (source.single != null)
+                {
+                    var run = source.single;
+                    Ui.Text(text, $"{run.levelName} · {run.PatternLabel}", "le-run-row__title");
+                    Ui.Text(text, $"Single run · seed {run.seed} · {FormatWhen(run.FinishedAt)}", "le-run-row__meta");
+                }
+                else
+                {
+                    var batch = source.batch;
+                    Ui.Text(text, $"Batch · {batch.levelName}", "le-run-row__title");
+                    Ui.Text(text, $"{batch.algorithms.Count} algorithm(s) · {batch.trials.Count} runs · seeds {batch.MinSeed}–{batch.MaxSeed} · {FormatWhen(batch.FinishedAt)}",
+                        "le-run-row__meta");
+                }
+
+                string id = source.Id;
+                Ui.IconButton(row, IconKind.Close, "Take out of the comparison", () =>
+                {
+                    picked.Remove(id);
+                    if (picked.Count == 0) comparing = false;
+                    Rebuild();
+                }, "le-btn--ghost le-btn--small");
+            }
+        }
+
+        /// <summary>One bar per group on the chosen metric, with its 95% interval as a whisker, best first.</summary>
+        void BuildMetricBars(VisualElement panel, List<CompareGroup> groups)
+        {
+            Ui.Text(panel, RunComparison.Label(compareMetric).ToUpperInvariant() +
+                           (RunComparison.HigherIsBetter(compareMetric) ? " · HIGHER IS BETTER" : " · LOWER IS BETTER"),
+                "le-section__title le-analysis__chart-title");
+
+            // Coverage reads against 100%; everything else against the largest interval end.
+            double scale = compareMetric == CompareMetric.Coverage ? 100 : 0;
+            if (scale <= 0)
+                foreach (var group in groups) scale = Math.Max(scale, group.metric.mean + group.metric.ci95);
+            if (scale <= 0) scale = 1;
+
+            for (int i = 0; i < groups.Count; i++)
+            {
+                var group = groups[i];
+                var row = Ui.Div(panel, "le-compare-row");
+                var label = Ui.Text(row, group.label, "le-compare-row__label le-compare-row__label--wide");
+                Ui.Tooltip(label, group.label);
+
+                var track = Ui.Div(row, "le-compare-row__track le-compare-row__track--ci");
+                if (group.metric.count == 0)
+                {
+                    Ui.Text(row, "—", "le-compare-row__value");
+                    Ui.Text(row, MissingNote(group), "le-compare-row__meta le-compare-row__meta--wide");
+                    continue;
+                }
+
+                var fill = Ui.Div(track, i == 0 ? "le-compare-row__fill le-compare-row__fill--best" : "le-compare-row__fill");
+                fill.style.width = Length.Percent(Mathf.Clamp((float)(group.metric.mean / scale * 100), 0f, 100f));
+                if (group.metric.count > 1)
+                {
+                    var whisker = Ui.Div(track, "le-compare-row__ci");
+                    float low = Mathf.Clamp((float)((group.metric.mean - group.metric.ci95) / scale * 100), 0f, 100f);
+                    float high = Mathf.Clamp((float)((group.metric.mean + group.metric.ci95) / scale * 100), 0f, 100f);
+                    whisker.style.left = Length.Percent(low);
+                    whisker.style.width = Length.Percent(Mathf.Max(0.4f, high - low));
+                }
+
+                Ui.Text(row, RunComparison.Format(compareMetric, group.metric.mean), "le-compare-row__value");
+                string spread = group.metric.count > 1 ? $"± {RunComparison.FormatSpread(compareMetric, group.metric.ci95)} · " : string.Empty;
+                string counted = group.metric.count < group.runs.Count ? $"{group.metric.count} of {group.runs.Count} runs" : $"{group.runs.Count} run(s)";
+                Ui.Text(row, spread + counted, "le-compare-row__meta le-compare-row__meta--wide");
+            }
+        }
+
+        string MissingNote(CompareGroup group) => compareMetric == CompareMetric.TimeTo90
+            ? $"none of its {group.runs.Count} run(s) reached 90%"
+            : $"no value in its {group.runs.Count} run(s)";
+
+        // ---------------------------------------------------------------- batch
+
+        void BuildBatchDetail(VisualElement column, BatchResult batch)
+        {
+            var members = batch.Reports();
+            if (members.Count == 0) return;
+            var summaries = BatchStats.Summarise(members);
+
+            var panel = Ui.Div(column, "le-panel");
+            var header = Ui.Div(panel, "le-panel__header");
+            var titles = Ui.Div(header, "le-panel__titles");
+            Ui.Text(titles, $"Batch experiment · {batch.levelName}", "le-panel__title");
+            Ui.Text(titles, $"{batch.FinishedAt:d MMM yyyy, HH:mm} · {members.Count} runs · seeds {batch.MinSeed}–{batch.MaxSeed}" +
+                            (batch.headless ? " · headless" : string.Empty), "le-panel__text");
+
+            var compare = Ui.Button(header, "Compare", IconKind.Chart, () =>
+            {
+                // A comparison is on one floor plan, so picks on another plan make way for this batch.
+                if (PickedPlan() != CompareSource.Of(batch).PlanKey) picked.Clear();
+                picked.Add(batch.batchId);
+                comparing = true;
+                Rebuild();
+            }, "le-btn--ghost");
+            Ui.Tooltip(compare, "Add this batch to the comparison and open it. Tick other runs or batches to compare against them.");
+            if (!string.IsNullOrEmpty(batch.levelPath) && File.Exists(batch.levelPath))
+                Ui.IconButton(header, IconKind.Pen, "Open in level editor", () => EditRequested?.Invoke(batch.levelPath),
                     "le-btn--ghost le-btn--small");
-            Ui.IconButton(header, IconKind.Trash, "Delete this batch", () => ConfirmDelete(selectedBatch, $"the batch on {first.levelName}"),
+            Ui.IconButton(header, IconKind.Trash, "Delete this batch", () => ConfirmDeleteBatch(batch),
                 "le-btn--ghost le-btn--small");
 
             Ui.Text(panel, "ALGORITHMS ON IDENTICAL SEEDS · MEAN ± 95% CONFIDENCE INTERVAL", "le-section__title");
@@ -250,21 +494,21 @@ namespace RobotVacuum.LevelEditor
             };
             mapPanel.Add(picker);
 
+            var averages = batch.Algorithm(chosen.pattern);
             var level = LoadLevelFor(chosen.runs);
-            var averaged = BatchStats.AverageMap(chosen.runs, out var shape);
-            if (level != null && averaged != null)
+            var map = averages != null ? BatchStats.DecodeMap(averages.map, batch.mapWidth * batch.mapHeight) : null;
+            if (level != null && map != null)
             {
-                var map = new FloorMapView(level, palette);
-                map.AddToClassList("le-analysis__map");
-                map.SetCoverage(averaged, shape.mapWidth, shape.mapHeight, shape.mapRect);
-                mapPanel.Add(map);
+                var view = new FloorMapView(level, palette);
+                view.AddToClassList("le-analysis__map");
+                view.SetCoverage(map, batch.mapWidth, batch.mapHeight, batch.mapRect);
+                mapPanel.Add(view);
                 Ui.Text(mapPanel, "Blue is floor cleaned in every run; red is floor left dirty.", "le-empty-hint");
             }
             else Ui.Text(mapPanel, "No coverage maps were saved for these runs.", "le-empty-hint");
 
-            var curve = BatchStats.AverageCurve(chosen.runs, 120, out float duration);
             Ui.Text(mapPanel, "MEAN COVERAGE OVER TIME", "le-section__title le-analysis__chart-title");
-            mapPanel.Add(new CoverageChart(curve, duration));
+            if (averages != null) mapPanel.Add(new CoverageChart(averages.curve, averages.curveDuration));
 
             BuildBatchRoomTable(column, chosen);
 
@@ -280,26 +524,39 @@ namespace RobotVacuum.LevelEditor
                               (string.IsNullOrEmpty(run.failure) ? string.Empty : " · algorithm failed"), "le-run-row__meta");
                 Ui.Text(row, $"{run.coveragePercent:0.0}%", $"le-run-row__value le-tone-text--{CoverageTone(run.coveragePercent)}");
                 var captured = run;
-                row.AddManipulator(new Clickable(() =>
-                {
-                    selectedRun = captured;
-                    selectedBatch = null;
-                    Rebuild();
-                }));
+                row.AddManipulator(new Clickable(() => OpenTrial(captured)));
             }
+        }
+
+        /// <summary>Opens one batch trial in full, from the report saved in its data folder.</summary>
+        void OpenTrial(RunReport trial)
+        {
+            var full = BatchArchive.LoadTrial(trial.dataFolder);
+            if (full == null)
+            {
+                overlay.Toast("This trial's saved data is gone, so it can't be opened.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(full.batchId)) full.batchId = trial.batchId;
+            selectedRun = full;
+            selectedBatch = null;
+            comparing = false;
+            Rebuild();
         }
 
         void BuildStatsTable(VisualElement parent, List<AlgorithmSummary> summaries)
         {
             var table = Ui.Div(parent, "le-table");
             var head = Ui.Div(table, "le-table__row le-table__row--head");
-            foreach (string heading in new[] { "Algorithm", "Runs", "Coverage", "SD", "Time", "Battery used", "Path length", "Revisits", "To 90%" })
+            foreach (string heading in new[] { "Group", "Runs", "Coverage", "SD", "Time", "Battery used", "Path length", "Revisits", "To 90%" })
                 Ui.Text(head, heading, "le-table__cell");
 
             foreach (var s in summaries)
             {
                 var row = Ui.Div(table, "le-table__row");
-                Ui.Text(row, s.Label, "le-table__cell le-table__cell--strong");
+                var name = Ui.Text(row, s.Label, "le-table__cell le-table__cell--strong");
+                Ui.Tooltip(name, s.Label);
                 Ui.Text(row, s.runs.Count.ToString(), "le-table__cell");
                 Ui.Text(row, $"{s.coverage.mean:0.0} ± {s.coverage.ci95:0.0}%", "le-table__cell");
                 Ui.Text(row, $"{s.coverage.StandardDeviation:0.0}", "le-table__cell");
@@ -311,7 +568,7 @@ namespace RobotVacuum.LevelEditor
                     "le-table__cell");
             }
 
-            Ui.Text(parent, "± is the 95% confidence interval of the mean (Student's t). SD is the standard deviation across seeds; variance is its square. Battery used is in work units.",
+            Ui.Text(parent, "± is the 95% confidence interval of the mean (Student's t). SD is the standard deviation across runs; variance is its square. Battery used is in work units.",
                 "le-empty-hint");
         }
 
@@ -337,11 +594,12 @@ namespace RobotVacuum.LevelEditor
             Ui.Text(titles, $"{run.levelName} · {run.PatternLabel}", "le-panel__title");
             Ui.Text(titles, $"{run.FinishedAt:d MMM yyyy, HH:mm} · {run.endReason} · seed {run.seed}", "le-panel__text");
 
-            if (run.IsBatch)
+            var parentBatch = run.IsBatch ? batches.Find(batch => batch.batchId == run.batchId) : null;
+            if (parentBatch != null)
                 Ui.Button(header, "Batch", IconKind.Back, () =>
                 {
                     batchPattern = run.pattern;
-                    SelectBatch(run.batchId);
+                    SelectBatch(parentBatch);
                     Rebuild();
                 }, "le-btn--ghost");
 
@@ -595,104 +853,6 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Colour band for a coverage percentage: good, middling or poor.</summary>
         static string CoverageTone(float percent) => percent >= 90f ? "good" : percent >= 60f ? "mid" : "low";
 
-        // ---------------------------------------------------------------- comparison
-
-        void BuildComparison(VisualElement panel)
-        {
-            var header = Ui.Div(panel, "le-panel__header");
-            var titles = Ui.Div(header, "le-panel__titles");
-            Ui.Text(titles, "Algorithm comparison", "le-panel__title");
-            Ui.Text(titles, "Average coverage per movement algorithm over single runs. Runs that switched algorithm part-way are left out. " +
-                            "For a like-for-like test on identical seeds, run a batch experiment.", "le-panel__text");
-
-            string levelName = selectedRun != null ? selectedRun.levelName : null;
-            if (levelName != null)
-            {
-                var scope = new Segmented(new[] { "This floor plan", "All floor plans" }, compareAllLevels ? 1 : 0);
-                scope.SelectionChanged += index =>
-                {
-                    compareAllLevels = index == 1;
-                    Rebuild();
-                };
-                header.Add(scope);
-            }
-
-            var singles = runs.FindAll(run => !run.IsBatch);
-            var groups = ComparePatterns(singles, compareAllLevels ? null : selectedRun?.levelPath, compareAllLevels ? null : levelName);
-            if (groups.Count == 0)
-            {
-                Ui.Text(panel, "No single-algorithm runs to compare yet.", "le-empty-hint");
-                return;
-            }
-
-            foreach (var group in groups)
-            {
-                var row = Ui.Div(panel, "le-compare-row");
-                Ui.Text(row, MovementAlgorithms.LabelOf(group.pattern), "le-compare-row__label");
-
-                var track = Ui.Div(row, "le-compare-row__track");
-                var fill = Ui.Div(track, "le-compare-row__fill");
-                fill.style.width = Length.Percent(Mathf.Clamp(group.averageCoverage, 0f, 100f));
-
-                Ui.Text(row, $"{group.averageCoverage:0.0}%", "le-compare-row__value");
-                Ui.Text(row,
-                    $"{(group.runs == 1 ? "1 run" : $"{group.runs} runs")} · {group.coveragePerMinute:0.0}%/min · {VacuumSettings.FormatDuration(group.averageSeconds)} avg",
-                    "le-compare-row__meta");
-            }
-        }
-
-        public readonly struct PatternSummary
-        {
-            public readonly MovementPattern pattern;
-            public readonly int runs;
-            public readonly float averageCoverage;
-            public readonly float averageSeconds;
-            public readonly float coveragePerMinute;
-
-            public PatternSummary(MovementPattern pattern, int runs, float averageCoverage, float averageSeconds, float coveragePerMinute)
-            {
-                this.pattern = pattern;
-                this.runs = runs;
-                this.averageCoverage = averageCoverage;
-                this.averageSeconds = averageSeconds;
-                this.coveragePerMinute = coveragePerMinute;
-            }
-        }
-
-        /// <summary>
-        /// Averages single-algorithm runs per movement pattern, best average coverage first. Given a level,
-        /// only its runs count: matched by file when the run has one, by name otherwise.
-        /// </summary>
-        public static List<PatternSummary> ComparePatterns(IEnumerable<RunReport> runs, string levelPath = null, string levelName = null)
-        {
-            var totals = new Dictionary<MovementPattern, (int count, float coverage, float seconds)>();
-            foreach (var run in runs)
-            {
-                if (run.mixedPatterns) continue;
-                if (levelName != null)
-                {
-                    bool samePlan = !string.IsNullOrEmpty(levelPath) && !string.IsNullOrEmpty(run.levelPath)
-                        ? run.levelPath == levelPath
-                        : run.levelName == levelName;
-                    if (!samePlan) continue;
-                }
-
-                totals.TryGetValue(run.pattern, out var t);
-                totals[run.pattern] = (t.count + 1, t.coverage + run.coveragePercent, t.seconds + run.durationSeconds);
-            }
-
-            var result = new List<PatternSummary>();
-            foreach (var pair in totals)
-            {
-                var t = pair.Value;
-                float perMinute = t.seconds > 0f ? t.coverage / (t.seconds / 60f) : 0f;
-                result.Add(new PatternSummary(pair.Key, t.count, t.coverage / t.count, t.seconds / t.count, perMinute));
-            }
-
-            result.Sort((a, b) => b.averageCoverage.CompareTo(a.averageCoverage));
-            return result;
-        }
-
         // ---------------------------------------------------------------- actions
 
         void ConfirmDelete(string id, string what)
@@ -706,6 +866,17 @@ namespace RobotVacuum.LevelEditor
                 }));
         }
 
+        void ConfirmDeleteBatch(BatchResult batch)
+        {
+            overlay.ShowDialog("Delete batch?", $"The batch on {batch.levelName} and its {batch.trials.Count} runs will be removed, with their saved data.", null,
+                new DialogButton("Cancel", ButtonStyle.Ghost, null),
+                new DialogButton("Delete", ButtonStyle.Danger, () =>
+                {
+                    BatchArchive.Delete(batch.batchId);
+                    Reload(null);
+                }));
+        }
+
         void ConfirmClear()
         {
             overlay.ShowDialog("Clear all runs?", "Every recorded run and batch will be deleted, with their saved data. Floor plans and configuration are kept.", null,
@@ -713,6 +884,7 @@ namespace RobotVacuum.LevelEditor
                 new DialogButton("Clear history", ButtonStyle.Danger, () =>
                 {
                     RunHistory.Clear();
+                    BatchArchive.Clear();
                     Reload(null);
                 }));
         }
@@ -1051,6 +1223,175 @@ namespace RobotVacuum.LevelEditor
             painter.MoveTo(Point(samples, 0));
             for (int i = 1; i < samples.Count; i++) painter.LineTo(Point(samples, i));
             painter.Stroke();
+        }
+    }
+
+    /// <summary>
+    /// Several coverage curves on one time axis, one colour each with a legend: the comparison's mean
+    /// coverage over time per group. Hovering reads every line's value at that moment.
+    /// </summary>
+    public sealed class CompareChart : VisualElement
+    {
+        const float AxisWidth = 40f;
+        const float AxisHeight = 20f;
+
+        // Distinct on the dark surface and in the same family as the app's accents. Past eight they repeat.
+        static readonly Color[] Palette =
+        {
+            new Color(0.357f, 0.553f, 0.937f), // blue, --accent
+            new Color(0.235f, 0.796f, 0.541f), // green
+            new Color(0.949f, 0.702f, 0.298f), // amber
+            new Color(0.937f, 0.353f, 0.404f), // red
+            new Color(0.690f, 0.506f, 0.957f), // violet
+            new Color(0.298f, 0.812f, 0.871f), // cyan
+            new Color(0.957f, 0.522f, 0.776f), // pink
+            new Color(0.780f, 0.800f, 0.380f), // olive
+        };
+
+        readonly List<(string label, float[] values)> series;
+        readonly float duration;
+        readonly VisualElement legend;
+        readonly VisualElement plot;
+        readonly VisualElement crosshair;
+        readonly Label readout;
+        readonly float maxPercent;
+
+        public static Color ColorOf(int index) => Palette[index % Palette.Length];
+
+        public CompareChart(List<(string label, float[] values)> series, float duration)
+        {
+            this.series = series;
+            this.duration = duration;
+            AddToClassList("le-chart");
+            AddToClassList("le-chart--compare");
+
+            legend = Ui.Div(this, "le-chart__legend le-chart__legend--wrap");
+            for (int i = 0; i < series.Count; i++)
+            {
+                var item = Ui.Div(legend, "le-chart__legend-item");
+                var key = Ui.Div(item, "le-chart__key");
+                key.style.backgroundColor = ColorOf(i);
+                Ui.Text(item, series[i].label, "le-chart__legend-label");
+            }
+
+            plot = Ui.Div(this, "le-chart__plot");
+            plot.style.left = AxisWidth;
+            plot.style.bottom = AxisHeight;
+            plot.generateVisualContent += Draw;
+
+            float peak = 0f;
+            foreach (var (_, values) in series)
+                foreach (float value in values) peak = Mathf.Max(peak, value);
+            maxPercent = Mathf.Clamp(Mathf.Ceil(peak / 25f) * 25f, 25f, 100f);
+
+            for (int i = 0; i <= 4; i++)
+            {
+                var tick = Ui.Text(this, $"{maxPercent * i / 4f:0}%", "le-chart__y-label");
+                tick.userData = i / 4f;
+            }
+
+            var start = Ui.Text(this, "0:00", "le-chart__x-label");
+            start.style.left = AxisWidth;
+            var end = Ui.Text(this, VacuumSettings.FormatDuration(duration), "le-chart__x-label");
+            end.style.right = 0f;
+
+            crosshair = Ui.Div(plot, "le-chart__crosshair");
+            crosshair.pickingMode = PickingMode.Ignore;
+            readout = Ui.Text(plot, string.Empty, "le-chart__readout");
+            readout.pickingMode = PickingMode.Ignore;
+            Ui.SetVisible(crosshair, false);
+            Ui.SetVisible(readout, false);
+
+            plot.RegisterCallback<PointerMoveEvent>(evt => ShowHover(evt.localPosition.x));
+            plot.RegisterCallback<PointerLeaveEvent>(_ =>
+            {
+                Ui.SetVisible(crosshair, false);
+                Ui.SetVisible(readout, false);
+            });
+            RegisterCallback<GeometryChangedEvent>(_ => PlaceTicks());
+            plot.RegisterCallback<GeometryChangedEvent>(_ => PlaceTicks());
+        }
+
+        /// <summary>The legend wraps to as many lines as it needs; the plot starts below it and the y ticks follow.</summary>
+        void PlaceTicks()
+        {
+            float legendHeight = legend.layout.height;
+            if (float.IsNaN(legendHeight)) return;
+
+            float top = legendHeight + 8f;
+            if (!Mathf.Approximately(plot.resolvedStyle.top, top))
+            {
+                plot.style.top = top;
+                return; // the plot's new size raises another geometry change, which places the ticks
+            }
+
+            float height = plot.layout.height;
+            if (float.IsNaN(height)) return;
+            foreach (var child in Children())
+                if (child.userData is float t) child.style.top = top + height * (1f - t) - 7f;
+        }
+
+        void ShowHover(float x)
+        {
+            var rect = plot.contentRect;
+            if (rect.width <= 0f || duration <= 0f) return;
+
+            float fraction = Mathf.Clamp01(x / rect.width);
+            var parts = new List<string> { VacuumSettings.FormatDuration(duration * fraction) };
+            foreach (var (label, values) in series)
+            {
+                if (values.Length < 2) continue;
+                float position = fraction * (values.Length - 1);
+                int index = Mathf.FloorToInt(position);
+                int next = Mathf.Min(index + 1, values.Length - 1);
+                parts.Add($"{label} {Mathf.Lerp(values[index], values[next], position - index):0.0}%");
+            }
+
+            crosshair.style.left = x;
+            readout.text = string.Join("\n", parts);
+            readout.style.left = x < rect.width * 0.6f ? x + 8f : x - 8f - readout.resolvedStyle.width;
+            Ui.SetVisible(crosshair, true);
+            Ui.SetVisible(readout, true);
+        }
+
+        void Draw(MeshGenerationContext context)
+        {
+            var rect = plot.contentRect;
+            if (rect.width < 4f || rect.height < 4f) return;
+
+            var painter = context.painter2D;
+            painter.lineWidth = 1f;
+            painter.strokeColor = new Color(1f, 1f, 1f, 0.07f);
+            painter.BeginPath();
+            for (int i = 0; i <= 4; i++)
+            {
+                float y = rect.yMax - rect.height * i / 4f;
+                painter.MoveTo(new Vector2(rect.xMin, y));
+                painter.LineTo(new Vector2(rect.xMax, y));
+            }
+            painter.Stroke();
+
+            painter.lineJoin = LineJoin.Round;
+            painter.lineCap = LineCap.Round;
+            painter.lineWidth = 2f;
+
+            // Drawn last-first, so the leader's line ends up on top.
+            for (int s = series.Count - 1; s >= 0; s--)
+            {
+                var values = series[s].values;
+                if (values.Length < 2) continue;
+
+                painter.strokeColor = ColorOf(s);
+                painter.BeginPath();
+                for (int i = 0; i < values.Length; i++)
+                {
+                    var point = new Vector2(rect.xMin + rect.width * i / (values.Length - 1),
+                        rect.yMax - rect.height * Mathf.Clamp01(values[i] / maxPercent));
+                    if (i == 0) painter.MoveTo(point);
+                    else painter.LineTo(point);
+                }
+                painter.Stroke();
+            }
         }
     }
 }

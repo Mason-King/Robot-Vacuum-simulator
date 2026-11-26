@@ -125,32 +125,110 @@ namespace RobotVacuum.Tests
             Assert.AreEqual("Mixed", report.PatternLabel);
         }
 
+        static RunReport Trial(MovementPattern pattern, int seed, float coverage, string batchId)
+        {
+            var run = Run("Flat", pattern, coverage, 60f, "2026-05-01T10:00:00");
+            run.id = Guid.NewGuid().ToString("N");
+            run.batchId = batchId;
+            run.seed = seed;
+            run.coverageSamples.AddRange(new[] { 0f, coverage });
+            run.sampleInterval = 60f;
+            return run;
+        }
+
         [Test]
-        public void ComparePatterns_AveragesPerPattern_BestFirst_AndSkipsMixedRuns()
+        public void ComparingByAlgorithm_PoolsSinglesAndBatches_BestFirst_AndSkipsMixedRuns()
         {
             var mixed = Run("Flat", MovementPattern.Spiral, 99f, 60f);
+            mixed.id = "mixed";
             mixed.mixedPatterns = true;
-            var runs = new[]
+
+            var batch = BatchArchive.Build("b1", new[]
             {
-                Run("Flat", MovementPattern.RandomBounce, 40f, 60f),
-                Run("Flat", MovementPattern.RandomBounce, 60f, 120f),
-                Run("Flat", MovementPattern.Lawnmower, 80f, 60f),
-                Run("House", MovementPattern.Spiral, 90f, 60f),
-                mixed,
-            };
+                Trial(MovementPattern.Lawnmower, 1, 80f, "b1"),
+                Trial(MovementPattern.Lawnmower, 2, 84f, "b1"),
+                Trial(MovementPattern.RandomBounce, 1, 50f, "b1"),
+                Trial(MovementPattern.RandomBounce, 2, 54f, "b1"),
+            });
+            var single = Run("Flat", MovementPattern.RandomBounce, 46f, 60f);
+            single.id = "single";
 
-            var all = AnalysisView.ComparePatterns(runs);
-            Assert.AreEqual(3, all.Count);
-            Assert.AreEqual(MovementPattern.Spiral, all[0].pattern);
+            var sources = new[] { CompareSource.Of(batch), CompareSource.Of(single), CompareSource.Of(mixed) };
+            var groups = RunComparison.Build(sources, CompareGrouping.Algorithm, CompareMetric.Coverage);
 
-            var flat = AnalysisView.ComparePatterns(runs, "Flat.json", "Flat");
-            Assert.AreEqual(2, flat.Count);
-            Assert.AreEqual(MovementPattern.Lawnmower, flat[0].pattern);
-            Assert.AreEqual(MovementPattern.RandomBounce, flat[1].pattern);
-            Assert.AreEqual(2, flat[1].runs);
-            Assert.AreEqual(50f, flat[1].averageCoverage, 1e-4f);
-            Assert.AreEqual(90f, flat[1].averageSeconds, 1e-4f);
-            Assert.AreEqual(100f / 3f, flat[1].coveragePerMinute, 1e-3f, "total coverage over total minutes");
+            Assert.AreEqual(2, groups.Count, "the mixed run belongs to no algorithm");
+            Assert.AreEqual("Lawnmower", groups[0].label);
+            Assert.AreEqual(82f, groups[0].metric.mean, 1e-4);
+            Assert.AreEqual(3, groups[1].runs.Count, "the single run joins the batch's Random trials");
+            Assert.AreEqual(50f, groups[1].metric.mean, 1e-4);
+
+            var byPick = RunComparison.Build(sources, CompareGrouping.Selection, CompareMetric.Coverage);
+            Assert.AreEqual(4, byPick.Count, "each batch algorithm and each single run is its own group");
+        }
+
+        [Test]
+        public void LowerIsBetter_RanksSmallestFirst_AndRunsWithoutAValueGoLast()
+        {
+            var fast = Run("Flat", MovementPattern.Spiral, 95f, 60f);
+            fast.id = "fast";
+            fast.timeTo90 = 30f;
+            var slow = Run("Flat", MovementPattern.Lawnmower, 95f, 60f);
+            slow.id = "slow";
+            slow.timeTo90 = 50f;
+            var never = Run("Flat", MovementPattern.RandomBounce, 40f, 60f);
+            never.id = "never";
+
+            var groups = RunComparison.Build(new[] { CompareSource.Of(never), CompareSource.Of(slow), CompareSource.Of(fast) },
+                CompareGrouping.Algorithm, CompareMetric.TimeTo90);
+
+            Assert.AreEqual("Spiral", groups[0].label);
+            Assert.AreEqual("Lawnmower", groups[1].label);
+            Assert.AreEqual(0, groups[2].metric.count);
+        }
+
+        [Test]
+        public void Judge_CallsALeadClear_OnlyWhenTheIntervalsDontOverlap()
+        {
+            RunReport[] Trials(MovementPattern pattern, params float[] coverage)
+            {
+                var trials = new RunReport[coverage.Length];
+                for (int i = 0; i < coverage.Length; i++) trials[i] = Trial(pattern, i, coverage[i], "b");
+                return trials;
+            }
+
+            var apart = new System.Collections.Generic.List<RunReport>();
+            apart.AddRange(Trials(MovementPattern.Lawnmower, 90f, 91f, 92f, 91f));
+            apart.AddRange(Trials(MovementPattern.RandomBounce, 50f, 52f, 51f, 53f));
+            var clear = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", apart)) }, CompareGrouping.Algorithm, CompareMetric.Coverage);
+            Assert.IsTrue(RunComparison.Judge(clear, CompareMetric.Coverage).clear);
+
+            var close = new System.Collections.Generic.List<RunReport>();
+            close.AddRange(Trials(MovementPattern.Lawnmower, 60f, 80f, 70f, 75f));
+            close.AddRange(Trials(MovementPattern.RandomBounce, 55f, 78f, 66f, 70f));
+            var overlap = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", close)) }, CompareGrouping.Algorithm, CompareMetric.Coverage);
+            Assert.IsFalse(RunComparison.Judge(overlap, CompareMetric.Coverage).clear);
+        }
+
+        [Test]
+        public void BatchFile_RoundTrips_WithTrialsAndAveragedCurves()
+        {
+            string folder = Path.Combine(Path.GetDirectoryName(path), "Batches");
+            var batch = BatchArchive.Build("b2", new[]
+            {
+                Trial(MovementPattern.Lawnmower, 1, 80f, "b2"),
+                Trial(MovementPattern.Lawnmower, 2, 90f, "b2"),
+            });
+            BatchArchive.Save(batch, folder);
+
+            var loaded = BatchArchive.LoadAll(folder);
+            Assert.AreEqual(1, loaded.Count);
+            Assert.AreEqual(2, loaded[0].trials.Count);
+            Assert.AreEqual(1, loaded[0].algorithms.Count);
+            Assert.AreEqual(85f, loaded[0].Algorithm(MovementPattern.Lawnmower).CoverageAt(60f), 1e-3f, "the mean curve ends at the mean coverage");
+            Assert.IsTrue(File.Exists(Path.Combine(folder, "b2.csv")));
+
+            BatchArchive.Delete("b2", folder);
+            Assert.IsEmpty(BatchArchive.LoadAll(folder));
         }
     }
 

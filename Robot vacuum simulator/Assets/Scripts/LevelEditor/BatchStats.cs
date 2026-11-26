@@ -44,10 +44,13 @@ namespace RobotVacuum.LevelEditor
         }
     }
 
-    /// <summary>One algorithm's results across a batch's seeds.</summary>
+    /// <summary>One algorithm's results across a batch's seeds, or any other group of runs being compared.</summary>
     public sealed class AlgorithmSummary
     {
         public MovementPattern pattern;
+
+        /// <summary>A name for a group that isn't simply one algorithm; null shows the algorithm's name.</summary>
+        public string label;
         public List<RunReport> runs = new List<RunReport>();
         public Summary coverage;
         public Summary seconds;
@@ -56,7 +59,7 @@ namespace RobotVacuum.LevelEditor
         public Summary revisits;
         public Summary timeTo90;
 
-        public string Label => MovementAlgorithms.LabelOf(pattern);
+        public string Label => label ?? MovementAlgorithms.LabelOf(pattern);
     }
 
     /// <summary>Aggregates batch results: per-algorithm statistics, averaged coverage curves and heatmaps.</summary>
@@ -91,20 +94,32 @@ namespace RobotVacuum.LevelEditor
             }
 
             var result = new List<AlgorithmSummary>(byPattern.Values);
-            foreach (var group in result)
-            {
-                group.runs.Sort((a, b) => a.seed.CompareTo(b.seed));
-                group.coverage = Summary.Of(group.runs.ConvertAll(r => (double)r.coveragePercent));
-                group.seconds = Summary.Of(group.runs.ConvertAll(r => (double)r.durationSeconds));
-                group.batteryUsed = Summary.Of(group.runs.ConvertAll(r => (double)r.batteryUsed));
-                group.distance = Summary.Of(group.runs.ConvertAll(r => (double)r.distanceMeters));
-                group.revisits = Summary.Of(group.runs.ConvertAll(r => (double)r.revisitCount));
-                var reached = group.runs.FindAll(r => r.timeTo90 >= 0f);
-                group.timeTo90 = Summary.Of(reached.ConvertAll(r => (double)r.timeTo90));
-            }
+            foreach (var group in result) Fill(group);
 
             result.Sort((a, b) => b.coverage.mean.CompareTo(a.coverage.mean));
             return result;
+        }
+
+        /// <summary>Statistics for any group of runs, named <paramref name="label"/>.</summary>
+        public static AlgorithmSummary SummariseGroup(string label, IEnumerable<RunReport> runs)
+        {
+            var group = new AlgorithmSummary { label = label };
+            group.runs.AddRange(runs);
+            if (group.runs.Count > 0) group.pattern = group.runs[0].pattern;
+            Fill(group);
+            return group;
+        }
+
+        static void Fill(AlgorithmSummary group)
+        {
+            group.runs.Sort((a, b) => a.seed.CompareTo(b.seed));
+            group.coverage = Summary.Of(group.runs.ConvertAll(r => (double)r.coveragePercent));
+            group.seconds = Summary.Of(group.runs.ConvertAll(r => (double)r.durationSeconds));
+            group.batteryUsed = Summary.Of(group.runs.ConvertAll(r => (double)r.batteryUsed));
+            group.distance = Summary.Of(group.runs.ConvertAll(r => (double)r.distanceMeters));
+            group.revisits = Summary.Of(group.runs.ConvertAll(r => (double)r.revisitCount));
+            var reached = group.runs.FindAll(r => r.timeTo90 >= 0f);
+            group.timeTo90 = Summary.Of(reached.ConvertAll(r => (double)r.timeTo90));
         }
 
         /// <summary>
@@ -176,6 +191,16 @@ namespace RobotVacuum.LevelEditor
             if (sums == null) return null;
             for (int i = 0; i < sums.Length; i++) sums[i] = counts[i] > 0 ? sums[i] / counts[i] : -1f;
             return sums;
+        }
+
+        /// <summary>Encodes cleanliness 0–1 (or below 0 for no floor) as a base64 coverage map, the inverse of <see cref="DecodeMap"/>.</summary>
+        public static string EncodeMap(float[] values)
+        {
+            if (values == null) return null;
+            var bytes = new byte[values.Length];
+            for (int i = 0; i < values.Length; i++)
+                bytes[i] = values[i] < 0f ? (byte)255 : (byte)Mathf.RoundToInt(Mathf.Clamp01(values[i]) * 250f);
+            return Convert.ToBase64String(bytes);
         }
 
         /// <summary>Decodes a base64 coverage map: 0–250 → cleanliness 0–1, 255 → -1 (no floor).</summary>

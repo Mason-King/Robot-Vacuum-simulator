@@ -145,10 +145,13 @@ namespace RobotVacuum.LevelEditor
         }
     }
 
-    /// <summary>Every recorded run, newest first, kept in one JSON file beside the level library.</summary>
+    /// <summary>
+    /// Every recorded single run, newest first, kept in one JSON file beside the level library. Batch
+    /// experiments are saved separately, one file each, by <see cref="BatchArchive"/>.
+    /// </summary>
     public static class RunHistory
     {
-        /// <summary>Enough for several large batch experiments; the oldest runs drop off beyond it.</summary>
+        /// <summary>Single runs kept; the oldest drop off beyond it. Batches are kept apart, in <see cref="BatchArchive"/>.</summary>
         public const int MaxRuns = 2000;
 
         [Serializable]
@@ -217,6 +220,13 @@ namespace RobotVacuum.LevelEditor
             runs.RemoveAll(run => run.id == id || run.batchId == id);
             Write(runs, path);
             foreach (var run in doomed) DeleteData(run);
+        }
+
+        /// <summary>Drops batch trials from the history, keeping their data folders; batches live in <see cref="BatchArchive"/>.</summary>
+        public static void RemoveBatchTrials(string path = null)
+        {
+            var runs = LoadAll(path);
+            if (runs.RemoveAll(run => run.IsBatch) > 0) Write(runs, path);
         }
 
         public static void Clear(string path = null)

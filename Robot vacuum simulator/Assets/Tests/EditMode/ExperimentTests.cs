@@ -135,6 +135,18 @@ namespace RobotVacuum.Tests
             Assert.AreSame(a, shape);
             Assert.AreEqual(new[] { 0.5f, 0f, -1f }, average);
         }
+
+        [Test]
+        public void EncodeMap_IsTheInverseOfDecodeMap()
+        {
+            var values = new[] { 1f, 0.5f, 0f, -1f };
+            var decoded = BatchStats.DecodeMap(BatchStats.EncodeMap(values), values.Length);
+
+            Assert.AreEqual(1f, decoded[0], 1e-6f);
+            Assert.AreEqual(0.5f, decoded[1], 1f / 250f);
+            Assert.AreEqual(0f, decoded[2], 1e-6f);
+            Assert.AreEqual(-1f, decoded[3], 1e-6f, "no floor");
+        }
     }
 
     public class CoverageGridTests
