@@ -60,13 +60,17 @@ namespace RobotVacuum.Sim
         // Timing (real milliseconds spent, for result.json; reporting only, never read by the simulation).
         readonly System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         double msSensing, msPose, msMapping, msLoopClosure, msControl, msAlgorithm;
-        float msLongestStep;
+        float msLongestPerceptionStep; // sense + pose + map + loop closure
+        float msLongestFullStep;       // the whole step, the algorithm's decision and the driver included
         readonly double[] lagParts = new double[(int)LagLog.Part.Count]; // this step's parts, for the lag log
         MapAnalysis mapAnalysis; // the algorithm's map analysis, for the lag log's breakdown
 
         string activeAlgorithmId;
         AlgorithmEntry activeEntry;
         ICleaningAlgorithm algorithm;
+        readonly AlgorithmHost host = new AlgorithmHost(); // every call into the algorithm goes through it (2.11)
+        double plannerMsCarried; // planner time from planners replaced after an algorithm fault (reporting)
+        int mainThreadId;        // the algorithm's log lines name the robot only from the main thread
         BeliefMapAdapter map; // the view, behind the algorithm API
         PathPlanner planner;  // the controller's, also offered to the algorithm through the map
 
@@ -135,11 +139,23 @@ namespace RobotVacuum.Sim
         /// <summary>True once the run has started (the body respawned, or the first physics step ran).</summary>
         public bool Ready => ready;
 
-        /// <summary>True when the algorithm threw or returned something invalid; the robot stops and the run ends with an error.</summary>
+        /// <summary>
+        /// True when the algorithm failed: it threw, hung past its time budget, returned something invalid, or can't
+        /// be used in this run. The robot stops where it is; the session stops the run (2.11).
+        /// </summary>
         public bool Failed { get; private set; }
 
-        /// <summary>Why the algorithm failed, or null.</summary>
+        /// <summary>Why the algorithm failed, in one line, or null.</summary>
         public string Failure { get; private set; }
+
+        /// <summary>The algorithm's failure in full (kind, call, exception, stack, when), or null.</summary>
+        public AlgorithmFault Fault { get; private set; }
+
+        /// <summary>
+        /// The simulation's own code (sensing, pose, mapping, driving: not the algorithm) threw during a step. The run
+        /// can't be trusted after that, so the session ends it (a Terminal failure). Null if not.
+        /// </summary>
+        public System.Exception SimException { get; private set; }
 
         /// <summary>The settings this run uses.</summary>
         public ControllerSettings Settings => settings;
@@ -237,10 +253,19 @@ namespace RobotVacuum.Sim
         public float AlgorithmMsPerSimSecond => simTime > 0f ? (float)(msAlgorithm / simTime) : 0f;
 
         /// <summary>Real milliseconds per simulated second in the path planner: plans and leg checks, whoever asked (the driver or the algorithm).</summary>
-        public float PlanningMsPerSimSecond => simTime > 0f && planner != null ? (float)(planner.Milliseconds / simTime) : 0f;
+        public float PlanningMsPerSimSecond => simTime > 0f && planner != null ? (float)((planner.Milliseconds + plannerMsCarried) / simTime) : 0f;
 
-        /// <summary>The longest single physics step so far (sense + pose + map + loop closure), real milliseconds.</summary>
-        public float LongestStepMs => msLongestStep;
+        /// <summary>
+        /// The longest perception part of a physics step so far: sensing, pose, mapping and loop closure, real milliseconds.
+        /// Not the algorithm's decision, the driver or path planning: see <see cref="LongestFullStepMs"/>.
+        /// </summary>
+        public float LongestPerceptionStepMs => msLongestPerceptionStep;
+
+        /// <summary>
+        /// The longest whole physics step so far, real milliseconds: perception plus the goal, the algorithm's decision,
+        /// the driver and path planning (what the lag log calls the worst step).
+        /// </summary>
+        public float LongestFullStepMs => msLongestFullStep;
 
         /// <summary>The lidar as built for this run (null before the run starts), for its range and ray count.</summary>
         public LidarSensor Lidar => lidar;
@@ -261,7 +286,11 @@ namespace RobotVacuum.Sim
         {
             robot = GetComponent<VacuumRobot>();
             body = GetComponent<Rigidbody2D>();
+            mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
         }
+
+        // The algorithm's worker thread ends with the robot (a hung one was already dealt with when it hung).
+        void OnDestroy() => host.Dispose();
 
         void OnEnable()
         {
@@ -286,6 +315,9 @@ namespace RobotVacuum.Sim
 
             Failed = false;
             Failure = null;
+            Fault = null;
+            SimException = null;
+            plannerMsCarried = 0.0;
             simTime = 0f;
             nextGoalTime = 0f;
             driver.Reset();
@@ -344,7 +376,8 @@ namespace RobotVacuum.Sim
             observations = new ObservationMapper(writer, settings.slam, localSlam, globalSlam);
             view.SetExploredSource(settings.slam ? observations.IsDrawn : (System.Func<int, int, bool>)null);
             msSensing = msPose = msMapping = msLoopClosure = msControl = msAlgorithm = 0;
-            msLongestStep = 0f;
+            msLongestPerceptionStep = 0f;
+            msLongestFullStep = 0f;
             drift.Clear();
             LagLog.BeginRun(planner, observations);
             if (localSlam != null) LagLog.SetSlam(localSlam, globalSlam);
@@ -391,31 +424,52 @@ namespace RobotVacuum.Sim
             string refusal = AlgorithmCatalog.Refusal(id, settings.slam);
             if (refusal != null)
             {
-                Fail(refusal);
+                Fail(new AlgorithmFault { Kind = AlgorithmFaultKind.Refused, Call = AlgorithmCall.Create, Message = refusal });
                 return;
             }
 
-            try
+            // Built on the algorithm's own thread (AlgorithmHost): a constructor or Initialize that throws or never
+            // returns stops the run without freezing the program.
+            var created = host.Create(activeEntry);
+            if (!created.Ok)
             {
-                algorithm = activeEntry.Create();
-                drive = new DriveRequests();
-                goalMode = DriveMode.Travel;
-                System.Action<string> log = null;
-                if (settings.logAlgorithmDecisions)
+                Fail(created.Fault, AlgorithmCall.Create);
+                return;
+            }
+            if (created.Value == null)
+            {
+                Fail(new AlgorithmFault { Kind = AlgorithmFaultKind.InvalidOutput, Call = AlgorithmCall.Create, Message = "creating it gave nothing (null)." });
+                return;
+            }
+
+            drive = new DriveRequests();
+            goalMode = DriveMode.Travel;
+            System.Action<string> log = null;
+            if (settings.logAlgorithmDecisions)
+            {
+                string name = AlgorithmCatalog.NameOf(id);
+                // Called on the algorithm's thread: Debug.Log is safe there, but the robot is only named from the main thread.
+                log = message =>
                 {
-                    string name = AlgorithmCatalog.NameOf(id);
-                    log = message => Debug.Log($"[{name} {simTime:F1} s] {message}", this);
-                }
-                algorithm.Initialize(new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
-                    writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
-                    targetCleanliness, vacuumPower, drive, mapAnalysis = new MapAnalysis(map), log, () => simTime,
-                    () => robot.DriveSpeedMetersPerSecond, () => robot.TurnSpeedDegreesPerSecond));
-                LagLog.SetMapAnalysis(mapAnalysis);
+                    string line = $"[{name} {simTime:F1} s] {message}";
+                    if (System.Threading.Thread.CurrentThread.ManagedThreadId == mainThreadId) Debug.Log(line, this);
+                    else Debug.Log(line);
+                };
             }
-            catch (System.Exception exception)
+            var context = new AlgorithmContext(new ProviderRandom(random), robot.Radius, robot.CleaningWidth,
+                writer.Grid.CellSizeMeters, settings.slam, lidar != null && lidar.Enabled ? lidar.Range : 0f,
+                targetCleanliness, vacuumPower, drive, mapAnalysis = new MapAnalysis(map), log, () => simTime,
+                () => robot.DriveSpeedMetersPerSecond, () => robot.TurnSpeedDegreesPerSecond);
+
+            var initialized = host.Initialize(created.Value, context);
+            if (!initialized.Ok)
             {
-                Fail($"Initialize failed: {exception.GetType().Name}: {exception.Message}");
+                Fail(initialized.Fault, AlgorithmCall.Initialize);
+                return;
             }
+
+            algorithm = created.Value;
+            LagLog.SetMapAnalysis(mapAnalysis);
         }
 
         // ---- The step ------------------------------------------------------------------------------------
@@ -427,16 +481,44 @@ namespace RobotVacuum.Sim
 
             if (!ready) BeginRun(); // a robot nobody respawned (dropped straight into a scene)
             if (!ready) return;
+            if (SimException != null)
+            {
+                robot.Command(0f, 0f); // the run is being ended (Terminal): stay still until it is
+                return;
+            }
 
+            // Everything below is the simulation's own code; the algorithm's calls are caught inside it (AlgorithmHost).
+            // Anything thrown here is a fault in the simulation itself: stop, and let the session end the run.
+            try
+            {
+                Step();
+            }
+            catch (System.Exception exception)
+            {
+                SimException = exception;
+                robot.Command(0f, 0f);
+                Debug.LogError($"The simulation failed during a step at {simTime:F1} s (not the algorithm): " +
+                               $"{exception.GetType().Name}: {exception.Message}. The run will be ended.\n{exception.StackTrace}", this);
+            }
+        }
+
+        void Step()
+        {
             if (Failed)
             {
-                robot.Command(0f, 0f);
-                return;
+                // Picking another algorithm is how a failed one is replaced, so a new choice is still built here.
+                if (robot.AlgorithmId != activeAlgorithmId) SwitchAlgorithm(robot.AlgorithmId);
+                if (Failed)
+                {
+                    robot.Command(0f, 0f);
+                    return;
+                }
             }
             if (!robot.CanOperate) return;
 
             float dt = Time.fixedDeltaTime;
             simTime += dt;
+            long fullStepStarted = System.Diagnostics.Stopwatch.GetTimestamp(); // for msLongestFullStep
 
             if (robot.AlgorithmId != activeAlgorithmId) SwitchAlgorithm(robot.AlgorithmId);
             if (Failed) return;
@@ -510,7 +592,7 @@ namespace RobotVacuum.Sim
             lagParts[(int)LagLog.Part.Redraw] = redrawMs;
             lagParts[(int)LagLog.Part.Mapping] = stopwatch.Elapsed.TotalMilliseconds - redrawMs;
 
-            if (stepMs > msLongestStep) msLongestStep = (float)stepMs;
+            if (stepMs > msLongestPerceptionStep) msLongestPerceptionStep = (float)stepMs;
             if (settings.slam) drift.Add(believedPose, trueAtBelief);
 
             // 5 - 7. Goal, decide, command.
@@ -593,6 +675,9 @@ namespace RobotVacuum.Sim
                 LagLog.Step(simTime, lagParts, planner != null ? planner.Milliseconds - plannerMsBefore : 0.0,
                     localSlam != null ? localSlam.Submaps.Count : 0);
 
+            double fullStepMs = (System.Diagnostics.Stopwatch.GetTimestamp() - fullStepStarted) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (fullStepMs > msLongestFullStep) msLongestFullStep = (float)fullStepMs;
+
             robot.Command(forward, turn);
         }
 
@@ -611,36 +696,34 @@ namespace RobotVacuum.Sim
                 lastFailedTime = simTime;
             }
 
-            Vector2? next;
+            // On the algorithm's own thread (AlgorithmHost): an exception or a hang comes back as a fault.
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            AlgorithmHost.Outcome<Vec2?> asked;
             try
             {
-                long started = System.Diagnostics.Stopwatch.GetTimestamp();
-                Vec2? picked;
-                try
-                {
-                    planner.Caller = PathPlanner.PlanCaller.Algorithm; // lag log only
-                    picked = algorithm.NextGoal(map, believedPose.ToApi(), status);
-                }
-                finally
-                {
-                    planner.Caller = PathPlanner.PlanCaller.Driver;
-                    msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                }
-                next = picked.HasValue ? picked.Value.ToUnity() : (Vector2?)null;
+                planner.Caller = PathPlanner.PlanCaller.Algorithm; // lag log only
+                asked = host.NextGoal(algorithm, map, believedPose.ToApi(), status);
             }
-            catch (System.Exception exception)
+            finally
             {
-                Fail($"NextGoal failed: {exception.GetType().Name}: {exception.Message}");
+                planner.Caller = PathPlanner.PlanCaller.Driver;
+                msAlgorithm += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            }
+            if (!asked.Ok)
+            {
+                Fail(asked.Fault, AlgorithmCall.NextGoal);
                 return;
             }
 
             driver.StatusReported = true;
 
-            if (next.HasValue && !IsFinite(next.Value))
+            string invalid = InvalidOutput(asked.Value);
+            if (invalid != null)
             {
-                Fail($"NextGoal returned an invalid waypoint: {next.Value}.");
+                Fail(new AlgorithmFault { Kind = AlgorithmFaultKind.InvalidOutput, Call = AlgorithmCall.NextGoal, Message = invalid });
                 return;
             }
+            Vector2? next = asked.Value.HasValue ? asked.Value.Value.ToUnity() : (Vector2?)null;
 
             var current = driver.Goal;
             bool same = next.HasValue && current.HasValue && (next.Value - current.Value).sqrMagnitude < 1e-8f;
@@ -1266,18 +1349,160 @@ namespace RobotVacuum.Sim
                 return;
             }
 
+            // A new algorithm replaces a failed one: the failure is over (a new one may come from building it).
+            if (Failed) ClearFault();
             activeAlgorithmId = id;
             BuildAlgorithm(id);
         }
 
-        void Fail(string failure)
+        void Fail(AlgorithmFault fault, AlgorithmCall call)
+        {
+            fault.Call = call;
+            Fail(fault);
+        }
+
+        void Fail(AlgorithmFault fault)
         {
             if (Failed) return;
 
+            fault.AlgorithmId = activeAlgorithmId;
+            fault.SimSeconds = simTime;
             Failed = true;
-            Failure = failure;
+            Fault = fault;
+            Failure = fault.Describe();
+            algorithm = null; // never called again: Resume builds a fresh one
             if (robot != null) robot.Command(0f, 0f);
-            Debug.LogError($"Movement algorithm '{AlgorithmCatalog.NameOf(activeAlgorithmId)}' stopped: {failure}", this);
+            Debug.LogError($"The movement algorithm stopped at {simTime:F1} s. {Failure}" +
+                           (string.IsNullOrEmpty(fault.StackTrace) ? "" : "\n" + fault.StackTrace), this);
+        }
+
+        void ClearFault()
+        {
+            Failed = false;
+            Fault = null;
+            Failure = null;
+        }
+
+        /// <summary>
+        /// What is wrong with what the algorithm returned from NextGoal (the waypoint and its drive requests), or null
+        /// if nothing. Values the simulation can't act on are a fault of the algorithm, caught here rather than
+        /// left to break the driving later.
+        /// </summary>
+        string InvalidOutput(Vec2? waypoint)
+        {
+            if (waypoint.HasValue)
+            {
+                var w = waypoint.Value;
+                if (!IsFinite(new Vector2(w.x, w.y))) return $"the waypoint ({w.x}, {w.y}) is not a finite number.";
+                if ((new Vector2(w.x, w.y) - dockPosition).sqrMagnitude > MaxWaypointMeters * MaxWaypointMeters)
+                    return $"the waypoint ({w.x:F1}, {w.y:F1}) is more than {MaxWaypointMeters:0} m from the dock.";
+            }
+
+            if (!System.Enum.IsDefined(typeof(DriveMode), drive.Mode)) return $"drive mode {(int)drive.Mode} is not a defined DriveMode.";
+            if (drive.Mode == DriveMode.Sweep)
+            {
+                if (!IsFiniteNumber(drive.SweepExposureMeters) || drive.SweepExposureMeters < 0f)
+                    return $"SweepExposureMeters = {drive.SweepExposureMeters} (must be a finite number, 0 or more).";
+                if (!IsFiniteNumber(drive.SweepTargetFraction) || drive.SweepTargetFraction < 0f || drive.SweepTargetFraction > MaxSweepTargetFraction)
+                    return $"SweepTargetFraction = {drive.SweepTargetFraction} (must be from 0 to {MaxSweepTargetFraction:0}).";
+            }
+
+            if (!System.Enum.IsDefined(typeof(HoldMode), drive.Hold)) return $"hold mode {(int)drive.Hold} is not a defined HoldMode.";
+            if (drive.Hold != HoldMode.None)
+            {
+                if (!IsFiniteNumber(drive.HoldSeconds) || drive.HoldSeconds < 0f)
+                    return $"HoldSeconds = {drive.HoldSeconds} (must be a finite number, 0 or more).";
+                if (!IsFiniteNumber(drive.HoldCleanliness))
+                    return $"HoldCleanliness = {drive.HoldCleanliness} (must be a finite number).";
+                if (!IsFiniteNumber(drive.HoldRadiusMeters) || drive.HoldRadiusMeters < 0f)
+                    return $"HoldRadiusMeters = {drive.HoldRadiusMeters} (must be a finite number, 0 or more).";
+            }
+            return null;
+        }
+
+        /// <summary>A waypoint farther than this from the dock is treated as invalid output (no home is that big).</summary>
+        const float MaxWaypointMeters = 1000f;
+
+        /// <summary>The largest SweepTargetFraction accepted (sweeping to 10× the target is already absurd).</summary>
+        const float MaxSweepTargetFraction = 10f;
+
+        static bool IsFiniteNumber(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        /// <summary>
+        /// Carries on after the session stopped the run (2.11, 2.16): after a failure, a fresh algorithm is built
+        /// (whatever is selected now, so a reimported or newly picked one takes over); after docking, a blockage
+        /// give-up or the dock being out of reach, the same algorithm is asked for work again (one that still thinks
+        /// it is done finishes again, and the run stops again). The robot carries on from where it is, with what it
+        /// has mapped. The session also clears the robot's no-progress check (<see cref="VacuumRobot.ClearStuck"/>).
+        /// </summary>
+        public void Resume()
+        {
+            bool afterFault = Failed;
+            ClearFault();
+            SimException = null;
+
+            Outcome = RunOutcome.None;
+            OutcomeMessage = null;
+            homing = Homing.None;
+            parked = false;
+            homeAttempts = 0;
+            if (squeezing) EndSqueeze();
+            boxedWaitUntil = -1f;
+            boxedResumeHome = false;
+            boxedTries = 0;
+            boxedHomeTries = 0;
+            boxedGoingToLook = false;
+            boxedLookWait = 0f;
+            boxedFinalHeld = boxedHomeFinalHeld = false;
+            boxedFinalHolding = false;
+            EndedByBlockage = false;
+            BlockageLeftSquareMeters = 0f;
+            BlockageReason = null;
+            nextBatteryCheckTime = simTime;
+            nextBatteryCheckCharge = float.PositiveInfinity;
+            lastBatteryCheckCharge = float.NegativeInfinity; // check the battery at once (it may have been refilled)
+            driver.Reset();
+
+            if (afterFault)
+            {
+                // A hung call was aborted part-way, possibly inside the shared path planner: start that afresh.
+                RebuildPlanner();
+                activeAlgorithmId = robot.AlgorithmId;
+                BuildAlgorithm(activeAlgorithmId);
+            }
+            else if (robot.AlgorithmId != activeAlgorithmId)
+            {
+                activeAlgorithmId = robot.AlgorithmId;
+                BuildAlgorithm(activeAlgorithmId);
+            }
+            else
+            {
+                drive.ClearFinish();
+                nextGoalTime = simTime;
+            }
+        }
+
+        /// <summary>
+        /// Builds the current algorithm again from the catalog (after a reimport, so a changed file takes effect).
+        /// The robot keeps its place and its map; the algorithm starts over with Initialize.
+        /// </summary>
+        public void Reload()
+        {
+            if (!ready) return;
+            ClearFault();
+            driver.Reset();
+            activeAlgorithmId = robot.AlgorithmId;
+            BuildAlgorithm(activeAlgorithmId);
+        }
+
+        void RebuildPlanner()
+        {
+            if (view == null || robot == null) return;
+            if (planner != null) plannerMsCarried += planner.Milliseconds;
+            planner = new PathPlanner(view, robot.Radius + ControllerConstants.ClearanceMarginMeters);
+            driver.Planner = ControllerConstants.PlanPaths ? planner : null;
+            map = new BeliefMapAdapter(view, planner);
+            squeezePlanner = null;
         }
 
         /// <summary>SLAM only: <paramref name="from"/> moved by this step's (noisy) odometry, integrated along the mid-turn heading.</summary>

@@ -98,6 +98,22 @@ namespace RobotVacuum.Sim
         /// <summary>Why the algorithm was stopped, or null while it runs.</summary>
         public string FailureReason => stuckReason ?? (Brain != null && Brain.Failed ? Brain.Failure : null);
 
+        /// <summary>True when the body stopped a run that was going nowhere (no progress for <see cref="NoProgressSeconds"/>).</summary>
+        public bool Stuck => stuckReason != null;
+
+        /// <summary>Why the body stopped the run as stuck, or null.</summary>
+        public string StuckReason => stuckReason;
+
+        /// <summary>
+        /// Lets a run stopped as stuck carry on (the user resumed it): the no-progress clock starts again from here.
+        /// </summary>
+        public void ClearStuck()
+        {
+            stuckReason = null;
+            progressTimer = 0f;
+            progressAnchor = body != null ? body.position : (Vector2)transform.position;
+        }
+
         /// <summary>How the robot's job ended, if it has (finished and docked, docked on low battery, or the dock unreachable).</summary>
         public Control.RunOutcome Outcome => Brain != null ? Brain.Outcome : Control.RunOutcome.None;
 

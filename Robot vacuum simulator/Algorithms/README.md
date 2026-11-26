@@ -17,8 +17,12 @@ project's copy is shipped with every build.
 
 Anything whose name starts with `_` or `.` is skipped.
 
-Algorithms can be added or changed while the simulator is open, but **not during a run**: a rescan is refused while a
-run is in progress, and the list stays as it was until the run is stopped.
+Algorithms can be added or changed while the simulator is open. During a run, use **Reimport algorithms** (in the run's
+Settings menu, or on the card shown when an algorithm fails): it pauses the run, rescans this folder, rebuilds the run's
+algorithm from it (its memory starts over; the robot keeps its place and map) and carries on. **After dropping an updated
+algorithm into this folder, press Reimport algorithms to apply it to the run in progress.** If the run's algorithm no
+longer loads after the rescan, the run stops until it is fixed and reimported, or another algorithm is chosen. The
+editor's Tools > Algorithms > Rescan is still refused while a run is going, and nothing is rescanned during a batch.
 
 ## The rules
 
@@ -33,7 +37,12 @@ run is in progress, and the list stays as it was until the run is stopped.
 - **Return nearby waypoints** (a few metres at most), or `null` for "no goal right now".
 - `Name` must be non-empty and different from every other algorithm's. The class's full name (namespace + class) is its
   id, which `config.json` records; it must be unique too.
-- An exception thrown by the algorithm stops the run with an error message; it does not crash the simulator.
+- An exception thrown by the algorithm stops the run with an error message; it does not crash the simulator. So does
+  a call that doesn't return in time (`NextGoal`: 5 s real time; the constructor and `Initialize`: 15 s), which is
+  stopped as hung, and an invalid answer (a NaN waypoint, an undefined drive mode, a negative hold time...). The
+  simulator calls the algorithm on a thread of its own, one call at a time, and waits for each. After a failure the
+  algorithm object is thrown away; if the run is carried on, a fresh one is built and `Initialize`d, so don't rely on
+  state surviving a failure.
 
 ## The sandbox (requirement 4.8)
 

@@ -139,10 +139,20 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public static AlgorithmLoadReport Rescan() => RescanFolder(AlgorithmLoader.DefaultFolder);
 
+        /// <summary>
+        /// Reimport Algorithms (2.16): rescans even while a run is in progress. Only for a run whose simulation is
+        /// paused (the caller pauses it first, so no algorithm call is under way), which then rebuilds its algorithm
+        /// from the new list. Runs other than that one (a batch) must not be going: they would pick up the new code
+        /// between their trials.
+        /// </summary>
+        public static AlgorithmLoadReport RescanForPausedRun() => RescanFolder(AlgorithmLoader.DefaultFolder, evenDuringRuns: true);
+
         /// <summary>As <see cref="Rescan"/>, from another folder (tests and tools).</summary>
-        public static AlgorithmLoadReport RescanFolder(string folder)
+        public static AlgorithmLoadReport RescanFolder(string folder) => RescanFolder(folder, evenDuringRuns: false);
+
+        static AlgorithmLoadReport RescanFolder(string folder, bool evenDuringRuns)
         {
-            if (IsLocked)
+            if (IsLocked && !evenDuringRuns)
             {
                 var refusal = new AlgorithmLoadReport
                 {
@@ -154,9 +164,14 @@ namespace RobotVacuum.Sim.Control
             }
 
             plugins = AlgorithmLoader.Load(folder, builtIns, out lastReport);
+            bool first = !scanned;
             scanned = true;
+            if (!first) Changed?.Invoke(); // (the first scan is just the list appearing, not a change)
             return lastReport;
         }
+
+        /// <summary>Raised after a rescan changed the list (it may have added, updated or dropped algorithms), so screens showing it can refresh.</summary>
+        public static event Action Changed;
 
         static void EnsureScanned()
         {
@@ -184,6 +199,23 @@ namespace RobotVacuum.Sim.Control
         public static string OrDefault(string id) => string.IsNullOrEmpty(id) ? DefaultId : id;
 
         public static string NameOf(string id) => Find(id)?.Name ?? id;
+
+        /// <summary>
+        /// A short fingerprint of the code behind an algorithm, to tell versions apart: "built-in" for a built-in, the
+        /// first 12 hex digits of its file's (or folder's) SHA-256 for a plugin, "not loaded" if it isn't loaded.
+        /// </summary>
+        public static string Fingerprint(string id)
+        {
+            var entry = Find(id);
+            if (entry == null) return NotLoaded;
+            if (entry.BuiltIn) return "built-in";
+            var unit = lastReport?.units.FirstOrDefault(u => u.name == entry.Origin);
+            string hash = unit != null ? unit.hash : "";
+            return string.IsNullOrEmpty(hash) ? NotLoaded : hash.Substring(0, Math.Min(12, hash.Length)).ToLowerInvariant();
+        }
+
+        /// <summary>What <see cref="Fingerprint"/> gives for an algorithm that isn't loaded.</summary>
+        public const string NotLoaded = "not loaded";
 
         public static bool SupportsSlam(string id) => Find(id)?.SupportsSlam ?? false;
 

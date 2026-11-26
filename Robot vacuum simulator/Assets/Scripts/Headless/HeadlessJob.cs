@@ -629,8 +629,11 @@ namespace RobotVacuum.Headless
         public float cellSizeMeters = SimDefaults.CellSizeMeters;
         public float targetMaxClean = HeatmapDefaults.TargetMaxClean;
 
-        /// <summary>The run ends as TimeCap after this many simulated seconds if the battery lasts that long.</summary>
-        public float maxSimulatedSeconds = 1800f;
+        /// <summary>
+        /// The run's time limit: it ends as TimeLimit after this many simulated seconds if nothing else ended it first.
+        /// 1 to 86,400 (the program's 24 h safety cap). Default one simulated hour.
+        /// </summary>
+        public float maxSimulatedSeconds = 3600f;
 
         /// <summary>Simulated seconds between telemetry samples (2.19).</summary>
         public float telemetryInterval = 0.5f;

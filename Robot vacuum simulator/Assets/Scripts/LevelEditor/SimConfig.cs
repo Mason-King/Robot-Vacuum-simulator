@@ -45,8 +45,14 @@ namespace RobotVacuum.LevelEditor
             /// <summary>Simulated seconds between telemetry samples.</summary>
             public float telemetryInterval = 0.5f;
 
-            /// <summary>A batch trial ends after this many simulated minutes if the battery hasn't run out.</summary>
-            public float maxRunMinutes = 30f;
+            /// <summary>
+            /// The run time limit, in simulated seconds (1 to 86,400, the program's 24 h cap): every batch trial uses it;
+            /// a single run only when <see cref="runLimitEnabled"/>. (Replaces the old maxRunMinutes, which is dropped.)
+            /// </summary>
+            public float runLimitSeconds = DefaultRunLimitSeconds;
+
+            /// <summary>Single (graphics) runs stop at <see cref="runLimitSeconds"/>. Off by default: the battery is the usual end.</summary>
+            public bool runLimitEnabled;
 
             /// <summary>Cleaning effort overrides, by floor covering name.</summary>
             public List<FloorEffort> floorEfforts = new List<FloorEffort>();
@@ -70,7 +76,7 @@ namespace RobotVacuum.LevelEditor
                 data.cellSize = data.cellSize > 0f ? Mathf.Clamp(data.cellSize, MinCellSize, MaxCellSize) : SimDefaults.CellSizeMeters;
                 data.telemetryInterval = data.telemetryInterval > 0f
                     ? Mathf.Clamp(data.telemetryInterval, MinTelemetryInterval, MaxTelemetryInterval) : 0.5f;
-                data.maxRunMinutes = data.maxRunMinutes > 0f ? Mathf.Clamp(data.maxRunMinutes, 1f, 240f) : 30f;
+                data.runLimitSeconds = data.runLimitSeconds > 0f ? Mathf.Clamp(data.runLimitSeconds, 1f, MaxRunLimitSeconds) : DefaultRunLimitSeconds;
                 data.floorEfforts ??= new List<FloorEffort>();
                 data.floorEfforts.RemoveAll(entry => entry == null || string.IsNullOrEmpty(entry.floor));
                 return data;
@@ -118,10 +124,32 @@ namespace RobotVacuum.LevelEditor
             set { Current.telemetryInterval = Mathf.Clamp(value, MinTelemetryInterval, MaxTelemetryInterval); Save(); }
         }
 
-        public static float MaxRunMinutes
+        /// <summary>The run time limit's default: one simulated hour.</summary>
+        public const float DefaultRunLimitSeconds = 3600f;
+
+        /// <summary>The longest run time limit: the program's 24 h safety cap.</summary>
+        public const float MaxRunLimitSeconds = SimDefaults.MaxSimulatedSeconds;
+
+        /// <summary>The run time limit in simulated seconds (1 or more): always used by batches, by single runs when <see cref="RunLimitEnabled"/>.</summary>
+        public static float RunLimitSeconds
         {
-            get => Current.maxRunMinutes;
-            set { Current.maxRunMinutes = Mathf.Clamp(value, 1f, 240f); Save(); }
+            get => Current.runLimitSeconds;
+            set { Current.runLimitSeconds = Mathf.Clamp(value, 1f, MaxRunLimitSeconds); Save(); }
+        }
+
+        /// <summary>A time limit in seconds as h:mm:ss (or m:ss under an hour).</summary>
+        public static string FormatLimit(float seconds)
+        {
+            int total = Mathf.Max(0, Mathf.RoundToInt(seconds));
+            int h = total / 3600, m = total / 60 % 60, s = total % 60;
+            return h > 0 ? $"{h}:{m:00}:{s:00}" : $"{m}:{s:00}";
+        }
+
+        /// <summary>Whether a single run stops at <see cref="RunLimitSeconds"/> (off by default).</summary>
+        public static bool RunLimitEnabled
+        {
+            get => Current.runLimitEnabled;
+            set { Current.runLimitEnabled = value; Save(); }
         }
 
         /// <summary>
@@ -145,6 +173,7 @@ namespace RobotVacuum.LevelEditor
             turnSpeed = Vacuum.turnSpeed,
             batteryCapacity = Vacuum.batteryCapacity,
             shape = Vacuum.shape,
+            maxSimulatedSeconds = RunLimitEnabled ? RunLimitSeconds : 0f, // 0: no limit of its own (the 24 h cap still applies)
         };
 
         /// <summary>The adjusted cleaning effort for a covering, or null when it uses the palette's value.</summary>

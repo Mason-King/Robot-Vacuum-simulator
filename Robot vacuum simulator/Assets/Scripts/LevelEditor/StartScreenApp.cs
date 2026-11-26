@@ -228,11 +228,24 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- simulate
 
+        /// <summary>How long a "can't run this" message stays up: it is long, and the user has to act on it.</summary>
+        const long RefusalToastMs = 7600;
+
         void Run(LevelSnapshot level, string path)
         {
             if (level == null || level.ValidRoomCount == 0)
             {
                 overlay.Toast("Draw a room in this floor plan before running it.", "Edit", () => SimLauncher.OpenLevelEditor(path));
+                return;
+            }
+
+            // The configured algorithm must still exist (it may have been removed from the Algorithms folder, or
+            // stopped compiling, since it was chosen) and suit the SLAM setting: say so here rather than start a run
+            // that can't be built.
+            string refusal = AlgorithmCatalog.Refusal(AlgorithmCatalog.OrDefault(SimConfig.RunSettings.algorithmId), SimConfig.RunSettings.slam);
+            if (!string.IsNullOrEmpty(refusal))
+            {
+                overlay.Toast(refusal + " Pick another algorithm in the configuration.", durationMs: RefusalToastMs);
                 return;
             }
 
@@ -251,7 +264,7 @@ namespace RobotVacuum.LevelEditor
             {
                 trials = 10,
                 baseSeed = SimConfig.Seed,
-                maxMinutes = SimConfig.MaxRunMinutes,
+                maxMinutes = SimConfig.RunLimitSeconds / 60f,
                 headless = true,
             };
 
@@ -317,8 +330,9 @@ namespace RobotVacuum.LevelEditor
             }, "le-config-seed__input");
 
             Ui.Text(body, "Time limit per run", "le-field-label le-panel__gap");
-            var limit = new ValueSlider(1f, 240f, spec.maxMinutes, v => $"{Mathf.Round(v):0} min of simulated time", true);
-            limit.ValueChanged += value => spec.maxMinutes = Mathf.Round(value);
+            // In seconds, like the configuration's run time limit (spec.maxMinutes keeps minutes for the batch and network code).
+            var limit = new ValueSlider(1f, SimConfig.MaxRunLimitSeconds, spec.maxMinutes * 60f, v => SimConfig.FormatLimit(v) + " of simulated time", true);
+            limit.ValueChanged += value => spec.maxMinutes = Mathf.Max(1f, Mathf.Round(value)) / 60f;
             body.Add(limit);
 
             // Run on (3.9): this PC alone runs the batch in the app, as before. With network workers chosen it becomes one

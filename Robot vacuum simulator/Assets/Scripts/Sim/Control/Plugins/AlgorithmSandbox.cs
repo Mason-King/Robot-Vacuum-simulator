@@ -171,7 +171,7 @@ namespace RobotVacuum.Sim.Control
             if (name.StartsWith("System.Numerics.Vector", StringComparison.Ordinal))
                 return " Its size depends on the processor, so results would differ between machines (2.1).";
             if (name == "System.Diagnostics.Process" || Under("System.Diagnostics.Process")) return " Algorithms cannot start other programs.";
-            if (Under("System.Threading")) return " An algorithm runs on the simulation's thread: threads, tasks, timers and locks are not available.";
+            if (Under("System.Threading")) return " The simulation calls an algorithm one call at a time and waits for it (on a thread it manages): threads, tasks, timers and locks are not available.";
             if (Under("System.IO")) return " Algorithms cannot read or write files.";
             if (Under("System.Net")) return " Algorithms cannot use the network.";
             if (Under("System.Runtime.InteropServices")) return " Native code is not available to algorithms.";

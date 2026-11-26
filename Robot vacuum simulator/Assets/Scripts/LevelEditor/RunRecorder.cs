@@ -114,10 +114,14 @@ namespace RobotVacuum.LevelEditor
         {
             RunEndReason.Completed => "Finished",
             RunEndReason.BatteryDepleted => "Battery empty",
-            RunEndReason.TimeCap => "Time limit",
+            RunEndReason.TimeCap => "24 h safety cap",
+            RunEndReason.TimeLimit => "Time limit",
             RunEndReason.StoppedByUser => "Stopped",
-            RunEndReason.Error => "Algorithm failed",
-            RunEndReason.Degenerate => "No progress",
+            RunEndReason.Error => "Terminated (error)",
+            RunEndReason.AlgorithmFault => "Algorithm failed",
+            RunEndReason.Stuck => "No progress",
+            RunEndReason.Degenerate => "Dock unreachable",
+            RunEndReason.ReturnedLowBattery => "Returned to dock (battery low)",
             _ => "Stopped",
         };
     }
@@ -475,12 +479,21 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>Fills in the results, writes the run's files and saves it to the history. Saving again later updates it.</summary>
-        public RunReport Finish(string reason, bool save = true)
+        /// <param name="failure">What stopped the run, when the robot itself can't say (a failure of the simulation, a
+        /// stop that was resumed past and then ended): shown in Analysis. Null: the robot's own failure, if any.</param>
+        public RunReport Finish(string reason, bool save = true, string failure = null)
         {
             float time = Elapsed;
             var robot = world.Robot;
 
             report.endReason = reason;
+            // The algorithm it started with; switches made mid-run (2.16) are listed separately.
+            if (!string.IsNullOrEmpty(world.Session.StartingAlgorithmId))
+            {
+                report.algorithmId = AlgorithmCatalog.OrDefault(world.Session.StartingAlgorithmId);
+                report.algorithmName = AlgorithmCatalog.NameOf(report.algorithmId);
+            }
+            report.algorithmSwitches = new List<RunAlgorithmSwitch>(world.Session.AlgorithmSwitches);
             report.durationSeconds = time;
             report.coveragePercent = world.Coverage;
             report.vacuum = JsonUtility.FromJson<VacuumSettings>(JsonUtility.ToJson(vacuumOverride ?? SimConfig.Vacuum));
@@ -488,7 +501,7 @@ namespace RobotVacuum.LevelEditor
             report.distanceMeters = robot != null ? robot.DistanceTravelled : 0f;
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;
-            report.failure = robot != null ? robot.FailureReason : null;
+            report.failure = !string.IsNullOrEmpty(failure) ? failure : robot != null ? robot.FailureReason : null;
             report.floorArea = world.Level != null ? world.Level.TotalFloorArea() : 0f;
 
             var cleaning = world.Cleaning;

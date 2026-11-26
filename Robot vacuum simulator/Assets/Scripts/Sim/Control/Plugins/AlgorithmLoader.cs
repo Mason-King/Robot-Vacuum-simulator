@@ -61,6 +61,9 @@ namespace RobotVacuum.Sim.Control
         public bool fromCache;
         public double milliseconds;
 
+        /// <summary>SHA-256 of its files (names and contents), hex: a fingerprint of the exact code loaded. Empty if it had no files.</summary>
+        public string hash = "";
+
         /// <summary>The names of the algorithms it added to the catalog.</summary>
         public readonly List<string> algorithms = new List<string>();
         public readonly List<string> errors = new List<string>();
@@ -184,6 +187,7 @@ namespace RobotVacuum.Sim.Control
 
             var bytes = files.Select(File.ReadAllBytes).ToList();
             string hash = Hash(kind, files.Select(f => Relative(folder, f)).ToList(), bytes);
+            unit.hash = hash;
 
             if (cache.TryGetValue(hash, out var loaded))
             {

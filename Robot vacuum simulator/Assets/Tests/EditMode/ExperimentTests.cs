@@ -286,11 +286,12 @@ namespace RobotVacuum.Tests
         [Test]
         public void Parse_ClampsExperimentSettings_ToTheirBounds()
         {
-            var data = SimConfig.Data.Parse("{\"vacuum\":{\"driveSpeed\":0.5},\"cellSize\":9,\"telemetryInterval\":0.0001,\"maxRunMinutes\":-3}");
+            var data = SimConfig.Data.Parse("{\"vacuum\":{\"driveSpeed\":0.5},\"cellSize\":9,\"telemetryInterval\":0.0001,\"runLimitSeconds\":-3}");
 
             Assert.AreEqual(SimConfig.MaxCellSize, data.cellSize, 1e-6f);
             Assert.AreEqual(SimConfig.MinTelemetryInterval, data.telemetryInterval, 1e-6f);
-            Assert.AreEqual(30f, data.maxRunMinutes, 1e-6f, "a nonsense limit falls back to the default");
+            Assert.AreEqual(SimConfig.DefaultRunLimitSeconds, data.runLimitSeconds, 1e-6f, "a nonsense limit falls back to the default");
+            Assert.IsFalse(data.runLimitEnabled, "single runs have no time limit unless it is switched on");
             Assert.IsNotNull(data.floorEfforts);
         }
     }

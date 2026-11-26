@@ -116,7 +116,7 @@ namespace RobotVacuum.Headless
         public bool succeeded;
         public string error;
 
-        /// <summary>Completed, BatteryDepleted, TimeCap, StoppedByUser, Error, Degenerate, or NotStarted.</summary>
+        /// <summary>A RunEndReason name (Completed, BatteryDepleted, TimeCap, TimeLimit, StoppedByUser, Error, AlgorithmFault, Stuck, Degenerate, ReturnedLowBattery), or NotStarted.</summary>
         public string endReason;
 
         public float coveragePercent;

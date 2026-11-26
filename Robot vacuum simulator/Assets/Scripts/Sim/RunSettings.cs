@@ -90,7 +90,7 @@ namespace RobotVacuum.Sim
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
 
-        [Tooltip("Ends the run (as TimeCap) after this many simulated seconds if the battery hasn't run out. 0 = the program's safety cap (SimDefaults.MaxSimulatedSeconds). Never above that cap.")]
+        [Tooltip("The run's time limit in simulated seconds: reaching it stops the run (TimeLimit). 0 = no limit of its own; the program's 24 h safety cap (SimDefaults.MaxSimulatedSeconds, TimeCap) still applies. Never above that cap.")]
         public float maxSimulatedSeconds;
 
         /// <summary>The highest noise scale allowed.</summary>
@@ -122,9 +122,10 @@ namespace RobotVacuum.Sim
             if (!IsSet(resolved.targetMaxClean)) resolved.targetMaxClean = HeatmapDefaults.TargetMaxClean;
             if (!IsSet(resolved.cellSizeMeters)) resolved.cellSizeMeters = SimDefaults.CellSizeMeters;
             if (!IsSet(resolved.vacuumPower)) resolved.vacuumPower = HeatmapDefaults.BaseVacuumPower;
+            // The run's own limit: unset means none (only the program's 24 h safety cap, which the session applies itself).
             resolved.maxSimulatedSeconds = IsSet(resolved.maxSimulatedSeconds)
                 ? Mathf.Min(resolved.maxSimulatedSeconds, SimDefaults.MaxSimulatedSeconds)
-                : SimDefaults.MaxSimulatedSeconds;
+                : 0f;
 
             // Sensing. The noise scale is touched ONLY when SLAM is on (clamped to 0–MaxNoiseScale). In a Normal
             // run it is neither read nor changed: it is recorded exactly as set, and nothing uses it.

@@ -26,10 +26,11 @@ namespace RobotVacuum.LevelEditor
         const float EscapeGraceSeconds = 0.5f;
 
         /// <summary>
-        /// Optional. When set, the Restart button calls this instead of only moving the robot back, so the
-        /// owner of the run (SimTestDriver, through SimulationSession) can start a properly recorded new run.
+        /// Optional. When set, restarting calls this instead of restarting the session itself, so the owner of the run
+        /// (SimTestDriver, through SimulationSession) can start a properly recorded new run. The argument is true for
+        /// Run Again (exactly the same seed) and false for the bar's Restart button (the configuration's seed choice).
         /// </summary>
-        public Action RestartRequested;
+        public Action<bool> RestartRequested;
 
         /// <summary>
         /// Optional. When set, the Editor button and Escape call this instead of going straight back to the
@@ -56,6 +57,8 @@ namespace RobotVacuum.LevelEditor
         float measuredSimTime;
         float achievedSpeed;
         VisualElement pauseButton;
+        VisualElement resumeButton; // shown while the run is held at a stop (2.11): the minimized stop card
+        bool stopPaused;            // the simulation is paused because the run is held at a stop
         Label seedLabel;
 
         VacuumSettings Settings => SimConfig.Vacuum;
@@ -97,10 +100,28 @@ namespace RobotVacuum.LevelEditor
             var active = SimulationSession.Active;
             if (active != session)
             {
-                if (session != null) session.Finished -= OnRunEnded;
+                if (session != null)
+                {
+                    session.Finished -= OnRunEnded;
+                    session.Stopped -= OnRunStopped;
+                }
                 session = active;
-                if (session != null) session.Finished += OnRunEnded;
+                if (session != null)
+                {
+                    session.Finished += OnRunEnded;
+                    session.Stopped += OnRunStopped;
+                }
             }
+
+            // A run that meets a stop condition is held here, for the user to resume, change, run again or finish
+            // (2.11); only a Terminal failure or the safety cap ends it outright.
+            if (session != null) session.HoldOnStop = true;
+            if (stopPaused)
+            {
+                stopPaused = false;
+                SetPaused(false);
+            }
+            if (resumeButton != null) Ui.SetVisible(resumeButton, false);
 
             recorder?.Detach();
             recorder = null;
@@ -124,9 +145,14 @@ namespace RobotVacuum.LevelEditor
             Ui.Tooltip(back, fromEditor ? "Back to the level editor   Esc" : "Back to the floor plan list   Esc");
 
             Ui.IconButton(bar, IconKind.Undo, "Restart on a dirty floor (same seed, unless the configuration draws a new one each run)",
-                Restart, "le-btn--ghost");
+                () => Restart(false), "le-btn--ghost");
 
             pauseButton = Ui.IconButton(bar, IconKind.Pause, "Pause or resume the simulation", TogglePause, "le-btn--ghost");
+
+            // The stop card, minimized: carry on with a run that is held at a stop.
+            resumeButton = Ui.Button(bar, "Resume", IconKind.Play, RequestResume, "le-btn--primary");
+            Ui.Tooltip(resumeButton, "The run is stopped. Resume it from here, or open the stop details again.");
+            Ui.SetVisible(resumeButton, false);
 
             // Speed is how many simulated seconds pass per real second. The physics step never changes, so the
             // results are the same at every speed; only the wait differs.
@@ -177,7 +203,7 @@ namespace RobotVacuum.LevelEditor
                 var robot = world?.Robot;
                 var battery = world?.Battery;
                 runtime.text = VacuumSettings.FormatDuration(SimTime);
-                rate.text = paused ? "Paused" : world != null && !world.Running ? "Ended" : $"{achievedSpeed:0.#}×";
+                rate.text = Held ? "Stopped" : paused ? "Paused" : world != null && !world.Running ? "Ended" : $"{achievedSpeed:0.#}×";
                 speedStat.text = Settings.FormatSpeed(robot != null ? robot.SpeedMetersPerSecond : 0f);
                 if (battery != null)
                 {
@@ -195,28 +221,160 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- run lifecycle
 
-        /// <summary>The session ended the run itself (battery, time cap, failed algorithm): save it while the grid is still there.</summary>
+        /// <summary>True while the run is held at a stop condition (<see cref="SimulationSession.Phase.Stopped"/>).</summary>
+        bool Held => session != null && session.State == SimulationSession.Phase.Stopped;
+
+        /// <summary>
+        /// The session ended the run itself. With runs held at their stops, that only happens for a Terminal failure
+        /// (the simulation's own code failed, the algorithm left too many threads) or the 24 h safety cap: save it while
+        /// the grid is still there and go straight to its analysis. If it can't even be saved, offer the way back.
+        /// </summary>
         void OnRunEnded(SimulationSession ended)
         {
             if (ended != session || saved) return;
 
-            string reason = SimWorld.Describe(ended.Result != null ? ended.Result.endReason : RunEndReason.None);
-            if (Save(reason) && overlay != null)
-                overlay.Toast($"{reason} · run saved.", "View analysis", () => OpenAnalysis());
+            var result = ended.Result;
+            string reason = SimWorld.Describe(result != null ? result.endReason : RunEndReason.None);
+            string failure = result != null && !result.succeeded ? result.errorMessage : null;
+            if (Save(reason, failure)) OpenAnalysis();
+            else ShowSaveFailed(reason, failure);
         }
 
-        void Restart()
+        /// <summary>The run's results couldn't be written, so there is no analysis to show: offer the way back to the setup.</summary>
+        void ShowSaveFailed(string reason, string failure)
+        {
+            SetPaused(true);
+            overlay?.ShowDialog("The run ended, and couldn't be saved",
+                (failure ?? reason) + "\n\nIts results could not be written, so there is no analysis to show. See the Console for why.",
+                null,
+                new DialogButton("Back", ButtonStyle.Primary, () =>
+                {
+                    recorder?.Detach();
+                    recorder = null;
+                    session?.Close();
+                    leaving = SimLauncher.ReturnFromSimulation();
+                }));
+        }
+
+        /// <summary>The run met a stop condition and is held (2.11): pause the simulation and show what happened.</summary>
+        void OnRunStopped(SimulationSession stopped)
+        {
+            if (stopped != session) return;
+
+            stopPaused = true;
+            SetPaused(true);
+            ShowStopCard();
+        }
+
+        static string StopTitle(RunEndReason reason) => reason switch
+        {
+            RunEndReason.Completed => "Cleaning finished",
+            RunEndReason.ReturnedLowBattery => "Returned to the dock: battery low",
+            RunEndReason.BatteryDepleted => "Battery empty",
+            RunEndReason.AlgorithmFault => "The algorithm failed",
+            RunEndReason.Stuck => "No progress",
+            RunEndReason.Degenerate => "The dock can't be reached",
+            RunEndReason.TimeLimit => "Time limit reached",
+            _ => SimWorld.Describe(reason),
+        };
+
+        /// <summary>The stop card: what stopped the run, and what can be done about it.</summary>
+        void ShowStopCard()
+        {
+            if (!Held || overlay == null) return;
+            Ui.SetVisible(resumeButton, true);
+
+            var reason = session.StopReason;
+            string message = session.StopMessage;
+            var brain = world?.Brain;
+            if (brain != null && brain.Failed && reason != RunEndReason.AlgorithmFault)
+                message = (string.IsNullOrEmpty(message) ? "" : message + "\n") + brain.Failure; // e.g. a reimport that broke it
+
+            var body = Ui.Div(null);
+            Ui.Text(body, $"Cleaned {(world != null ? world.Coverage : 0f):0.0}%  ·  {VacuumSettings.FormatDuration(SimTime)} simulated  ·  seed {(world != null ? world.Seed : 0)}",
+                "le-dialog__message");
+
+            var fault = session.LastFault;
+            bool algorithmFailed = reason == RunEndReason.AlgorithmFault || (brain != null && brain.Failed);
+            if (algorithmFailed && fault != null && !string.IsNullOrEmpty(fault.stackTrace))
+            {
+                var details = new Foldout { text = "Details", value = false };
+                details.Add(new Label($"{fault.kind} in {fault.call}" +
+                                      (string.IsNullOrEmpty(fault.exceptionType) ? "" : $": {fault.exceptionType}") +
+                                      $"\n{fault.stackTrace}"));
+                body.Add(details);
+            }
+            Ui.Text(body, "Change Parameters closes this so you can use the settings and furniture menus; Resume carries on from here.",
+                "le-empty-hint");
+
+            var buttons = new List<DialogButton>
+            {
+                new DialogButton("Run Again", ButtonStyle.Ghost, () => Restart(true)),
+                new DialogButton("Change Parameters", ButtonStyle.Ghost, null), // just closes the card; Resume stays on the bar
+            };
+            if (algorithmFailed) buttons.Add(new DialogButton("Reimport Algorithms", ButtonStyle.Ghost, Reimport));
+            buttons.Add(new DialogButton("Resume", ButtonStyle.Ghost, RequestResume));
+            buttons.Add(new DialogButton("Finish", ButtonStyle.Primary, Finish));
+
+            overlay.ShowDialog(StopTitle(reason), message, body, null, buttons.ToArray());
+            overlay.DialogCard?.AddToClassList("le-dialog--wide"); // up to five buttons: room for each label
+        }
+
+        /// <summary>Resume, from the card, the bar's Resume or the pause button: after a stop, only once the user confirms.</summary>
+        void RequestResume()
+        {
+            if (!Held)
+            {
+                if (paused) SetPaused(false);
+                return;
+            }
+
+            string title = StopTitle(session.StopReason);
+            overlay.ShowDialog("Resume the run?",
+                $"It stopped: {title}. Resume anyway? The robot carries on from where it is and the no-progress timer " +
+                "starts again. If the cause is still there (an empty battery, an algorithm with nothing left to do) it " +
+                "will simply stop again. Resuming after the time limit lifts it for the rest of this run.",
+                null,
+                new DialogButton("Cancel", ButtonStyle.Ghost, null),
+                new DialogButton("Show details", ButtonStyle.Ghost, ShowStopCard),
+                new DialogButton("Resume", ButtonStyle.Primary, DoResume));
+        }
+
+        void DoResume()
+        {
+            if (!Held) return;
+
+            var reason = session.StopReason;
+            string message = session.StopMessage;
+            if (!session.Resume()) return;
+
+            recorder?.LogParameter($"Run stopped: {SimWorld.Describe(reason)}",
+                string.IsNullOrEmpty(message) ? "stopped" : message, "resumed");
+            Ui.SetVisible(resumeButton, false);
+            stopPaused = false;
+            SetPaused(false);
+        }
+
+        /// <summary>How the run will be labelled in its history if it ends now.</summary>
+        string EndLabel() => Held ? SimWorld.Describe(session.StopReason)
+            : world != null && world.Running ? "Stopped" : "Finished";
+
+        /// <summary>The failure to show in Analysis for a run that ends now (a stop that is an algorithm failure).</summary>
+        string EndFailure() => Held && session.StopReason == RunEndReason.AlgorithmFault ? session.StopMessage : null;
+
+        /// <param name="sameSeed">True: Run Again, exactly the same seed. False: the bar's Restart (the configuration's seed choice).</param>
+        void Restart(bool sameSeed)
         {
             if (escaped) SetPaused(false);
             SaveIfWorthKeeping();
 
             if (RestartRequested != null)
             {
-                RestartRequested();
+                RestartRequested(sameSeed);
                 return;
             }
 
-            if (session != null && session.Restart(out string error)) Rebind();
+            if (session != null && session.Restart(sameSeed, out string error)) Rebind();
             else Debug.LogWarning("Simulator: the run couldn't be restarted.");
         }
 
@@ -245,7 +403,7 @@ namespace RobotVacuum.LevelEditor
             overlay.ShowDialog("The vacuum escaped",
                 "It drove out through a gap in an outside wall and will keep going forever. Add the missing wall in the level editor, or restart.",
                 null,
-                new DialogButton("Restart", ButtonStyle.Ghost, Restart),
+                new DialogButton("Restart", ButtonStyle.Ghost, () => Restart(false)),
                 new DialogButton(SimLauncher.Origin == SimOrigin.Editor ? "Back to editor" : "Edit floor plan", ButtonStyle.Primary,
                     () =>
                     {
@@ -254,13 +412,13 @@ namespace RobotVacuum.LevelEditor
                     }));
         }
 
-        bool Save(string reason)
+        bool Save(string reason, string failure = null)
         {
             if (recorder == null) return false;
 
             try
             {
-                lastSavedId = recorder.Finish(reason).id;
+                lastSavedId = recorder.Finish(reason, failure: failure ?? EndFailure()).id;
                 saved = true;
                 return true;
             }
@@ -275,7 +433,7 @@ namespace RobotVacuum.LevelEditor
         /// <summary>Saves a run the player is walking away from, unless it is too short to mean anything or already saved.</summary>
         void SaveIfWorthKeeping()
         {
-            if (!saved && SimTime >= MinRecordedSeconds) Save(world != null && world.Running ? "Stopped" : "Finished");
+            if (!saved && SimTime >= MinRecordedSeconds) Save(EndLabel());
         }
 
         /// <summary>Saves the run, then has the session end it and write its own result.</summary>
@@ -291,7 +449,14 @@ namespace RobotVacuum.LevelEditor
         {
             if (leaving) return;
 
-            CloseSession(world != null && world.Running ? "Finished" : "Battery empty");
+            string label = Held ? EndLabel() : "Finished";
+            if (!saved && !Save(label))
+            {
+                ShowSaveFailed(label, EndFailure());
+                return;
+            }
+            session?.Finish(); // ends it as finished (a held stop keeps its reason), before Close tears it down
+            CloseSession(label);
             OpenAnalysis();
         }
 
@@ -316,7 +481,11 @@ namespace RobotVacuum.LevelEditor
             leaving = SimLauncher.ReturnFromSimulation();
         }
 
-        void TogglePause() => SetPaused(!paused);
+        void TogglePause()
+        {
+            if (Held) RequestResume(); // a stopped run is resumed deliberately, never by just unpausing
+            else SetPaused(!paused);
+        }
 
         void SetPaused(bool value)
         {
@@ -375,7 +544,11 @@ namespace RobotVacuum.LevelEditor
 
             if (session != null && session.Settings != null)
             {
-                panel.Add(new RunSettingsPanel(session.Settings, session, refusal => overlay.Toast(refusal)));
+                panel.Add(new RunSettingsPanel(session.Settings, session, refusal => overlay.Toast(refusal, durationMs: 7600),
+                    algorithmSwitched: (from, to) => recorder?.LogParameter("Algorithm",
+                        $"{AlgorithmCatalog.NameOf(from)} [{AlgorithmCatalog.Fingerprint(from)}]",
+                        $"{AlgorithmCatalog.NameOf(to)} [{AlgorithmCatalog.Fingerprint(to)}]"),
+                    reimport: Reimport)); // the button sits directly below the Algorithm list
                 Ui.Div(panel, "le-divider");
             }
 
@@ -393,14 +566,75 @@ namespace RobotVacuum.LevelEditor
                 value => Settings.reverseSpeed = value);
             AddVacuumSetting(panel, "Turn speed", 30f, 720f, Settings.turnSpeed, value => $"{value:0} °/s",
                 value => Settings.turnSpeed = value);
-            AddVacuumSetting(panel, "Battery capacity", 10f, Battery.MaxCapacity, Settings.batteryCapacity, VacuumSettings.FormatCapacity,
+            var capacity = AddVacuumSetting(panel, "Battery capacity", 10f, Battery.MaxCapacity, Settings.batteryCapacity, VacuumSettings.FormatCapacity,
                 value => Settings.batteryCapacity = value);
-            Ui.Text(panel, "Changing battery capacity recharges the vacuum. Every change is logged with the simulated time.", "le-empty-hint");
+
+            // The field shows capacity, not the charge left. Selecting it at all, even without changing the figure,
+            // recharges the vacuum, so a user who opens it to "refill to the same capacity" gets what they meant.
+            capacity.RegisterCallback<FocusInEvent>(_ => RefillBattery(quiet: true), TrickleDown.TrickleDown);
+            capacity.RegisterCallback<PointerDownEvent>(_ => RefillBattery(quiet: true), TrickleDown.TrickleDown);
+
+            if (session != null && session.Settings != null)
+            {
+                var refill = Ui.Button(panel, "Refill battery", IconKind.Plus, () => RefillBattery(), "le-btn--ghost le-run-settings__wide");
+                Ui.Tooltip(refill, "Charge the battery back to full. Logged with the simulated time.");
+            }
+            Ui.Text(panel, "Selecting or changing battery capacity recharges the vacuum. Every change is logged with the simulated time.", "le-empty-hint");
 
             return panel;
         }
 
-        void AddVacuumSetting(VisualElement parent, string label, float min, float max, float value,
+        /// <summary>
+        /// Reimport Algorithms (2.16): pauses the simulation if it is going, rescans the Algorithms folder, rebuilds this
+        /// run's algorithm from it (always: its memory starts over) and carries on. If the algorithm no longer loads (its
+        /// file removed or renamed, it doesn't compile, it can't run with SLAM, it throws or hangs as it starts) the run
+        /// is held at a stop instead, until it is fixed and reimported, another algorithm is picked, or the run finished.
+        /// The algorithm's fingerprint before and after is logged, so a mid-run change of code shows in the results.
+        /// </summary>
+        void Reimport()
+        {
+            if (session == null || world == null || world.Brain == null) return;
+
+            bool wasGoing = session.State == SimulationSession.Phase.Running && !paused;
+            if (wasGoing) SetPaused(true); // no physics step (so no algorithm call) runs while the list changes
+
+            string id = world.Robot != null ? world.Robot.AlgorithmId : session.Settings.algorithmId;
+            string before = AlgorithmCatalog.Fingerprint(id);
+            var report = AlgorithmCatalog.RescanForPausedRun();
+            Debug.Log("Reimport Algorithms:\n" + report.Text());
+            string after = AlgorithmCatalog.Fingerprint(id);
+            recorder?.LogParameter($"Algorithm reimported: {AlgorithmCatalog.NameOf(id)}", before, after + " (rebuilt)");
+
+            world.Brain.Reload();
+
+            if (world.Brain.Failed)
+            {
+                // It doesn't load any more: hold the run rather than carry on without an algorithm.
+                if (session.State == SimulationSession.Phase.Running) session.CheckNow(); // stops it (the card comes with the stop)
+                else ShowStopCard();
+                return;
+            }
+
+            if (wasGoing) SetPaused(false);
+            overlay.Toast($"Algorithms reimported: {report.AlgorithmCount} loaded from the folder" +
+                          (report.FailedUnits > 0 ? $", {report.FailedUnits} failed (see the Console)." : ".") +
+                          $" {AlgorithmCatalog.NameOf(id)} was rebuilt.", durationMs: 6000);
+        }
+
+        /// <param name="quiet">From selecting the capacity field: refill without a message, and only if it isn't already full.</param>
+        void RefillBattery(bool quiet = false)
+        {
+            var battery = world?.Battery;
+            if (battery == null) return;
+            if (quiet && battery.CurrentCharge >= battery.Capacity) return;
+
+            string before = VacuumSettings.FormatBattery(battery.CurrentCharge, battery.Capacity);
+            battery.ResetCharge();
+            recorder?.LogParameter("Battery", before, "refilled to " + VacuumSettings.FormatBattery(battery.CurrentCharge, battery.Capacity));
+            if (!quiet) overlay.Toast("Battery refilled." + (Held ? " Resume to carry on." : ""));
+        }
+
+        ValueSlider AddVacuumSetting(VisualElement parent, string label, float min, float max, float value,
             Func<float, string> format, Action<float> store)
         {
             Ui.Text(parent, label, "le-field-label");
@@ -416,6 +650,7 @@ namespace RobotVacuum.LevelEditor
                 if (world?.Robot != null) Settings.ApplyTo(world.Robot, world.Battery);
             };
             parent.Add(slider);
+            return slider;
         }
 
         // ---------------------------------------------------------------- furniture
@@ -491,7 +726,11 @@ namespace RobotVacuum.LevelEditor
 
         void OnDestroy()
         {
-            if (session != null) session.Finished -= OnRunEnded;
+            if (session != null)
+            {
+                session.Finished -= OnRunEnded;
+                session.Stopped -= OnRunStopped;
+            }
             recorder?.Detach();
             overlay = null;
             Time.timeScale = savedTimeScale;

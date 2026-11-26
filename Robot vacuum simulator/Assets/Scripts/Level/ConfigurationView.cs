@@ -67,8 +67,23 @@ namespace RobotVacuum.LevelEditor
         void BuildMovement(VisualElement panel)
         {
             PanelTitle(panel, IconKind.Spawn, "Movement", "How the vacuum chooses where to go next.");
-            panel.Add(new RunSettingsPanel(SimConfig.RunSettings, null, refusal => overlay.Toast(refusal),
-                SimConfig.Save));
+            panel.Add(new RunSettingsPanel(SimConfig.RunSettings, null, refusal => overlay.Toast(refusal, durationMs: 7600),
+                SimConfig.Save, reimport: ReimportAlgorithms));
+        }
+
+        /// <summary>Rescans the Algorithms folder so new or changed algorithms show in the list (the panel refreshes it).</summary>
+        void ReimportAlgorithms()
+        {
+            var report = AlgorithmCatalog.Rescan();
+            if (report.refused)
+            {
+                overlay.Toast(report.refusedReason, durationMs: 7600);
+                return;
+            }
+            Debug.Log("Reimport Algorithms:\n" + report.Text());
+            overlay.Toast(report.FailedUnits > 0
+                ? $"{report.AlgorithmCount} algorithm(s) loaded from the folder; {report.FailedUnits} failed (see the load report in Settings, or the Console)."
+                : $"{report.AlgorithmCount} algorithm(s) loaded from the folder.", durationMs: 6000);
         }
 
         void BuildVacuum(VisualElement panel)
@@ -196,11 +211,16 @@ namespace RobotVacuum.LevelEditor
             telemetry.ValueChanged += value => SimConfig.TelemetryInterval = value;
             panel.Add(telemetry);
 
-            Ui.Text(panel, "Batch trial time limit", "le-field-label le-panel__gap");
-            var limit = new ValueSlider(1f, 240f, SimConfig.MaxRunMinutes, v => $"{v:0} min", true);
-            limit.ValueChanged += value => SimConfig.MaxRunMinutes = Mathf.Round(value);
+            Ui.Text(panel, "Run time limit", "le-field-label le-panel__gap");
+            var limitOn = new SwitchToggle("Stop single runs at the time limit", SimConfig.RunLimitEnabled);
+            panel.Add(limitOn);
+            var limit = new ValueSlider(1f, SimConfig.MaxRunLimitSeconds, SimConfig.RunLimitSeconds, v => SimConfig.FormatLimit(v) + " (h:mm:ss)", true);
+            limit.ValueChanged += value => SimConfig.RunLimitSeconds = Mathf.Max(1f, Mathf.Round(value));
             panel.Add(limit);
-            Ui.Text(panel, "A batch trial ends when the battery runs out, the floor is clean, or this much simulated time has passed.", "le-empty-hint");
+            limitOn.ValueChanged += on => SimConfig.RunLimitEnabled = on;
+            Ui.Text(panel, "Simulated seconds (type an exact value in the box). Every batch trial ends here at the latest; a single run only when the switch is on " +
+                           "(it then stops and can be resumed). Runs also end when the battery runs out or the floor is clean, " +
+                           "and the program never lets one go past 24 h.", "le-empty-hint");
         }
 
         void SaveConfiguration()

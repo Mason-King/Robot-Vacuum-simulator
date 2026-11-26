@@ -21,7 +21,7 @@ namespace RobotVacuum.LevelEditor
         public List<string> algorithmIds = new List<string>();
         public int trials = 10;
         public int baseSeed = 1;
-        public float maxMinutes = 30f;
+        public float maxMinutes = SimConfig.DefaultRunLimitSeconds / 60f;
 
         /// <summary>Step without drawing anything, as fast as the machine allows.</summary>
         public bool headless = true;
@@ -114,13 +114,39 @@ namespace RobotVacuum.LevelEditor
             if (world.Robot == null) return "No vacuum in the scene";
             if (SimTime >= spec.maxMinutes * 60f) return "Time limit";
             if (world.Coverage >= 99.95f) return "Fully clean";
-            if (world.OffFloor) return "Escaped through an open wall";
+            if (Escaped()) return "Escaped through an open wall";
             return null;
         }
+
+        /// <summary>
+        /// Off the floor for longer than a moment. A robot crossing a doorway passes through the wall's thickness, which
+        /// belongs to no room, so a single off-floor step is not an escape: the run screen waits the same grace.
+        /// </summary>
+        bool Escaped()
+        {
+            if (!world.OffFloor)
+            {
+                offFloorSince = -1f;
+                return false;
+            }
+
+            if (offFloorSince < 0f) offFloorSince = SimTime;
+            if (SimTime - offFloorSince < EscapeGraceSeconds) return false;
+
+            var at = world.Robot.LevelPosition;
+            UnityEngine.Debug.LogWarning($"Batch trial {trial + 1}: the vacuum has been off the floor plan for {EscapeGraceSeconds} s, at " +
+                             $"({at.x:F2}, {at.y:F2}) m (room {world.Level.RoomIndexAt(at)}, in a wall: {LevelGeometry.IsInsideWall(world.Level, at)}), " +
+                             $"{SimTime:F1} s into the run. Ending it as escaped.");
+            return true;
+        }
+
+        const float EscapeGraceSeconds = 0.5f; // the same as the run screen's (SimHud)
+        float offFloorSince = -1f;
 
         void StartTrial()
         {
             pendingEnd = null;
+            offFloorSince = -1f;
             var settings = SimConfig.ToRunSettings(spec.algorithmIds[algorithmIndex], spec.baseSeed + trial);
             if (!SimulationSession.TryStart(level, settings, spec.headless, OnRunBegan, out session, out string error))
             {
