@@ -235,27 +235,147 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(0, groups[2].metric.count);
         }
 
-        [Test]
-        public void Judge_CallsALeadClear_OnlyWhenTheIntervalsDontOverlap()
+        static RunReport[] Trials(string algorithm, int firstSeed, params float[] coverage)
         {
-            RunReport[] Trials(string algorithm, params float[] coverage)
+            var trials = new RunReport[coverage.Length];
+            for (int i = 0; i < coverage.Length; i++) trials[i] = Trial(algorithm, firstSeed + i, coverage[i], "b");
+            return trials;
+        }
+
+        static System.Collections.Generic.List<CompareGroup> Groups(CompareMetric metric, params RunReport[][] sets)
+        {
+            var runs = new System.Collections.Generic.List<RunReport>();
+            foreach (var set in sets) runs.AddRange(set);
+            return RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", runs)) }, CompareGrouping.Algorithm, metric);
+        }
+
+        [Test]
+        public void Judge_OnDifferentSeeds_NeedsTheIntervalsNotToOverlap()
+        {
+            var apart = Groups(CompareMetric.Coverage, Trials("Lawnmower", 0, 90f, 91f, 92f, 91f), Trials("Random", 100, 50f, 52f, 51f, 53f));
+            Assert.IsTrue(RunComparison.Judge(apart, CompareMetric.Coverage).clear);
+
+            var overlap = Groups(CompareMetric.Coverage, Trials("Lawnmower", 0, 60f, 80f, 70f, 75f), Trials("Random", 100, 55f, 78f, 66f, 70f));
+            Assert.IsFalse(RunComparison.Judge(overlap, CompareMetric.Coverage).clear);
+        }
+
+        [Test]
+        public void Judge_OnSharedSeeds_PairsThem_AndSeesASmallButSteadyLead()
+        {
+            // The same numbers as the overlapping case above, but on the same seeds: Lawnmower is ahead on every one.
+            var paired = Groups(CompareMetric.Coverage, Trials("Lawnmower", 0, 60f, 80f, 70f, 75f), Trials("Random", 0, 55f, 78f, 66f, 70f));
+            var verdict = RunComparison.Judge(paired, CompareMetric.Coverage);
+
+            Assert.IsTrue(verdict.clear);
+            StringAssert.Contains("4 seeds", verdict.detail);
+        }
+
+        [Test]
+        public void HeadToHead_CountsWinsTiesAndLosses_OnSharedSeedsOnly()
+        {
+            var groups = Groups(CompareMetric.Coverage, Trials("Lawnmower", 0, 80f, 70f, 60f, 90f), Trials("Random", 1, 70f, 70f, 65f, 10f));
+            var lawnmower = groups.Find(g => g.label == "Lawnmower");
+            var random = groups.Find(g => g.label == "Random");
+
+            var result = RunComparison.Compare(lawnmower, random, CompareMetric.Coverage);
+
+            // Shared seeds 1, 2, 3: 70 vs 70 (tie), 60 vs 70 (loss), 90 vs 65 (win). Seed 0 and 4 ran in one group only.
+            Assert.AreEqual(3, result.shared);
+            Assert.AreEqual(1, result.wins);
+            Assert.AreEqual(1, result.ties);
+            Assert.AreEqual(1, result.losses);
+            Assert.AreEqual(5f, result.difference.mean, 1e-4);
+        }
+
+        [Test]
+        public void HeadToHead_OnALowerIsBetterMeasure_CountsTheSmallerValueAsTheWin()
+        {
+            var fast = Trials("Spiral", 0, 90f, 90f);
+            var slow = Trials("Random", 0, 90f, 90f);
+            fast[0].timeTo90 = 30f; fast[1].timeTo90 = 40f;
+            slow[0].timeTo90 = 50f; slow[1].timeTo90 = 60f;
+            var groups = Groups(CompareMetric.TimeTo90, fast, slow);
+
+            var result = RunComparison.Compare(groups[0], groups[1], CompareMetric.TimeTo90);
+
+            Assert.AreEqual("Spiral", groups[0].label);
+            Assert.AreEqual(2, result.wins);
+            Assert.AreEqual(20f, result.difference.mean, 1e-4, "positive means the row did better");
+        }
+
+        [Test]
+        public void SuccessRate_CountsFailedRuns_WhileOtherMeasuresLeaveThemOut()
+        {
+            var trials = Trials("Lawnmower", 0, 80f, 90f, 10f, 70f);
+            trials[2].failure = "boom";
+            var group = Groups(CompareMetric.Coverage, trials)[0];
+
+            Assert.AreEqual(75f, group.Stat(CompareMetric.Succeeded).mean, 1e-4);
+            Assert.AreEqual(4, group.Stat(CompareMetric.Succeeded).count);
+            Assert.AreEqual(80f, group.Stat(CompareMetric.Coverage).mean, 1e-4);
+            Assert.AreEqual(3, group.Stat(CompareMetric.Coverage).count);
+        }
+
+        [Test]
+        public void Quartiles_InterpolateBetweenRuns()
+        {
+            var (min, q1, median, q3, max) = RunComparison.Quartiles(new System.Collections.Generic.List<double> { 4, 1, 3, 2, 5 });
+
+            Assert.AreEqual(1, min);
+            Assert.AreEqual(2, q1);
+            Assert.AreEqual(3, median);
+            Assert.AreEqual(4, q3);
+            Assert.AreEqual(5, max);
+        }
+
+        [Test]
+        public void Rooms_AreMatchedByName_AndAveragedPerGroup()
+        {
+            RunReport WithRooms(RunReport run, float kitchen, float hall)
             {
-                var trials = new RunReport[coverage.Length];
-                for (int i = 0; i < coverage.Length; i++) trials[i] = Trial(algorithm, i, coverage[i], "b");
-                return trials;
+                run.roomNames.AddRange(new[] { "Kitchen", "Hall" });
+                run.roomCoverage.AddRange(new[] { kitchen, hall });
+                run.roomBattery.AddRange(new[] { 1f, 1f });
+                run.roomSeconds.AddRange(new[] { 1f, 1f });
+                run.roomVisits.AddRange(new[] { 1, 1 });
+                run.roomArea.AddRange(new[] { 10f, 5f });
+                return run;
             }
 
-            var apart = new System.Collections.Generic.List<RunReport>();
-            apart.AddRange(Trials("Lawnmower", 90f, 91f, 92f, 91f));
-            apart.AddRange(Trials("Random", 50f, 52f, 51f, 53f));
-            var clear = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", apart)) }, CompareGrouping.Algorithm, CompareMetric.Coverage);
-            Assert.IsTrue(RunComparison.Judge(clear, CompareMetric.Coverage).clear);
+            var a = Trials("Lawnmower", 0, 80f, 80f);
+            WithRooms(a[0], 90f, 40f);
+            WithRooms(a[1], 70f, 60f);
+            var groups = Groups(CompareMetric.Coverage, a);
 
-            var close = new System.Collections.Generic.List<RunReport>();
-            close.AddRange(Trials("Lawnmower", 60f, 80f, 70f, 75f));
-            close.AddRange(Trials("Random", 55f, 78f, 66f, 70f));
-            var overlap = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", close)) }, CompareGrouping.Algorithm, CompareMetric.Coverage);
-            Assert.IsFalse(RunComparison.Judge(overlap, CompareMetric.Coverage).clear);
+            var rows = RunComparison.Rooms(groups, (run, i) => run.roomCoverage[i]);
+
+            Assert.AreEqual(2, rows.Count);
+            Assert.AreEqual("Kitchen", rows[0].name);
+            Assert.AreEqual(80f, rows[0].perGroup[0].mean, 1e-4);
+            Assert.AreEqual(50f, rows[1].perGroup[0].mean, 1e-4);
+        }
+
+        [Test]
+        public void GroupCurve_PoolsTheBatchSpreadIntoItsBand()
+        {
+            var group = Groups(CompareMetric.Coverage, Trials("Lawnmower", 0, 60f, 100f))[0];
+
+            var mean = group.Curve(3, 60f, out var spread);
+
+            Assert.AreEqual(80f, mean[2], 1e-3, "both runs end on their final coverage");
+            Assert.AreEqual(20f, spread[2], 1e-3, "60 and 100 are 20 either side of 80");
+        }
+
+        [Test]
+        public void ComparisonCsv_HasARowPerRun_AndASummaryPerGroupAndMeasure()
+        {
+            var groups = Groups(CompareMetric.Coverage, Trials("Lawnmower", 0, 80f, 90f), Trials("Random", 0, 50f, 60f));
+
+            var lines = RunComparison.ToCsv(groups).Split('\n');
+
+            StringAssert.StartsWith("section,group,run_id,seed,succeeded,coverage_pct", lines[0]);
+            Assert.AreEqual(4, Array.FindAll(lines, l => l.StartsWith("run,")).Length);
+            Assert.AreEqual(2 * RunComparison.Metrics.Length, Array.FindAll(lines, l => l.StartsWith("summary,")).Length);
         }
 
         [Test]

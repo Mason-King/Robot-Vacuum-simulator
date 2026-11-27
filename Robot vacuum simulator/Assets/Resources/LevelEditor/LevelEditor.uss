@@ -3471,3 +3471,164 @@
 .le-chart__legend--wrap .le-chart__legend-item {
     margin-bottom: 4px;
 }
+
+/* ------------------------------------------------------------ analysis: comparison sections */
+
+.le-compare__controls {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    margin-bottom: 6px;
+}
+
+.le-compare__control {
+    margin: 0 18px 6px 0;
+}
+
+.le-compare__control .le-field-label {
+    margin-bottom: 6px;
+}
+
+.le-compare__metric {
+    flex-direction: row-reverse;
+    min-width: 200px;
+    justify-content: space-between;
+    border-color: var(--border-strong);
+    background-color: var(--surface-2);
+}
+
+.le-compare__metric .le-icon {
+    margin: 0 0 0 8px;
+}
+
+/* A group's name with its colour key, wherever groups are listed. */
+.le-compare__name {
+    flex-direction: row;
+    align-items: center;
+    overflow: hidden;
+}
+
+.le-compare__swatch {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    margin-right: 7px;
+    border-radius: 3px;
+}
+
+.le-compare__name-text {
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    -unity-font-style: bold;
+}
+
+/* Scorecard and the room and floor tables: measures down, groups across. */
+.le-scorecard__measure {
+    flex-grow: 1.4;
+    padding-right: 8px;
+}
+
+.le-scorecard__row--ranked {
+    background-color: var(--accent-soft);
+}
+
+.le-scorecard__best,
+.le-scorecard__best--clear {
+    -unity-font-style: bold;
+}
+
+.le-app .le-scorecard__best {
+    color: var(--text);
+}
+
+.le-app .le-scorecard__best--clear {
+    color: var(--success);
+}
+
+.le-table .le-table__cell {
+    padding-right: 6px;
+}
+
+/* Head to head: one cell per pair, green or red when the paired difference is clear. */
+.le-h2h__corner {
+    flex-grow: 1.4;
+}
+
+.le-h2h__cell {
+    margin: 2px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background-color: var(--surface-2);
+}
+
+.le-h2h__cell--self {
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.le-h2h__cell--better {
+    background-color: rgba(60, 203, 138, 0.18);
+}
+
+.le-h2h__cell--worse {
+    background-color: rgba(239, 90, 103, 0.16);
+}
+
+.le-h2h__score {
+    font-size: 13px;
+    -unity-font-style: bold;
+}
+
+.le-h2h__note {
+    font-size: 11px;
+    white-space: normal;
+}
+
+.le-app .le-h2h__note {
+    color: var(--text-2);
+}
+
+/* Spread: labels on the left, the plot beside them, the axis ends underneath. */
+.le-spread {
+    margin-top: 6px;
+}
+
+.le-spread__label {
+    position: absolute;
+    left: 0;
+    font-size: 12px;
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.le-spread__plot {
+    position: absolute;
+    top: 0;
+    right: 0;
+    border-bottom-width: 1px;
+    border-color: var(--border-strong);
+}
+
+/* Heatmaps side by side. */
+.le-compare__maps {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin: 0 -6px;
+}
+
+.le-compare__map-card {
+    width: 50%;
+    padding: 6px;
+}
+
+.le-compare__map {
+    height: 240px;
+    margin-top: 6px;
+}
+
+.le-compare__run:hover {
+    background-color: var(--surface-2);
+}

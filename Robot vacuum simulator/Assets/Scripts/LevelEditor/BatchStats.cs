@@ -214,6 +214,29 @@ namespace RobotVacuum.LevelEditor
             return curve;
         }
 
+        /// <summary>
+        /// The standard deviation of coverage across <paramref name="runs"/> at each point of <paramref name="mean"/>
+        /// (from <see cref="AverageCurve"/>, spanning <paramref name="duration"/>), for the band around the mean curve.
+        /// </summary>
+        public static float[] CurveSpread(IReadOnlyList<RunReport> runs, IReadOnlyList<float> mean, float duration)
+        {
+            var spread = new float[mean.Count];
+            if (runs.Count < 2 || mean.Count < 2 || duration <= 0f) return spread;
+
+            for (int i = 0; i < spread.Length; i++)
+            {
+                float t = duration * i / (spread.Length - 1);
+                double squares = 0;
+                foreach (var run in runs)
+                {
+                    double difference = CoverageAt(run, t) - mean[i];
+                    squares += difference * difference;
+                }
+                spread[i] = (float)Math.Sqrt(squares / runs.Count);
+            }
+            return spread;
+        }
+
         /// <summary>A run's coverage at simulated time <paramref name="t"/>, from its samples.</summary>
         public static float CoverageAt(RunReport run, float t)
         {

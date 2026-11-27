@@ -36,8 +36,6 @@ namespace RobotVacuum.LevelEditor
         // Runs and batches picked for comparison, by id, and how the comparison is shown.
         readonly HashSet<string> picked = new HashSet<string>();
         bool comparing;
-        CompareMetric compareMetric = CompareMetric.Coverage;
-        CompareGrouping compareGrouping = CompareGrouping.Algorithm;
 
         public event Action BackRequested;
         public event Action SimulateRequested;
@@ -297,141 +295,29 @@ namespace RobotVacuum.LevelEditor
         /// <summary>The picked runs and batches, in list order.</summary>
         List<CompareSource> PickedSources() => Entries().FindAll(entry => picked.Contains(entry.Id));
 
+        /// <summary>The comparison of the picked runs and batches (<see cref="ComparisonView"/>).</summary>
         void BuildCompare(VisualElement column)
         {
-            var sources = PickedSources();
-            var groups = RunComparison.Build(sources, compareGrouping, compareMetric);
-
-            var panel = Ui.Div(column, "le-panel");
-            var header = Ui.Div(panel, "le-panel__header");
-            var titles = Ui.Div(header, "le-panel__titles");
-            int runCount = 0;
-            foreach (var source in sources) runCount += source.RunCount;
-            Ui.Text(titles, $"Comparison · {sources[0].LevelName}", "le-panel__title");
-            Ui.Text(titles, $"{sources.Count} pick(s) · {runCount} runs · {groups.Count} group(s)", "le-panel__text");
-
-            var grouping = new Segmented(new[] { "By algorithm", "By pick" }, (int)compareGrouping);
-            grouping.SelectionChanged += index =>
+            var view = new ComparisonView(overlay, palette, PickedSources(), LoadLevelFor);
+            view.PickRemoved += id =>
             {
-                compareGrouping = (CompareGrouping)index;
+                picked.Remove(id);
+                if (picked.Count == 0) comparing = false;
                 Rebuild();
             };
-            Ui.Tooltip(grouping, "Pool every picked run of the same algorithm, or keep each pick (and each algorithm within a batch) apart");
-            header.Add(grouping);
-
-            Ui.Text(panel, "RANK BY", "le-section__title");
-            var metricLabels = Array.ConvertAll(RunComparison.Metrics, RunComparison.Label);
-            var metric = new Segmented(metricLabels, Array.IndexOf(RunComparison.Metrics, compareMetric));
-            metric.SelectionChanged += index =>
+            view.RunOpened += run =>
             {
-                compareMetric = RunComparison.Metrics[index];
-                Rebuild();
-            };
-            panel.Add(metric);
-
-            if (groups.Count == 0)
-            {
-                Ui.Text(panel, "None of the picked runs can be grouped by algorithm: they all switched algorithm part-way. Try grouping by pick.",
-                    "le-empty-hint");
-                return;
-            }
-
-            var verdict = RunComparison.Judge(groups, compareMetric);
-            var callout = Ui.Div(panel, verdict.clear ? "le-compare__verdict le-compare__verdict--clear" : "le-compare__verdict");
-            Ui.Text(callout, verdict.headline, "le-compare__verdict-title");
-            Ui.Text(callout, verdict.detail, "le-compare__verdict-text");
-
-            foreach (string caveat in RunComparison.Caveats(sources, compareGrouping))
-                Ui.Text(panel, caveat, "le-analysis__failure");
-
-            BuildMetricBars(panel, groups);
-
-            Ui.Text(panel, "EVERY MEASURE · MEAN ± 95% CONFIDENCE INTERVAL", "le-section__title le-analysis__chart-title");
-            BuildStatsTable(panel, groups.ConvertAll(g => g.stats));
-
-            // Mean coverage over time, one line per group, on one time axis.
-            var curvePanel = Ui.Div(column, "le-panel");
-            Ui.Text(curvePanel, "MEAN COVERAGE OVER TIME", "le-section__title");
-            float duration = 0f;
-            foreach (var group in groups) duration = Mathf.Max(duration, group.CurveDuration);
-            var series = new List<(string, float[])>();
-            foreach (var group in groups) series.Add((group.label, group.Curve(BatchArchive.CurvePoints, duration)));
-            curvePanel.Add(new CompareChart(series, duration));
-            Ui.Text(curvePanel, "A run that has ended holds its final coverage, so every line runs to the end.", "le-empty-hint");
-
-            // What's in the comparison, with a way to take each pick out.
-            var picks = Ui.Div(column, "le-panel");
-            Ui.Text(picks, "PICKED", "le-section__title");
-            foreach (var source in sources)
-            {
-                var row = Ui.Div(picks, "le-run-row");
-                var text = Ui.Div(row, "le-run-row__text");
-                if (source.single != null)
-                {
-                    var run = source.single;
-                    Ui.Text(text, $"{run.levelName} · {run.AlgorithmName}", "le-run-row__title");
-                    Ui.Text(text, $"Single run · seed {run.seed} · {FormatWhen(run.FinishedAt)}", "le-run-row__meta");
-                }
+                if (run.IsBatch) OpenTrial(run);
                 else
                 {
-                    var batch = source.batch;
-                    Ui.Text(text, $"Batch · {batch.levelName}", "le-run-row__title");
-                    Ui.Text(text, $"{batch.algorithms.Count} algorithm(s) · {batch.trials.Count} runs · seeds {batch.MinSeed}–{batch.MaxSeed} · {FormatWhen(batch.FinishedAt)}",
-                        "le-run-row__meta");
-                }
-
-                string id = source.Id;
-                Ui.IconButton(row, IconKind.Close, "Take out of the comparison", () =>
-                {
-                    picked.Remove(id);
-                    if (picked.Count == 0) comparing = false;
+                    selectedRun = run;
+                    selectedBatch = null;
+                    comparing = false;
                     Rebuild();
-                }, "le-btn--ghost le-btn--small");
-            }
-        }
-
-        /// <summary>One bar per group on the chosen metric, with its 95% interval as a whisker, best first.</summary>
-        void BuildMetricBars(VisualElement panel, List<CompareGroup> groups)
-        {
-            Ui.Text(panel, RunComparison.Label(compareMetric).ToUpperInvariant() +
-                           (RunComparison.HigherIsBetter(compareMetric) ? " · HIGHER IS BETTER" : " · LOWER IS BETTER"),
-                "le-section__title le-analysis__chart-title");
-
-            // Coverage reads against 100%; everything else against the largest interval end.
-            double scale = compareMetric == CompareMetric.Coverage ? 100 : 0;
-            if (scale <= 0)
-                foreach (var group in groups) scale = Math.Max(scale, group.metric.mean + group.metric.ci95);
-            if (scale <= 0) scale = 1;
-
-            for (int i = 0; i < groups.Count; i++)
-            {
-                var group = groups[i];
-                var row = Ui.Div(panel, "le-compare-row");
-                var label = Ui.Text(row, group.label, "le-compare-row__label le-compare-row__label--wide");
-                Ui.Tooltip(label, group.label);
-
-                var track = Ui.Div(row, "le-compare-row__track le-compare-row__track--ci");
-                if (group.metric.count == 0)
-                {
-                    Ui.Text(row, "—", "le-compare-row__value");
-                    Ui.Text(row, MissingNote(group), "le-compare-row__meta le-compare-row__meta--wide");
-                    continue;
                 }
-
-                var fill = Ui.Div(track, i == 0 ? "le-compare-row__fill le-compare-row__fill--best" : "le-compare-row__fill");
-                fill.style.width = Length.Percent(Mathf.Clamp((float)(group.metric.mean / scale * 100), 0f, 100f));
-                if (HasInterval(group.metric)) ErrorBar(track, group.metric.Low, group.metric.High, scale);
-
-                Ui.Text(row, RunComparison.Format(compareMetric, group.metric.mean), "le-compare-row__value");
-                string spread = HasInterval(group.metric) ? $"± {RunComparison.FormatSpread(compareMetric, group.metric.ci95)} · " : string.Empty;
-                string counted = group.metric.count < group.runs.Count ? $"{group.metric.count} of {group.runs.Count} runs" : $"{group.runs.Count} run(s)";
-                Ui.Text(row, spread + counted, "le-compare-row__meta le-compare-row__meta--wide");
-            }
+            };
+            column.Add(view);
         }
-
-        string MissingNote(CompareGroup group) => compareMetric == CompareMetric.TimeTo90
-            ? $"none of its {group.runs.Count} run(s) reached 90%"
-            : $"no value in its {group.runs.Count} run(s)";
 
         // ---------------------------------------------------------------- batch
 
@@ -635,11 +521,11 @@ namespace RobotVacuum.LevelEditor
         }
 
         /// <summary>True when a summary has a confidence interval worth drawing: two or more runs that didn't all come out the same.</summary>
-        static bool HasInterval(Summary summary) =>
+        internal static bool HasInterval(Summary summary) =>
             summary.count >= 2 && !double.IsNaN(summary.ci95) && !double.IsInfinity(summary.ci95) && summary.ci95 > 0;
 
         /// <summary>An error bar (|—|) from <paramref name="low"/> to <paramref name="high"/> on a track that spans 0 to <paramref name="scale"/>.</summary>
-        static void ErrorBar(VisualElement track, double low, double high, double scale)
+        internal static void ErrorBar(VisualElement track, double low, double high, double scale)
         {
             var whisker = Ui.Div(track, "le-compare-row__ci");
             Ui.Div(whisker, "le-compare-row__ci-line");
@@ -1331,175 +1217,6 @@ namespace RobotVacuum.LevelEditor
             painter.MoveTo(Point(samples, 0));
             for (int i = 1; i < samples.Count; i++) painter.LineTo(Point(samples, i));
             painter.Stroke();
-        }
-    }
-
-    /// <summary>
-    /// Several coverage curves on one time axis, one colour each with a legend: the comparison's mean
-    /// coverage over time per group. Hovering reads every line's value at that moment.
-    /// </summary>
-    public sealed class CompareChart : VisualElement
-    {
-        const float AxisWidth = 40f;
-        const float AxisHeight = 20f;
-
-        // Distinct on the dark surface and in the same family as the app's accents. Past eight they repeat.
-        static readonly Color[] Palette =
-        {
-            new Color(0.357f, 0.553f, 0.937f), // blue, --accent
-            new Color(0.235f, 0.796f, 0.541f), // green
-            new Color(0.949f, 0.702f, 0.298f), // amber
-            new Color(0.937f, 0.353f, 0.404f), // red
-            new Color(0.690f, 0.506f, 0.957f), // violet
-            new Color(0.298f, 0.812f, 0.871f), // cyan
-            new Color(0.957f, 0.522f, 0.776f), // pink
-            new Color(0.780f, 0.800f, 0.380f), // olive
-        };
-
-        readonly List<(string label, float[] values)> series;
-        readonly float duration;
-        readonly VisualElement legend;
-        readonly VisualElement plot;
-        readonly VisualElement crosshair;
-        readonly Label readout;
-        readonly float maxPercent;
-
-        public static Color ColorOf(int index) => Palette[index % Palette.Length];
-
-        public CompareChart(List<(string label, float[] values)> series, float duration)
-        {
-            this.series = series;
-            this.duration = duration;
-            AddToClassList("le-chart");
-            AddToClassList("le-chart--compare");
-
-            legend = Ui.Div(this, "le-chart__legend le-chart__legend--wrap");
-            for (int i = 0; i < series.Count; i++)
-            {
-                var item = Ui.Div(legend, "le-chart__legend-item");
-                var key = Ui.Div(item, "le-chart__key");
-                key.style.backgroundColor = ColorOf(i);
-                Ui.Text(item, series[i].label, "le-chart__legend-label");
-            }
-
-            plot = Ui.Div(this, "le-chart__plot");
-            plot.style.left = AxisWidth;
-            plot.style.bottom = AxisHeight;
-            plot.generateVisualContent += Draw;
-
-            float peak = 0f;
-            foreach (var (_, values) in series)
-                foreach (float value in values) peak = Mathf.Max(peak, value);
-            maxPercent = Mathf.Clamp(Mathf.Ceil(peak / 25f) * 25f, 25f, 100f);
-
-            for (int i = 0; i <= 4; i++)
-            {
-                var tick = Ui.Text(this, $"{maxPercent * i / 4f:0}%", "le-chart__y-label");
-                tick.userData = i / 4f;
-            }
-
-            var start = Ui.Text(this, "0:00", "le-chart__x-label");
-            start.style.left = AxisWidth;
-            var end = Ui.Text(this, VacuumSettings.FormatDuration(duration), "le-chart__x-label");
-            end.style.right = 0f;
-
-            crosshair = Ui.Div(plot, "le-chart__crosshair");
-            crosshair.pickingMode = PickingMode.Ignore;
-            readout = Ui.Text(plot, string.Empty, "le-chart__readout");
-            readout.pickingMode = PickingMode.Ignore;
-            Ui.SetVisible(crosshair, false);
-            Ui.SetVisible(readout, false);
-
-            plot.RegisterCallback<PointerMoveEvent>(evt => ShowHover(evt.localPosition.x));
-            plot.RegisterCallback<PointerLeaveEvent>(_ =>
-            {
-                Ui.SetVisible(crosshair, false);
-                Ui.SetVisible(readout, false);
-            });
-            RegisterCallback<GeometryChangedEvent>(_ => PlaceTicks());
-            plot.RegisterCallback<GeometryChangedEvent>(_ => PlaceTicks());
-        }
-
-        /// <summary>The legend wraps to as many lines as it needs; the plot starts below it and the y ticks follow.</summary>
-        void PlaceTicks()
-        {
-            float legendHeight = legend.layout.height;
-            if (float.IsNaN(legendHeight)) return;
-
-            float top = legendHeight + 8f;
-            if (!Mathf.Approximately(plot.resolvedStyle.top, top))
-            {
-                plot.style.top = top;
-                return; // the plot's new size raises another geometry change, which places the ticks
-            }
-
-            float height = plot.layout.height;
-            if (float.IsNaN(height)) return;
-            foreach (var child in Children())
-                if (child.userData is float t) child.style.top = top + height * (1f - t) - 7f;
-        }
-
-        void ShowHover(float x)
-        {
-            var rect = plot.contentRect;
-            if (rect.width <= 0f || duration <= 0f) return;
-
-            float fraction = Mathf.Clamp01(x / rect.width);
-            var parts = new List<string> { VacuumSettings.FormatDuration(duration * fraction) };
-            foreach (var (label, values) in series)
-            {
-                if (values.Length < 2) continue;
-                float position = fraction * (values.Length - 1);
-                int index = Mathf.FloorToInt(position);
-                int next = Mathf.Min(index + 1, values.Length - 1);
-                parts.Add($"{label} {Mathf.Lerp(values[index], values[next], position - index):0.0}%");
-            }
-
-            crosshair.style.left = x;
-            readout.text = string.Join("\n", parts);
-            readout.style.left = x < rect.width * 0.6f ? x + 8f : x - 8f - readout.resolvedStyle.width;
-            Ui.SetVisible(crosshair, true);
-            Ui.SetVisible(readout, true);
-        }
-
-        void Draw(MeshGenerationContext context)
-        {
-            var rect = plot.contentRect;
-            if (rect.width < 4f || rect.height < 4f) return;
-
-            var painter = context.painter2D;
-            painter.lineWidth = 1f;
-            painter.strokeColor = new Color(1f, 1f, 1f, 0.07f);
-            painter.BeginPath();
-            for (int i = 0; i <= 4; i++)
-            {
-                float y = rect.yMax - rect.height * i / 4f;
-                painter.MoveTo(new Vector2(rect.xMin, y));
-                painter.LineTo(new Vector2(rect.xMax, y));
-            }
-            painter.Stroke();
-
-            painter.lineJoin = LineJoin.Round;
-            painter.lineCap = LineCap.Round;
-            painter.lineWidth = 2f;
-
-            // Drawn last-first, so the leader's line ends up on top.
-            for (int s = series.Count - 1; s >= 0; s--)
-            {
-                var values = series[s].values;
-                if (values.Length < 2) continue;
-
-                painter.strokeColor = ColorOf(s);
-                painter.BeginPath();
-                for (int i = 0; i < values.Length; i++)
-                {
-                    var point = new Vector2(rect.xMin + rect.width * i / (values.Length - 1),
-                        rect.yMax - rect.height * Mathf.Clamp01(values[i] / maxPercent));
-                    if (i == 0) painter.MoveTo(point);
-                    else painter.LineTo(point);
-                }
-                painter.Stroke();
-            }
         }
     }
 }

@@ -43,6 +43,9 @@ namespace RobotVacuum.LevelEditor
         public List<float> roomDistance = new List<float>();
         public List<int> roomVisits = new List<int>();
 
+        /// <summary>Per floor type, aligned with <see cref="BatchResult.floorNames"/>. Empty when not recorded.</summary>
+        public List<float> floorCoverage = new List<float>();
+
         public static BatchTrial From(RunReport run) => new BatchTrial
         {
             runId = run.id,
@@ -69,6 +72,7 @@ namespace RobotVacuum.LevelEditor
             roomSeconds = new List<float>(run.roomSeconds),
             roomDistance = new List<float>(run.roomDistance),
             roomVisits = new List<int>(run.roomVisits),
+            floorCoverage = new List<float>(run.floorCoverage ?? new List<float>()),
         };
     }
 
@@ -88,19 +92,27 @@ namespace RobotVacuum.LevelEditor
         public List<float> curve = new List<float>();
         public float curveDuration;
 
+        /// <summary>Standard deviation of coverage across the trials at each point of <see cref="curve"/>. Empty in older batch files.</summary>
+        public List<float> curveSpread = new List<float>();
+
         /// <summary>Mean coverage map in the same encoding as <see cref="RunReport.coverageMap"/>, or empty.</summary>
         public string map;
 
         /// <summary>Mean coverage at simulated time <paramref name="t"/>; holds the final value after the curve ends.</summary>
-        public float CoverageAt(float t)
-        {
-            if (curve.Count == 0) return 0f;
-            if (curve.Count == 1 || t >= curveDuration) return curve[curve.Count - 1];
+        public float CoverageAt(float t) => Sample(curve, t);
 
-            float position = Mathf.Max(0f, t) / Mathf.Max(1e-4f, curveDuration) * (curve.Count - 1);
-            int index = Mathf.Clamp(Mathf.FloorToInt(position), 0, curve.Count - 1);
-            int next = Mathf.Min(index + 1, curve.Count - 1);
-            return Mathf.Lerp(curve[index], curve[next], position - index);
+        /// <summary>Spread of coverage across the trials at simulated time <paramref name="t"/>; 0 when not saved.</summary>
+        public float SpreadAt(float t) => curveSpread.Count == curve.Count ? Sample(curveSpread, t) : 0f;
+
+        float Sample(List<float> series, float t)
+        {
+            if (series.Count == 0) return 0f;
+            if (series.Count == 1 || t >= curveDuration) return series[series.Count - 1];
+
+            float position = Mathf.Max(0f, t) / Mathf.Max(1e-4f, curveDuration) * (series.Count - 1);
+            int index = Mathf.Clamp(Mathf.FloorToInt(position), 0, series.Count - 1);
+            int next = Mathf.Min(index + 1, series.Count - 1);
+            return Mathf.Lerp(series[index], series[next], position - index);
         }
     }
 
@@ -128,6 +140,9 @@ namespace RobotVacuum.LevelEditor
 
         public List<string> roomNames = new List<string>();
         public List<float> roomArea = new List<float>();
+
+        /// <summary>Floor types, for each trial's <see cref="BatchTrial.floorCoverage"/>.</summary>
+        public List<string> floorNames = new List<string>();
 
         /// <summary>Shape of every algorithm's <see cref="BatchAlgorithm.map"/>.</summary>
         public int mapWidth;
@@ -222,6 +237,8 @@ namespace RobotVacuum.LevelEditor
                     roomSeconds = t.roomSeconds,
                     roomDistance = t.roomDistance,
                     roomVisits = t.roomVisits,
+                    floorNames = t.floorCoverage.Count == floorNames.Count ? floorNames : new List<string>(),
+                    floorCoverage = t.floorCoverage.Count == floorNames.Count ? t.floorCoverage : new List<float>(),
                 });
             }
             return reports;
@@ -278,9 +295,13 @@ namespace RobotVacuum.LevelEditor
                 result.roomArea = new List<float>(withRooms.roomArea);
             }
 
+            var withFloors = new List<RunReport>(runs).Find(r => r.floorNames != null && r.floorNames.Count > 0);
+            if (withFloors != null) result.floorNames = new List<string>(withFloors.floorNames);
+
             foreach (var run in runs)
             {
                 var trial = BatchTrial.From(run);
+                if (!SameNames(run.floorNames, result.floorNames)) trial.floorCoverage.Clear();
                 if (run.roomNames.Count != result.roomNames.Count)
                 {
                     trial.roomCoverage.Clear();
@@ -299,7 +320,11 @@ namespace RobotVacuum.LevelEditor
                 // Only trials that recorded a timeline: one imported from its numbers alone would count its final
                 // coverage from the first second.
                 var timed = summary.runs.FindAll(r => r.coverageSamples != null && r.coverageSamples.Count > 0);
-                if (timed.Count > 0) algorithm.curve.AddRange(BatchStats.AverageCurve(timed, CurvePoints, out algorithm.curveDuration));
+                if (timed.Count > 0)
+                {
+                    algorithm.curve.AddRange(BatchStats.AverageCurve(timed, CurvePoints, out algorithm.curveDuration));
+                    algorithm.curveSpread.AddRange(BatchStats.CurveSpread(timed, algorithm.curve, algorithm.curveDuration));
+                }
 
                 var map = BatchStats.AverageMap(summary.runs, out var shape);
                 if (map != null)
@@ -317,6 +342,14 @@ namespace RobotVacuum.LevelEditor
             }
 
             return result;
+        }
+
+        static bool SameNames(List<string> a, List<string> b)
+        {
+            if (a == null || a.Count != b.Count) return false;
+            for (int i = 0; i < a.Count; i++)
+                if (a[i] != b[i]) return false;
+            return true;
         }
 
         /// <summary>
