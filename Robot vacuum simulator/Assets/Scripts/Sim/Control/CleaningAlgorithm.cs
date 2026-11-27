@@ -31,23 +31,16 @@ namespace RobotVacuum.Sim.Control
 
         public bool BuiltIn => Origin == AlgorithmCatalog.BuiltInOrigin;
 
-        /// <summary>For the old reactive patterns (driven by <see cref="LegacyPatternDriver"/>, not a goal picker); null otherwise.</summary>
-        public MovementPattern? LegacyPattern { get; }
-
-        public bool IsLegacy => LegacyPattern.HasValue;
-
-        public AlgorithmEntry(string id, string name, bool supportsSlam, string origin, MovementPattern? legacyPattern,
-            Func<ICleaningAlgorithm> factory)
+        public AlgorithmEntry(string id, string name, bool supportsSlam, string origin, Func<ICleaningAlgorithm> factory)
         {
             Id = id;
             Name = name;
             SupportsSlam = supportsSlam;
             Origin = origin;
-            LegacyPattern = legacyPattern;
             this.factory = factory;
         }
 
-        /// <summary>A new instance of the algorithm, or null for a legacy pattern.</summary>
+        /// <summary>A new instance of the algorithm.</summary>
         public ICleaningAlgorithm Create() => factory?.Invoke();
 
         public override string ToString() => $"{Name} [{Id}]";
@@ -58,9 +51,7 @@ namespace RobotVacuum.Sim.Control
     /// folder. The folder is scanned the first time the list is needed, and again on <see cref="Rescan"/>, which is
     /// refused while a run is in progress: algorithms can be added while the simulator is open, but not mid-run.
     ///
-    /// RandomBounce is the default and cannot be removed. Spiral, Wall follow and Lawnmower are the OLD reactive
-    /// patterns, kept working until the new algorithms replace them; they steer by probing the TRUE world, so they
-    /// cannot run with SLAM on.
+    /// RandomBounce is the default and cannot be removed.
     /// </summary>
     public static class AlgorithmCatalog
     {
@@ -69,12 +60,11 @@ namespace RobotVacuum.Sim.Control
 
         static readonly AlgorithmEntry[] builtIns =
         {
-            new AlgorithmEntry(RandomBounceId, "Random", true, BuiltInOrigin, null, () => new RandomBounceAlgorithm()),
-            new AlgorithmEntry(BoustrophedonSweep.Id, "Boustrophedon Sweep", true, BuiltInOrigin, null, () => new BoustrophedonSweep()),
-            new AlgorithmEntry(BoustrophedonCrawl.Id, "Boustrophedon Crawl", true, BuiltInOrigin, null, () => new BoustrophedonCrawl()),
-            new AlgorithmEntry("Legacy.Spiral", "Spiral", false, BuiltInOrigin, MovementPattern.Spiral, null),
-            new AlgorithmEntry("Legacy.WallFollow", "Wall follow", false, BuiltInOrigin, MovementPattern.WallFollow, null),
-            new AlgorithmEntry("Legacy.Lawnmower", "Lawnmower", false, BuiltInOrigin, MovementPattern.Lawnmower, null),
+            new AlgorithmEntry(RandomBounceId, "Random", true, BuiltInOrigin, () => new RandomBounceAlgorithm()),
+            new AlgorithmEntry(BoustrophedonSweep.Id, "Boustrophedon Sweep", true, BuiltInOrigin, () => new BoustrophedonSweep()),
+            new AlgorithmEntry(BoustrophedonCrawl.Id, "Boustrophedon Crawl", true, BuiltInOrigin, () => new BoustrophedonCrawl()),
+            new AlgorithmEntry(Sheep.Id, "Sheep", true, BuiltInOrigin, () => new Sheep()),
+            new AlgorithmEntry(Mouse.Id, "Mouse", true, BuiltInOrigin, () => new Mouse()),
         };
 
         static List<AlgorithmEntry> plugins = new List<AlgorithmEntry>();
@@ -149,10 +139,20 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public static AlgorithmLoadReport Rescan() => RescanFolder(AlgorithmLoader.DefaultFolder);
 
+        /// <summary>
+        /// Reimport Algorithms (2.16): rescans even while a run is in progress. Only for a run whose simulation is
+        /// paused (the caller pauses it first, so no algorithm call is under way), which then rebuilds its algorithm
+        /// from the new list. Runs other than that one (a batch) must not be going: they would pick up the new code
+        /// between their trials.
+        /// </summary>
+        public static AlgorithmLoadReport RescanForPausedRun() => RescanFolder(AlgorithmLoader.DefaultFolder, evenDuringRuns: true);
+
         /// <summary>As <see cref="Rescan"/>, from another folder (tests and tools).</summary>
-        public static AlgorithmLoadReport RescanFolder(string folder)
+        public static AlgorithmLoadReport RescanFolder(string folder) => RescanFolder(folder, evenDuringRuns: false);
+
+        static AlgorithmLoadReport RescanFolder(string folder, bool evenDuringRuns)
         {
-            if (IsLocked)
+            if (IsLocked && !evenDuringRuns)
             {
                 var refusal = new AlgorithmLoadReport
                 {
@@ -164,9 +164,14 @@ namespace RobotVacuum.Sim.Control
             }
 
             plugins = AlgorithmLoader.Load(folder, builtIns, out lastReport);
+            bool first = !scanned;
             scanned = true;
+            if (!first) Changed?.Invoke(); // (the first scan is just the list appearing, not a change)
             return lastReport;
         }
+
+        /// <summary>Raised after a rescan changed the list (it may have added, updated or dropped algorithms), so screens showing it can refresh.</summary>
+        public static event Action Changed;
 
         static void EnsureScanned()
         {
@@ -185,31 +190,34 @@ namespace RobotVacuum.Sim.Control
             }
         }
 
-        // ---- Ids, patterns and SLAM ----------------------------------------------------------------
+        // ---- Ids and SLAM ------------------------------------------------------------------------
 
-        /// <summary>The id of the built-in that a <see cref="MovementPattern"/> stands for.</summary>
-        public static string IdOf(MovementPattern pattern) => pattern switch
-        {
-            MovementPattern.RandomBounce => RandomBounceId,
-            _ => builtIns.First(e => e.LegacyPattern == pattern).Id,
-        };
+        /// <summary>The algorithm a run uses when none was chosen (an empty or missing id).</summary>
+        public const string DefaultId = RandomBounceId;
 
-        /// <summary>The pattern a built-in id stands for, or null for a plugin (or an unknown id).</summary>
-        public static MovementPattern? PatternOf(string id)
-        {
-            if (id == RandomBounceId) return MovementPattern.RandomBounce;
-            return builtIns.FirstOrDefault(e => e.Id == id)?.LegacyPattern;
-        }
+        /// <summary>The id itself, or <see cref="DefaultId"/> when it is null or empty.</summary>
+        public static string OrDefault(string id) => string.IsNullOrEmpty(id) ? DefaultId : id;
 
         public static string NameOf(string id) => Find(id)?.Name ?? id;
-        public static string NameOf(MovementPattern pattern) => NameOf(IdOf(pattern));
 
-        public static bool IsLegacyPattern(MovementPattern pattern) => pattern != MovementPattern.RandomBounce;
-        public static bool SupportsSlam(MovementPattern pattern) => SupportsSlam(IdOf(pattern));
+        /// <summary>
+        /// A short fingerprint of the code behind an algorithm, to tell versions apart: "built-in" for a built-in, the
+        /// first 12 hex digits of its file's (or folder's) SHA-256 for a plugin, "not loaded" if it isn't loaded.
+        /// </summary>
+        public static string Fingerprint(string id)
+        {
+            var entry = Find(id);
+            if (entry == null) return NotLoaded;
+            if (entry.BuiltIn) return "built-in";
+            var unit = lastReport?.units.FirstOrDefault(u => u.name == entry.Origin);
+            string hash = unit != null ? unit.hash : "";
+            return string.IsNullOrEmpty(hash) ? NotLoaded : hash.Substring(0, Math.Min(12, hash.Length)).ToLowerInvariant();
+        }
+
+        /// <summary>What <see cref="Fingerprint"/> gives for an algorithm that isn't loaded.</summary>
+        public const string NotLoaded = "not loaded";
+
         public static bool SupportsSlam(string id) => Find(id)?.SupportsSlam ?? false;
-
-        /// <summary>A new goal-picking algorithm for the pattern, or null for a legacy reactive pattern.</summary>
-        public static ICleaningAlgorithm CreateGoalAlgorithm(MovementPattern pattern) => Find(IdOf(pattern)).Create();
 
         /// <summary>Why a run with this algorithm cannot start, or null if it can.</summary>
         public static string Refusal(string id, bool slam)
@@ -220,9 +228,6 @@ namespace RobotVacuum.Sim.Control
             if (slam && !entry.SupportsSlam) return SlamRefusalText(entry.Name);
             return null;
         }
-
-        /// <summary>The error a SLAM run gets when its algorithm doesn't support SLAM, or null if it does.</summary>
-        public static string SlamRefusal(MovementPattern pattern) => SupportsSlam(pattern) ? null : SlamRefusalText(NameOf(pattern));
 
         static string SlamRefusalText(string name)
         {

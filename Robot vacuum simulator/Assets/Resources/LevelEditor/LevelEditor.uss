@@ -1388,6 +1388,30 @@
     margin-left: 8px;
 }
 
+/* The run's stop card (SimHud): up to five buttons, each as wide as its label, wrapping on a narrow window. */
+.le-dialog--wide {
+    width: 700px;
+}
+
+.le-dialog--wide .le-dialog__buttons {
+    flex-wrap: wrap;
+    justify-content: space-evenly;
+}
+
+.le-dialog--wide .le-dialog__buttons > .le-btn {
+    flex-shrink: 0;
+    min-width: 110px;
+    margin-left: 12px;
+    margin-top: 8px;
+    padding-left: 16px;
+    padding-right: 16px;
+    justify-content: center;
+}
+
+.le-dialog--wide .le-btn__label {
+    white-space: nowrap;
+}
+
 .le-toast {
     position: absolute;
     left: 50%;
@@ -2655,6 +2679,46 @@
 
 .le-run-settings .le-segmented {
     margin-bottom: 4px;
+}
+
+/* A button that takes a whole row of the run's settings menu (Refill battery). */
+.le-run-settings__wide {
+    align-self: stretch;
+    justify-content: center;
+    margin: 2px 0 8px 0;
+}
+
+/* Reimport algorithms, with the Algorithm list: below it in the run's narrow menu, beside it on the setup screen. */
+.le-settings-panel__reimport {
+    flex-shrink: 0;
+    justify-content: center;
+}
+
+.le-run-settings .le-settings-panel__reimport {
+    align-self: stretch;
+    margin: 0 0 10px 0;
+}
+
+/* Configuration screen: room for a wide Algorithm list plus the Reimport button beside it. */
+.le-settings-panel--reimport-beside {
+    min-width: 520px;
+    max-width: 640px;
+}
+
+.le-settings-panel__algorithm-row {
+    flex-direction: row;
+    align-items: flex-end;
+}
+
+.le-settings-panel__algorithm-row > .le-settings-panel__algorithm {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 300px; /* about three times what it shrank to beside the button */
+}
+
+.le-settings-panel__algorithm-row > .le-settings-panel__reimport {
+    min-height: 32px;
+    margin: 0 0 10px 8px;
 }
 
 /* ------------------------------------------------------------ scrollbars */

@@ -17,7 +17,6 @@ namespace RobotVacuum.LevelEditor
     {
         public string runId;
         public string dataFolder;
-        public MovementPattern pattern;
         public string algorithmId;
         public string algorithmName;
         public int seed;
@@ -48,7 +47,6 @@ namespace RobotVacuum.LevelEditor
         {
             runId = run.id,
             dataFolder = run.dataFolder,
-            pattern = run.pattern,
             algorithmId = run.AlgorithmKey,
             algorithmName = run.AlgorithmName,
             seed = run.seed,
@@ -197,7 +195,6 @@ namespace RobotVacuum.LevelEditor
                     headless = headless,
                     vacuum = vacuum,
                     cellSize = cellSize,
-                    pattern = t.pattern,
                     algorithmId = t.algorithmId,
                     algorithmName = t.algorithmName,
                     source = source,

@@ -3,6 +3,7 @@ using System.IO;
 using NUnit.Framework;
 using RobotVacuum.LevelEditor;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 
 namespace RobotVacuum.Tests
 {
@@ -21,11 +22,11 @@ namespace RobotVacuum.Tests
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
         }
 
-        static RunReport Run(string level, MovementPattern pattern, float coverage, float seconds, string finishedAt = null) => new RunReport
+        static RunReport Run(string level, float coverage, float seconds, string finishedAt = null, string algorithmId = null) => new RunReport
         {
             levelName = level,
             levelPath = level + ".json",
-            pattern = pattern,
+            algorithmId = algorithmId,
             coveragePercent = coverage,
             durationSeconds = seconds,
             finishedAt = finishedAt,
@@ -41,7 +42,7 @@ namespace RobotVacuum.Tests
         [Test]
         public void Add_StampsTheRun_AndRoundTripsIt()
         {
-            var report = Run("Flat", MovementPattern.Spiral, 42.5f, 90f);
+            var report = Run("Flat", 42.5f, 90f);
             report.AddSample(0f);
             report.AddSample(10f);
 
@@ -51,7 +52,8 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(1, loaded.Count);
             Assert.IsFalse(string.IsNullOrEmpty(loaded[0].id));
             Assert.AreNotEqual(DateTime.MinValue, loaded[0].FinishedAt);
-            Assert.AreEqual(MovementPattern.Spiral, loaded[0].pattern);
+            Assert.AreEqual("RandomBounce", loaded[0].AlgorithmKey, "no id recorded = Random");
+            Assert.AreEqual("Random", loaded[0].AlgorithmName);
             Assert.AreEqual(42.5f, loaded[0].coveragePercent, 1e-4f);
             Assert.AreEqual(new[] { 0f, 10f }, loaded[0].coverageSamples.ToArray());
             Assert.AreEqual(0.65f, loaded[0].vacuum.driveSpeed, 1e-5f);
@@ -60,9 +62,9 @@ namespace RobotVacuum.Tests
         [Test]
         public void LoadAll_IsNewestFirst()
         {
-            RunHistory.Add(Run("Old", MovementPattern.RandomBounce, 10f, 60f, "2026-01-01T10:00:00"), path);
-            RunHistory.Add(Run("New", MovementPattern.RandomBounce, 10f, 60f, "2026-03-01T10:00:00"), path);
-            RunHistory.Add(Run("Middle", MovementPattern.RandomBounce, 10f, 60f, "2026-02-01T10:00:00"), path);
+            RunHistory.Add(Run("Old", 10f, 60f, "2026-01-01T10:00:00"), path);
+            RunHistory.Add(Run("New", 10f, 60f, "2026-03-01T10:00:00"), path);
+            RunHistory.Add(Run("Middle", 10f, 60f, "2026-02-01T10:00:00"), path);
 
             var loaded = RunHistory.LoadAll(path);
 
@@ -72,8 +74,8 @@ namespace RobotVacuum.Tests
         [Test]
         public void Delete_RemovesOnlyThatRun_AndClearRemovesAll()
         {
-            var keep = Run("Keep", MovementPattern.Spiral, 1f, 1f);
-            var drop = Run("Drop", MovementPattern.Spiral, 1f, 1f);
+            var keep = Run("Keep", 1f, 1f);
+            var drop = Run("Drop", 1f, 1f);
             RunHistory.Add(keep, path);
             RunHistory.Add(drop, path);
 
@@ -110,7 +112,7 @@ namespace RobotVacuum.Tests
         [Test]
         public void DerivedFigures_FollowTheRecordedValues()
         {
-            var report = Run("Flat", MovementPattern.Spiral, 50f, 120f);
+            var report = Run("Flat", 50f, 120f);
             report.floorArea = 30f;
             report.blockedArea = 10f;
             report.batteryUsed = 75f;
@@ -119,15 +121,20 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(10f, report.CleanedArea, 1e-4f);
             Assert.AreEqual(25f, report.CoveragePerMinute, 1e-4f);
             Assert.AreEqual(25f, report.BatteryUsedPercent, 1e-4f);
-            Assert.AreEqual("Spiral", report.PatternLabel);
-
-            report.mixedPatterns = true;
-            Assert.AreEqual("Mixed", report.PatternLabel);
+            Assert.AreEqual("Random", report.AlgorithmName);
         }
 
-        static RunReport Trial(MovementPattern pattern, int seed, float coverage, string batchId)
+        // Algorithm ids with their names given, so the tests don't depend on what the catalog has installed.
+        static RunReport Algo(RunReport run, string id, string name)
         {
-            var run = Run("Flat", pattern, coverage, 60f, "2026-05-01T10:00:00");
+            run.algorithmId = id;
+            run.algorithmName = name;
+            return run;
+        }
+
+        static RunReport Trial(string algorithm, int seed, float coverage, string batchId)
+        {
+            var run = Algo(Run("Flat", coverage, 60f, "2026-05-01T10:00:00"), algorithm, algorithm);
             run.id = Guid.NewGuid().ToString("N");
             run.batchId = batchId;
             run.seed = seed;
@@ -137,26 +144,26 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void ComparingByAlgorithm_PoolsSinglesAndBatches_BestFirst_AndSkipsMixedRuns()
+        public void ComparingByAlgorithm_PoolsSinglesAndBatches_BestFirst_AndSkipsSwitchedRuns()
         {
-            var mixed = Run("Flat", MovementPattern.Spiral, 99f, 60f);
+            var mixed = Algo(Run("Flat", 99f, 60f), "Spiral", "Spiral");
             mixed.id = "mixed";
-            mixed.mixedPatterns = true;
+            mixed.algorithmSwitches.Add(new RunAlgorithmSwitch { simSeconds = 20f, fromId = "Spiral", toId = "Random" });
 
             var batch = BatchArchive.Build("b1", new[]
             {
-                Trial(MovementPattern.Lawnmower, 1, 80f, "b1"),
-                Trial(MovementPattern.Lawnmower, 2, 84f, "b1"),
-                Trial(MovementPattern.RandomBounce, 1, 50f, "b1"),
-                Trial(MovementPattern.RandomBounce, 2, 54f, "b1"),
+                Trial("Lawnmower", 1, 80f, "b1"),
+                Trial("Lawnmower", 2, 84f, "b1"),
+                Trial("Random", 1, 50f, "b1"),
+                Trial("Random", 2, 54f, "b1"),
             });
-            var single = Run("Flat", MovementPattern.RandomBounce, 46f, 60f);
+            var single = Algo(Run("Flat", 46f, 60f), "Random", "Random");
             single.id = "single";
 
             var sources = new[] { CompareSource.Of(batch), CompareSource.Of(single), CompareSource.Of(mixed) };
             var groups = RunComparison.Build(sources, CompareGrouping.Algorithm, CompareMetric.Coverage);
 
-            Assert.AreEqual(2, groups.Count, "the mixed run belongs to no algorithm");
+            Assert.AreEqual(2, groups.Count, "a run that switched algorithm part-way belongs to no one algorithm");
             Assert.AreEqual("Lawnmower", groups[0].label);
             Assert.AreEqual(82f, groups[0].metric.mean, 1e-4);
             Assert.AreEqual(3, groups[1].runs.Count, "the single run joins the batch's Random trials");
@@ -171,9 +178,9 @@ namespace RobotVacuum.Tests
         {
             var trials = new[]
             {
-                Trial(MovementPattern.Lawnmower, 1, 80f, "b"),
-                Trial(MovementPattern.Lawnmower, 2, 90f, "b"),
-                Trial(MovementPattern.Lawnmower, 3, 5f, "b"),
+                Trial("Lawnmower", 1, 80f, "b"),
+                Trial("Lawnmower", 2, 90f, "b"),
+                Trial("Lawnmower", 3, 5f, "b"),
             };
             trials[2].failure = "boom";
 
@@ -187,13 +194,12 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void Runs_GroupByAlgorithmId_SoPluginsWithTheSamePatternStayApart()
+        public void Runs_GroupByAlgorithmId_SoPluginsStayApartFromBuiltIns()
         {
-            var plugin = Run("Flat", MovementPattern.RandomBounce, 70f, 60f);
+            var plugin = Run("Flat", 70f, 60f);
             plugin.id = "plugin";
-            plugin.algorithmId = "my-plugin";
-            plugin.algorithmName = "My plugin";
-            var builtIn = Run("Flat", MovementPattern.RandomBounce, 50f, 60f);
+            Algo(plugin, "my-plugin", "My plugin");
+            var builtIn = Run("Flat", 50f, 60f);
             builtIn.id = "builtin";
 
             var groups = RunComparison.Build(new[] { CompareSource.Of(plugin), CompareSource.Of(builtIn) },
@@ -212,13 +218,13 @@ namespace RobotVacuum.Tests
         [Test]
         public void LowerIsBetter_RanksSmallestFirst_AndRunsWithoutAValueGoLast()
         {
-            var fast = Run("Flat", MovementPattern.Spiral, 95f, 60f);
+            var fast = Algo(Run("Flat", 95f, 60f), "Spiral", "Spiral");
             fast.id = "fast";
             fast.timeTo90 = 30f;
-            var slow = Run("Flat", MovementPattern.Lawnmower, 95f, 60f);
+            var slow = Algo(Run("Flat", 95f, 60f), "Lawnmower", "Lawnmower");
             slow.id = "slow";
             slow.timeTo90 = 50f;
-            var never = Run("Flat", MovementPattern.RandomBounce, 40f, 60f);
+            var never = Algo(Run("Flat", 40f, 60f), "Random", "Random");
             never.id = "never";
 
             var groups = RunComparison.Build(new[] { CompareSource.Of(never), CompareSource.Of(slow), CompareSource.Of(fast) },
@@ -232,22 +238,22 @@ namespace RobotVacuum.Tests
         [Test]
         public void Judge_CallsALeadClear_OnlyWhenTheIntervalsDontOverlap()
         {
-            RunReport[] Trials(MovementPattern pattern, params float[] coverage)
+            RunReport[] Trials(string algorithm, params float[] coverage)
             {
                 var trials = new RunReport[coverage.Length];
-                for (int i = 0; i < coverage.Length; i++) trials[i] = Trial(pattern, i, coverage[i], "b");
+                for (int i = 0; i < coverage.Length; i++) trials[i] = Trial(algorithm, i, coverage[i], "b");
                 return trials;
             }
 
             var apart = new System.Collections.Generic.List<RunReport>();
-            apart.AddRange(Trials(MovementPattern.Lawnmower, 90f, 91f, 92f, 91f));
-            apart.AddRange(Trials(MovementPattern.RandomBounce, 50f, 52f, 51f, 53f));
+            apart.AddRange(Trials("Lawnmower", 90f, 91f, 92f, 91f));
+            apart.AddRange(Trials("Random", 50f, 52f, 51f, 53f));
             var clear = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", apart)) }, CompareGrouping.Algorithm, CompareMetric.Coverage);
             Assert.IsTrue(RunComparison.Judge(clear, CompareMetric.Coverage).clear);
 
             var close = new System.Collections.Generic.List<RunReport>();
-            close.AddRange(Trials(MovementPattern.Lawnmower, 60f, 80f, 70f, 75f));
-            close.AddRange(Trials(MovementPattern.RandomBounce, 55f, 78f, 66f, 70f));
+            close.AddRange(Trials("Lawnmower", 60f, 80f, 70f, 75f));
+            close.AddRange(Trials("Random", 55f, 78f, 66f, 70f));
             var overlap = RunComparison.Build(new[] { CompareSource.Of(BatchArchive.Build("b", close)) }, CompareGrouping.Algorithm, CompareMetric.Coverage);
             Assert.IsFalse(RunComparison.Judge(overlap, CompareMetric.Coverage).clear);
         }
@@ -258,8 +264,8 @@ namespace RobotVacuum.Tests
             string folder = Path.Combine(Path.GetDirectoryName(path), "Batches");
             var batch = BatchArchive.Build("b2", new[]
             {
-                Trial(MovementPattern.Lawnmower, 1, 80f, "b2"),
-                Trial(MovementPattern.Lawnmower, 2, 90f, "b2"),
+                Trial("Lawnmower", 1, 80f, "b2"),
+                Trial("Lawnmower", 2, 90f, "b2"),
             });
             BatchArchive.Save(batch, folder);
 
@@ -282,7 +288,7 @@ namespace RobotVacuum.Tests
         {
             var data = SimConfig.Data.Parse(null);
 
-            Assert.AreEqual(MovementPattern.RandomBounce, data.pattern);
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, data.runSettings.algorithmId);
             Assert.AreEqual(0.65f, data.vacuum.driveSpeed, 1e-5f);
             Assert.AreEqual(300f, data.vacuum.batteryCapacity, 1e-5f);
         }
@@ -290,24 +296,26 @@ namespace RobotVacuum.Tests
         [Test]
         public void Parse_RoundTripsSavedSettings()
         {
-            var saved = new SimConfig.Data { pattern = MovementPattern.Lawnmower };
+            var saved = new SimConfig.Data();
+            saved.runSettings.algorithmId = "BoustrophedonSweep";
             saved.vacuum.driveSpeed = 1.1f;
             saved.vacuum.useFeet = true;
 
             var data = SimConfig.Data.Parse(saved.ToJson());
 
-            Assert.AreEqual(MovementPattern.Lawnmower, data.pattern);
+            Assert.AreEqual("BoustrophedonSweep", data.runSettings.algorithmId);
             Assert.AreEqual(1.1f, data.vacuum.driveSpeed, 1e-5f);
             Assert.IsTrue(data.vacuum.useFeet);
         }
 
         [TestCase("{ broken")]
         [TestCase("{\"pattern\":99}")]
+        [TestCase("{\"runSettings\":{\"algorithmId\":\"Legacy.Spiral\"}}")]
         public void Parse_BadInput_FallsBackToDefaults(string json)
         {
             var data = SimConfig.Data.Parse(json);
 
-            Assert.AreEqual(MovementPattern.RandomBounce, data.pattern);
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, data.runSettings.algorithmId);
             Assert.IsNotNull(data.vacuum);
         }
     }

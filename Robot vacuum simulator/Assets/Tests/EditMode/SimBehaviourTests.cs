@@ -11,6 +11,11 @@ namespace RobotVacuum.Tests
 {
     public class SimulationSpeedTests
     {
+        /// <summary>
+        /// Unity applies Time.maximumDeltaTime to a frame's REAL time and then multiplies by the time scale, so the cap
+        /// stays at the base real-time value while the simulated catch-up per frame (cap × speed) expands with speed.
+        /// (Edit mode: no governor runs, so the cap is the base.)
+        /// </summary>
         [TestCase(2f)]
         [TestCase(100f)]
         public void Apply_PreservesFixedTimestepAndExpandsFrameCatchupLimit(float speed)
@@ -25,7 +30,9 @@ namespace RobotVacuum.Tests
                 SimulationSpeed.Apply(speed, baseMaximumDeltaTime);
 
                 Assert.AreEqual(speed, Time.timeScale);
-                Assert.AreEqual(baseMaximumDeltaTime * speed, Time.maximumDeltaTime, 1e-5f);
+                Assert.AreEqual(baseMaximumDeltaTime, Time.maximumDeltaTime, 1e-5f, "the cap is real time");
+                Assert.AreEqual(baseMaximumDeltaTime * speed, Time.maximumDeltaTime * Time.timeScale, 1e-3f,
+                    "simulated catch-up per frame expands with speed");
                 Assert.AreEqual(originalFixedDeltaTime, Time.fixedDeltaTime);
             }
             finally
@@ -42,27 +49,15 @@ namespace RobotVacuum.Tests
         }
     }
 
-    public class LegacyPatternBrainTests
+    public class RobotAlgorithmTests
     {
-        sealed class ThrowingBrain : LegacyPatternBrain
-        {
-            public override float Steer(VacuumRobot robot, float dt) => throw new InvalidOperationException("brain failed");
-            public override Manoeuvre AfterBump(VacuumRobot robot) => throw new InvalidOperationException("brain failed");
-        }
-
-        sealed class InvalidBrain : LegacyPatternBrain
-        {
-            public override float Steer(VacuumRobot robot, float dt) => float.NaN;
-            public override Manoeuvre AfterBump(VacuumRobot robot) => new Manoeuvre(0f, -1f);
-        }
-
         GameObject host;
         VacuumRobot robot;
 
         [SetUp]
         public void SetUp()
         {
-            host = new GameObject("Brain test vacuum");
+            host = new GameObject("Algorithm test vacuum");
             robot = host.AddComponent<VacuumRobot>();
         }
 
@@ -70,132 +65,23 @@ namespace RobotVacuum.Tests
         public void TearDown() => Object.DestroyImmediate(host);
 
         [Test]
-        public void AtLeastFourAlgorithms_EachWithALabel_RandomIsAGoalPicker_TheRestAreLegacyBrains()
+        public void AtLeastFourBuiltInAlgorithms_RandomIsAGoalPicker()
         {
-            var patterns = (MovementPattern[])Enum.GetValues(typeof(MovementPattern));
-            var randomSource = new RandomProvider(0);
-
-            Assert.GreaterOrEqual(patterns.Length, 4);
-            Assert.AreEqual(patterns.Length, MovementBrain.Labels.Length);
-
-            Assert.IsInstanceOf<RandomBounceAlgorithm>(AlgorithmCatalog.CreateGoalAlgorithm(MovementPattern.RandomBounce));
-            Assert.IsNull(LegacyPatternBrain.Create(MovementPattern.RandomBounce, randomSource));
-
-            Assert.IsInstanceOf<SpiralBrain>(LegacyPatternBrain.Create(MovementPattern.Spiral, randomSource));
-            Assert.IsInstanceOf<WallFollowBrain>(LegacyPatternBrain.Create(MovementPattern.WallFollow, randomSource));
-            Assert.IsInstanceOf<LawnmowerBrain>(LegacyPatternBrain.Create(MovementPattern.Lawnmower, randomSource));
+            Assert.GreaterOrEqual(AlgorithmCatalog.BuiltIns.Count, 4, "at least four algorithms (1.6.1)");
+            Assert.IsInstanceOf<RandomBounceAlgorithm>(AlgorithmCatalog.Find(AlgorithmCatalog.RandomBounceId).Create());
         }
 
         [Test]
-        public void Robot_PatternCanBeSwitched()
+        public void Robot_AlgorithmIsChosenById_AndEmptyMeansRandom()
         {
-            robot.Pattern = MovementPattern.Lawnmower;
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, robot.AlgorithmId, "a new robot runs Random");
 
-            Assert.AreEqual(MovementPattern.Lawnmower, robot.Pattern);
-        }
+            string other = AlgorithmCatalog.BuiltIns[1].Id;
+            robot.AlgorithmId = other;
+            Assert.AreEqual(other, robot.AlgorithmId);
 
-        [Test]
-        public void ExecutionBoundary_ContainsThrownBrainFailures()
-        {
-            var brain = new ThrowingBrain();
-
-            Assert.IsFalse(LegacyPatternExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
-            Assert.That(steeringFailure, Does.Contain("brain failed"));
-            Assert.IsFalse(LegacyPatternExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
-            Assert.That(bumpFailure, Does.Contain("brain failed"));
-        }
-
-        [Test]
-        public void ExecutionBoundary_RejectsInvalidMovementOutputs()
-        {
-            var brain = new InvalidBrain();
-
-            Assert.IsFalse(LegacyPatternExecution.TrySteer(brain, robot, 0.02f, out _, out var steeringFailure));
-            Assert.That(steeringFailure, Does.Contain("Invalid steering"));
-            Assert.IsFalse(LegacyPatternExecution.TryAfterBump(brain, robot, out _, out var bumpFailure));
-            Assert.That(bumpFailure, Does.Contain("Invalid manoeuvre"));
-        }
-
-        [Test]
-        public void Spiral_TurnsWithinTheRobotsRange_AfterABump()
-        {
-            var brain = new SpiralBrain();
-            brain.AssignRandomSource(new RandomProvider(1u));
-
-            for (int i = 0; i < 25; i++)
-            {
-                var manoeuvre = brain.AfterBump(robot);
-                float magnitude = Mathf.Abs(manoeuvre.turn);
-
-                Assert.GreaterOrEqual(magnitude, robot.TurnAngleRange.x);
-                Assert.LessOrEqual(magnitude, robot.TurnAngleRange.y);
-                Assert.AreEqual(0f, manoeuvre.driveAfter);
-            }
-        }
-
-        [Test]
-        public void Spiral_WidensOverTime_BouncesAfterABump_ThenSpiralsAgain()
-        {
-            var brain = new SpiralBrain();
-            brain.AssignRandomSource(new RandomProvider(1u));
-            
-            brain.Reset(robot);
-            const float dt = 0.02f;
-
-            float first = brain.Steer(robot, dt);
-            float later = first;
-            for (int i = 0; i < 200; i++) later = brain.Steer(robot, dt);
-
-            Assert.Greater(first, later, "the turn rate eases off as the spiral widens");
-            Assert.Greater(later, 0f);
-            Assert.IsTrue(brain.Spiralling);
-
-            brain.AfterBump(robot);
-            Assert.IsFalse(brain.Spiralling);
-
-            int bounceSteps = Mathf.CeilToInt(SpiralBrain.BounceSeconds / dt) + 1;
-            for (int i = 0; i < bounceSteps; i++) brain.Steer(robot, dt);
-            Assert.IsTrue(brain.Spiralling);
-        }
-
-        [Test]
-        public void Lawnmower_StepsOverOneLane_AlternatingSides()
-        {
-            var brain = new LawnmowerBrain();
-            brain.Reset(robot);
-
-            var first = brain.AfterBump(robot);
-            var second = brain.AfterBump(robot);
-
-            Assert.AreEqual(90f, first.turn);
-            Assert.AreEqual(90f, first.turnAfter);
-            Assert.AreEqual(robot.CleaningWidth * LawnmowerBrain.LaneOverlap, first.driveAfter, 1e-5f);
-            Assert.AreEqual(-90f, second.turn);
-            Assert.AreEqual(-90f, second.turnAfter);
-            Assert.AreEqual(0f, brain.Steer(robot, 0.02f), "lanes are straight");
-        }
-
-        [Test]
-        public void WallFollow_SteersToHoldTheGap()
-        {
-            Assert.Less(WallFollowBrain.Steering(0.3f), 0f, "too far: turn right towards the wall");
-            Assert.Greater(WallFollowBrain.Steering(0f), 0f, "too close: turn left away");
-            Assert.AreEqual(0f, WallFollowBrain.Steering(WallFollowBrain.Gap), 1e-4f);
-        }
-
-        [Test]
-        public void WallFollow_DrivesStraightUntilItFindsAWall_ThenCurlsRoundCorners()
-        {
-            var brain = new WallFollowBrain();
-            brain.Reset(robot);
-
-            Assert.AreEqual(0f, brain.Steer(robot, 0.02f), "nothing sensed and no wall yet");
-
-            var bump = brain.AfterBump(robot);
-            Assert.Greater(bump.turn, 0f, "turns left to put the wall on its right");
-            Assert.IsTrue(brain.HasWall);
-
-            Assert.Less(brain.Steer(robot, 0.02f), 0f, "lost the wall: curl right round the corner");
+            robot.AlgorithmId = "";
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, robot.AlgorithmId);
         }
     }
 

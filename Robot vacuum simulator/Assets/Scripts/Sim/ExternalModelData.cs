@@ -90,5 +90,69 @@ namespace RobotVacuum.Sim
             }
             return counted == 0 ? 0f : reached / (float)counted * 100f;
         }
+
+        /// <summary>A cell counts as over-cleaned past this multiple of the target (see <see cref="OverCleaning"/>).</summary>
+        public const float OverCleanedFactor = 1.1f;
+
+        /// <summary>Over-cleaning across the cleanable cells inside the rooms (the cells the percentages count).</summary>
+        public struct OverCleaningStats
+        {
+            /// <summary>All cleaning done ÷ the cleaning the target asks for: total cleanliness ÷ (cells × target). 1 = exactly the target everywhere on average.</summary>
+            public float meanCleanRatio;
+
+            /// <summary>The median and 90th percentile of each cell's cleanliness ÷ target.</summary>
+            public float medianCleanRatio;
+            public float p90CleanRatio;
+
+            /// <summary>Share of cells past <see cref="OverCleanedFactor"/> × target, 0 to 100.</summary>
+            public float overCleanedPercent;
+
+            /// <summary>Cleaning beyond the target, summed over cells: Σ max(0, cleanliness − target) × cell area ÷ target. In m² of floor cleaned once more to the target.</summary>
+            public float overCleaningSquareMeters;
+
+            /// <summary>Share of all cleaning done that went beyond the target, 0 to 100.</summary>
+            public float overCleaningPercentOfTotal;
+        }
+
+        /// <summary>The over-cleaning figures for <see cref="OverCleaningStats"/>. All zero for invalid data or a target of 0.</summary>
+        public OverCleaningStats OverCleaning()
+        {
+            var stats = new OverCleaningStats();
+            if (!IsValid || targetMaxClean <= 0f) return stats;
+
+            var ratios = new System.Collections.Generic.List<float>(cleanliness.Length);
+            double total = 0.0, beyond = 0.0;
+            int over = 0;
+            float overLine = OverCleanedFactor * targetMaxClean;
+            for (int i = 0; i < cleanliness.Length; i++)
+            {
+                if (nonCleanable[i] || OutsideRooms(i)) continue;
+                float c = Mathf.Max(0f, cleanliness[i]);
+                ratios.Add(c / targetMaxClean);
+                total += c;
+                if (c > targetMaxClean) beyond += c - targetMaxClean;
+                if (c > overLine) over++;
+            }
+            int n = ratios.Count;
+            if (n == 0) return stats;
+
+            ratios.Sort();
+            stats.meanCleanRatio = (float)(total / (n * (double)targetMaxClean));
+            stats.medianCleanRatio = Percentile(ratios, 0.5f);
+            stats.p90CleanRatio = Percentile(ratios, 0.9f);
+            stats.overCleanedPercent = over / (float)n * 100f;
+            stats.overCleaningSquareMeters = (float)(beyond / targetMaxClean * cellSizeMeters * cellSizeMeters);
+            stats.overCleaningPercentOfTotal = total > 0.0 ? (float)(beyond / total * 100.0) : 0f;
+            return stats;
+        }
+
+        /// <summary>Linear-interpolated percentile of a sorted list (q from 0 to 1).</summary>
+        static float Percentile(System.Collections.Generic.List<float> sorted, float q)
+        {
+            float at = q * (sorted.Count - 1);
+            int low = (int)at;
+            int high = Mathf.Min(low + 1, sorted.Count - 1);
+            return sorted[low] + (sorted[high] - sorted[low]) * (at - low);
+        }
     }
 }

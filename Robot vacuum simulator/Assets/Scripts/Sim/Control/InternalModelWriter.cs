@@ -31,7 +31,6 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public const int MaxPendingChanges = 100_000;
 
-        readonly Dictionary<long, float> ease = new Dictionary<long, float>();
         readonly HashSet<long> permanent = new HashSet<long>();
         readonly List<CellIndex> pending = new List<CellIndex>();
         readonly HashSet<long> pendingKeys = new HashSet<long>();
@@ -63,11 +62,14 @@ namespace RobotVacuum.Sim.Control
             float old = cell.traversabilityBelief;
             if (old == value) return; // a cell already equal to the observation is not rewritten
 
+            bool wasWall = IsWall(row, col, old);
             cell.traversabilityBelief = value;
             if (!Grid.SetCell(row, col, cell)) return; // beyond the runaway guard
 
+            if (wasWall != IsWall(row, col, value)) LogWallChange(row, col);
             if ((old <= 0f) != (value <= 0f)) TopologyVersion++;
             if (Mathf.Abs(value - old) >= ReportThreshold || (old <= 0f) != (value <= 0f)) Record(row, col);
+            if (value <= 0f) Unsettle(row, col); // anything that blocks a cell ends its "settled floor" status
         }
 
         public void SetVacuumResistance(int row, int col, float value)
@@ -118,16 +120,188 @@ namespace RobotVacuum.Sim.Control
 
         public bool IsPermanent(int row, int col) => permanent.Count > 0 && permanent.Contains(CellIndex.Pack(row, col));
 
+        // ---- Settled floor (Normal mode only) ------------------------------------
+
+        /// <summary>A cell's settled state (Normal preload only; every cell is <see cref="NotSettled"/> in SLAM).</summary>
+        public const byte NotSettled = 0, SettledFloor = 1, SettledFace = 2, PreloadBlocked = 3;
+
+        // Dense over the preload's window, so the lidar can test a cell without hashing.
+        byte[] settled = System.Array.Empty<byte>();
+        int settledMinRow, settledMinCol, settledRows, settledCols;
+
+        /// <summary>
+        /// Starts the settled-floor map over the preload's window (Normal only). A SETTLED cell is floor the preload
+        /// wrote and nothing has blocked since. Its value can only be what the preload wrote, so the lidar's clear
+        /// views skip it (no lookups, no write): the same result, far cheaper. A SETTLED FACE is settled floor beside
+        /// a cell the preload blocked (wall, closed doorway, furniture): the cell holding that obstacle's surface.
+        /// A lidar hit or bump there is the known obstacle, and is not written; otherwise rays ending on the surface
+        /// and rays passing through it toggle the cell between blocked and passable every scan (each toggle forces
+        /// the planner to rebuild its clearance field).
+        ///
+        /// Any write that blocks a settled cell (a cat, furniture added mid-run) unsettles it for good: from then on
+        /// it is an ordinary cell, so later rays can clear it again. Cells the preload blocked are never settled, so
+        /// rays still clear them if what blocked them is gone (furniture removed mid-run).
+        /// </summary>
+        public void BeginSettledFloor(int minRow, int minCol, int maxRow, int maxCol)
+        {
+            settledMinRow = minRow;
+            settledMinCol = minCol;
+            settledRows = Mathf.Max(0, maxRow - minRow + 1);
+            settledCols = Mathf.Max(0, maxCol - minCol + 1);
+            settled = new byte[settledRows * settledCols];
+        }
+
+        /// <summary>Preload only: records what the preload wrote into a cell (<see cref="SettledFloor"/> or <see cref="PreloadBlocked"/>).</summary>
+        public void MarkPreloaded(int row, int col, byte state)
+        {
+            int index = SettledIndex(row, col);
+            if (index >= 0) settled[index] = state;
+        }
+
+        /// <summary>Preload only, after every cell is marked: settled floor beside a preload-blocked cell becomes a settled face.</summary>
+        public void FinishSettledFloor()
+        {
+            for (int r = 0; r < settledRows; r++)
+            {
+                for (int c = 0; c < settledCols; c++)
+                {
+                    int index = r * settledCols + c;
+                    if (settled[index] != SettledFloor) continue;
+                    if (BesidePreloadBlocked(r, c)) settled[index] = SettledFace;
+                }
+            }
+        }
+
+        bool BesidePreloadBlocked(int r, int c)
+        {
+            for (int dr = -1; dr <= 1; dr++)
+            {
+                int nr = r + dr;
+                if (nr < 0 || nr >= settledRows) continue;
+                for (int dc = -1; dc <= 1; dc++)
+                {
+                    int nc = c + dc;
+                    if ((dr == 0 && dc == 0) || nc < 0 || nc >= settledCols) continue;
+                    if (settled[nr * settledCols + nc] == PreloadBlocked) return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>The cell's settled state; <see cref="NotSettled"/> outside the preload's window and in SLAM runs.</summary>
+        public byte SettledState(int row, int col)
+        {
+            int index = SettledIndex(row, col);
+            return index >= 0 ? settled[index] : NotSettled;
+        }
+
+        int SettledIndex(int row, int col)
+        {
+            int r = row - settledMinRow, c = col - settledMinCol;
+            if (r < 0 || c < 0 || r >= settledRows || c >= settledCols) return -1;
+            return r * settledCols + c;
+        }
+
+        void Unsettle(int row, int col)
+        {
+            int index = SettledIndex(row, col);
+            if (index >= 0 && (settled[index] == SettledFloor || settled[index] == SettledFace)) settled[index] = NotSettled;
+        }
+
         // ---- Floor-ease memory -----------------------------------------------
 
         /// <summary>How easily the robot believes this floor cell drives: 1 unless something told it otherwise.</summary>
-        public float EaseAt(int row, int col) => ease.TryGetValue(CellIndex.Pack(row, col), out float value) ? value : 1f;
+        public float EaseAt(int row, int col)
+        {
+            int r = row - easeMinRow, c = col - easeMinCol;
+            return r >= 0 && c >= 0 && r < easeRows && c < easeCols ? easeMap[r * easeCols + c] : 1f;
+        }
+
+        // Dense, 1 everywhere not told otherwise (it was a hash map of the cells whose ease isn't 1; EaseAt is asked on
+        // nearly every map write, and the hash lookup was a large share of mapping's cost). Grows on a write that isn't 1.
+        float[] easeMap = System.Array.Empty<float>();
+        int easeMinRow, easeMinCol, easeRows, easeCols;
+        const int EasePad = 32;
+
+        void GrowEase(int row, int col)
+        {
+            int minRow = easeRows == 0 ? row - EasePad : Mathf.Min(easeMinRow, row - EasePad);
+            int minCol = easeCols == 0 ? col - EasePad : Mathf.Min(easeMinCol, col - EasePad);
+            int maxRow = easeRows == 0 ? row + EasePad : Mathf.Max(easeMinRow + easeRows - 1, row + EasePad);
+            int maxCol = easeCols == 0 ? col + EasePad : Mathf.Max(easeMinCol + easeCols - 1, col + EasePad);
+            int rows = maxRow - minRow + 1, cols = maxCol - minCol + 1;
+            var grown = new float[rows * cols];
+            for (int i = 0; i < grown.Length; i++) grown[i] = 1f;
+            for (int r = 0; r < easeRows; r++)
+                System.Array.Copy(easeMap, r * easeCols, grown, (easeMinRow + r - minRow) * cols + (easeMinCol - minCol), easeCols);
+            easeMap = grown;
+            easeMinRow = minRow;
+            easeMinCol = minCol;
+            easeRows = rows;
+            easeCols = cols;
+        }
 
         public void SetEase(int row, int col, float value)
         {
-            long key = CellIndex.Pack(row, col);
-            if (value == 1f) ease.Remove(key);
-            else ease[key] = value;
+            // Ease decides whether a shaded cell counts as wall (IsWall), so a change can flip it.
+            float traversability = Grid.GetCell(row, col).traversabilityBelief;
+            bool shaded = traversability > 0f && traversability < 1f;
+            bool wasWall = shaded && IsWall(row, col, traversability);
+
+            int r = row - easeMinRow, c = col - easeMinCol;
+            if (r < 0 || c < 0 || r >= easeRows || c >= easeCols)
+            {
+                if (value == 1f) return; // already 1 there (and nothing can flip)
+                GrowEase(row, col);
+                r = row - easeMinRow;
+                c = col - easeMinCol;
+            }
+            easeMap[r * easeCols + c] = value;
+
+            if (shaded && wasWall != IsWall(row, col, traversability)) LogWallChange(row, col);
+        }
+
+        // ---- Wall-change log ----------------------------------------------------
+
+        /// <summary>
+        /// Exactly <see cref="InternalModelView.IsBlocked"/>'s rule: traversability 0, or shaded below
+        /// <see cref="ControllerConstants.WallEaseFraction"/> of the cell's floor ease. (Kept identical on purpose: the
+        /// planner's clearance field is updated from this log and must match a full rebuild from the view.)
+        /// </summary>
+        bool IsWall(int row, int col, float traversability) =>
+            traversability <= 0f ||
+            (traversability < 1f && traversability < ControllerConstants.WallEaseFraction * EaseAt(row, col));
+
+        /// <summary>Most entries the wall-change log keeps; past this the older half is dropped (a reader that far behind rebuilds in full).</summary>
+        public const int MaxWallLog = 1 << 16;
+
+        readonly List<long> wallLog = new List<long>();
+        int wallLogBase; // the WallVersion of wallLog[0]
+
+        /// <summary>Goes up once for every cell that starts or stops counting as wall (by the view's IsBlocked rule).</summary>
+        public int WallVersion { get; private set; }
+
+        void LogWallChange(int row, int col)
+        {
+            WallVersion++;
+            wallLog.Add(CellIndex.Pack(row, col));
+            if (wallLog.Count < MaxWallLog) return;
+            int drop = MaxWallLog / 2;
+            wallLog.RemoveRange(0, drop);
+            wallLogBase += drop;
+        }
+
+        /// <summary>
+        /// Fills <paramref name="into"/> (cleared first) with every cell that started or stopped counting as wall since
+        /// <paramref name="version"/> (a <see cref="WallVersion"/>), packed with <see cref="CellIndex.Pack"/>; a cell
+        /// can appear more than once. False if the log no longer reaches back that far.
+        /// </summary>
+        public bool WallChangesSince(int version, List<long> into)
+        {
+            into.Clear();
+            if (version < wallLogBase || version > WallVersion) return false;
+            for (int i = version - wallLogBase; i < wallLog.Count; i++) into.Add(wallLog[i]);
+            return true;
         }
 
         // ---- Change feed ------------------------------------------------------

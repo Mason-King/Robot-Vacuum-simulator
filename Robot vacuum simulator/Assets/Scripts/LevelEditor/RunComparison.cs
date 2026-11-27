@@ -190,10 +190,10 @@ namespace RobotVacuum.LevelEditor
                     if (grouping == CompareGrouping.Algorithm)
                     {
                         // A run that switched algorithm part-way says nothing about any one algorithm.
-                        if (run.mixedPatterns) continue;
+                        if (Switched(run)) continue;
                         Group(run.AlgorithmKey, run.AlgorithmName).AddRun(run);
                     }
-                    else Group(run.id, $"{run.PatternLabel} · seed {run.seed}").AddRun(run);
+                    else Group(run.id, $"{run.AlgorithmName}{(Switched(run) ? " (switched)" : "")} · seed {run.seed}").AddRun(run);
                     continue;
                 }
 
@@ -236,6 +236,12 @@ namespace RobotVacuum.LevelEditor
             });
             return groups;
         }
+
+        /// <summary>
+        /// True for a run that switched algorithm part-way (2.16). It is filed under the algorithm it started with,
+        /// but says nothing about any one algorithm, so grouping by algorithm leaves it out.
+        /// </summary>
+        public static bool Switched(RunReport run) => run.algorithmSwitches != null && run.algorithmSwitches.Count > 0;
 
         /// <summary>Which group leads on <paramref name="metric"/>, and whether its 95% interval clears the runner-up's.</summary>
         public static CompareVerdict Judge(IReadOnlyList<CompareGroup> groups, CompareMetric metric)
@@ -289,7 +295,7 @@ namespace RobotVacuum.LevelEditor
                 if (source.CellSize > 0f) cells.Add($"{source.CellSize:0.####}");
                 string configuration = source.single != null ? source.single.configuration : source.batch.configuration;
                 if (!string.IsNullOrEmpty(configuration)) configurations.Add(configuration);
-                if (source.single != null && source.single.mixedPatterns) mixed++;
+                if (source.single != null && Switched(source.single)) mixed++;
             }
 
             if (vacuums.Count > 1)

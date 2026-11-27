@@ -21,7 +21,7 @@ namespace RobotVacuum.LevelEditor
         public List<string> algorithmIds = new List<string>();
         public int trials = 10;
         public int baseSeed = 1;
-        public float maxMinutes = 30f;
+        public float maxMinutes = SimConfig.DefaultRunLimitSeconds / 60f;
 
         /// <summary>Step without drawing anything, as fast as the machine allows.</summary>
         public bool headless = true;
@@ -53,7 +53,7 @@ namespace RobotVacuum.LevelEditor
         SimWorld world;
         RunRecorder recorder;
         string pendingEnd;
-        int patternIndex;
+        int algorithmIndex;
         int trial;
         bool complete;
         bool cancelled;
@@ -67,7 +67,7 @@ namespace RobotVacuum.LevelEditor
         Label detailLabel;
         VisualElement progressFill;
 
-        int RunIndex => patternIndex * spec.trials + trial;
+        int RunIndex => algorithmIndex * spec.trials + trial;
 
         float SimTime => world != null ? world.SimTime : 0f;
 
@@ -114,14 +114,40 @@ namespace RobotVacuum.LevelEditor
             if (world.Robot == null) return "No vacuum in the scene";
             if (SimTime >= spec.maxMinutes * 60f) return "Time limit";
             if (world.Coverage >= 99.95f) return "Fully clean";
-            if (world.OffFloor) return "Escaped through an open wall";
+            if (Escaped()) return "Escaped through an open wall";
             return null;
         }
+
+        /// <summary>
+        /// Off the floor for longer than a moment. A robot crossing a doorway passes through the wall's thickness, which
+        /// belongs to no room, so a single off-floor step is not an escape: the run screen waits the same grace.
+        /// </summary>
+        bool Escaped()
+        {
+            if (!world.OffFloor)
+            {
+                offFloorSince = -1f;
+                return false;
+            }
+
+            if (offFloorSince < 0f) offFloorSince = SimTime;
+            if (SimTime - offFloorSince < EscapeGraceSeconds) return false;
+
+            var at = world.Robot.LevelPosition;
+            UnityEngine.Debug.LogWarning($"Batch trial {trial + 1}: the vacuum has been off the floor plan for {EscapeGraceSeconds} s, at " +
+                             $"({at.x:F2}, {at.y:F2}) m (room {world.Level.RoomIndexAt(at)}, in a wall: {LevelGeometry.IsInsideWall(world.Level, at)}), " +
+                             $"{SimTime:F1} s into the run. Ending it as escaped.");
+            return true;
+        }
+
+        const float EscapeGraceSeconds = 0.5f; // the same as the run screen's (SimHud)
+        float offFloorSince = -1f;
 
         void StartTrial()
         {
             pendingEnd = null;
-            var settings = SimConfig.ToRunSettings(spec.algorithmIds[patternIndex], spec.baseSeed + trial);
+            offFloorSince = -1f;
+            var settings = SimConfig.ToRunSettings(spec.algorithmIds[algorithmIndex], spec.baseSeed + trial);
             if (!SimulationSession.TryStart(level, settings, spec.headless, OnRunBegan, out session, out string error))
             {
                 UnityEngine.Debug.LogWarning($"Batch: trial {RunIndex + 1} could not start: {error}");
@@ -215,7 +241,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (++trial < spec.trials) return true;
             trial = 0;
-            return ++patternIndex < spec.algorithmIds.Count;
+            return ++algorithmIndex < spec.algorithmIds.Count;
         }
 
         void Complete()
@@ -297,7 +323,7 @@ namespace RobotVacuum.LevelEditor
 
             int total = spec.TotalRuns;
             int current = Mathf.Min(RunIndex + 1, total);
-            string algorithm = patternIndex < spec.algorithmIds.Count ? AlgorithmCatalog.NameOf(spec.algorithmIds[patternIndex]) : "Done";
+            string algorithm = algorithmIndex < spec.algorithmIds.Count ? AlgorithmCatalog.NameOf(spec.algorithmIds[algorithmIndex]) : "Done";
 
             statusLabel.text = $"{algorithm} · seed {spec.baseSeed + trial} · run {current} of {total}";
             progressFill.style.width = Length.Percent(total > 0 ? (RunIndex + Mathf.Clamp01(SimTime / (spec.maxMinutes * 60f))) / total * 100f : 0f);

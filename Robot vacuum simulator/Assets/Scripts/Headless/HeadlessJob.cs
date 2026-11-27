@@ -372,8 +372,8 @@ namespace RobotVacuum.Headless
         /// sources the shipped Algorithms folder is scanned as usual. With sources, a copy of the shipped folder plus the
         /// job's files is written to a fresh temporary folder and scanned instead, so a job never changes the installed
         /// simulator's own Algorithms folder. A carried file that fails to compile rejects the job, since every run that
-        /// uses it would fail. Each run's algorithm is rewritten to its catalog id (so "spiral" is recorded as
-        /// "Legacy.Spiral"), and a SLAM configuration paired with an algorithm that can't do SLAM is rejected.
+        /// uses it would fail. Each run's algorithm is rewritten to its catalog id (so "boustrophedon sweep" is recorded
+        /// as "BoustrophedonSweep"), and a SLAM configuration paired with an algorithm that can't do SLAM is rejected.
         /// </summary>
         void LoadAlgorithms(List<string> errors)
         {
@@ -412,7 +412,7 @@ namespace RobotVacuum.Headless
                     {
                         var known = new List<string>();
                         foreach (var entry in AlgorithmCatalog.Entries) known.Add(entry.Id);
-                        errors.Add($"run {run.runIndex}: unknown algorithm \"{run.algorithm}\". Known: {string.Join(", ", known)} (Spiral, WallFollow and Lawnmower also work).");
+                        errors.Add($"run {run.runIndex}: unknown algorithm \"{run.algorithm}\". Known: {string.Join(", ", known)}.");
                     }
                     continue;
                 }
@@ -449,9 +449,8 @@ namespace RobotVacuum.Headless
         }
 
         /// <summary>
-        /// The catalog id an algorithm name stands for, or null: a catalog id ("BoustrophedonSweep", "Legacy.Spiral",
-        /// a plugin's "Namespace.Class"), an old pattern name ("Spiral", "WallFollow", "Lawnmower"), or a display name
-        /// ("Boustrophedon Sweep"). Case doesn't matter.
+        /// The catalog id an algorithm name stands for, or null: a catalog id ("RandomBounce", "BoustrophedonSweep", a
+        /// plugin's "Namespace.Class") or a display name ("Random", "Boustrophedon Sweep"). Case doesn't matter.
         /// </summary>
         public static string ResolveAlgorithmId(string name)
         {
@@ -460,8 +459,6 @@ namespace RobotVacuum.Headless
             var entries = AlgorithmCatalog.Entries;
             foreach (var entry in entries)
                 if (string.Equals(entry.Id, name, StringComparison.OrdinalIgnoreCase)) return entry.Id;
-            if (!int.TryParse(name, out _) && Enum.TryParse(name, true, out MovementPattern pattern) && MovementAlgorithms.IsDefined(pattern))
-                return AlgorithmCatalog.IdOf(pattern);
             foreach (var entry in entries)
                 if (string.Equals(entry.Name, name, StringComparison.OrdinalIgnoreCase)) return entry.Id;
             return null;
@@ -632,8 +629,11 @@ namespace RobotVacuum.Headless
         public float cellSizeMeters = SimDefaults.CellSizeMeters;
         public float targetMaxClean = HeatmapDefaults.TargetMaxClean;
 
-        /// <summary>The run ends as TimeCap after this many simulated seconds if the battery lasts that long.</summary>
-        public float maxSimulatedSeconds = 1800f;
+        /// <summary>
+        /// The run's time limit: it ends as TimeLimit after this many simulated seconds if nothing else ended it first.
+        /// 1 to 86,400 (the program's 24 h safety cap). Default one simulated hour.
+        /// </summary>
+        public float maxSimulatedSeconds = 3600f;
 
         /// <summary>Simulated seconds between telemetry samples (2.19).</summary>
         public float telemetryInterval = 0.5f;

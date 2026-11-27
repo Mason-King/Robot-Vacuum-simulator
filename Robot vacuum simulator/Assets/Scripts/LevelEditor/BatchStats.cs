@@ -63,7 +63,6 @@ namespace RobotVacuum.LevelEditor
 
         /// <summary>The algorithm's name, or the group's when it isn't simply one algorithm.</summary>
         public string name;
-        public MovementPattern pattern;
         public List<RunReport> runs = new List<RunReport>();
 
         /// <summary>The trials the statistics are computed from: those whose algorithm didn't fail.</summary>
@@ -109,7 +108,7 @@ namespace RobotVacuum.LevelEditor
             {
                 string key = run.AlgorithmKey;
                 if (!byAlgorithm.TryGetValue(key, out var group))
-                    byAlgorithm[key] = group = new AlgorithmSummary { algorithmId = key, name = run.AlgorithmName, pattern = run.pattern };
+                    byAlgorithm[key] = group = new AlgorithmSummary { algorithmId = key, name = run.AlgorithmName };
                 group.runs.Add(run);
             }
 
@@ -125,11 +124,7 @@ namespace RobotVacuum.LevelEditor
         {
             var group = new AlgorithmSummary { name = label };
             group.runs.AddRange(runs);
-            if (group.runs.Count > 0)
-            {
-                group.algorithmId = group.runs[0].AlgorithmKey;
-                group.pattern = group.runs[0].pattern;
-            }
+            if (group.runs.Count > 0) group.algorithmId = group.runs[0].AlgorithmKey;
             Fill(group);
             return group;
         }

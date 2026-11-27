@@ -247,6 +247,7 @@ namespace RobotVacuum.LevelEditor
             });
 
             var card = Ui.Div(dialogBackdrop, "le-dialog");
+            DialogCard = card;
             Ui.Text(card, title, "le-dialog__title");
             if (!string.IsNullOrEmpty(message)) Ui.Text(card, message, "le-dialog__message");
             if (body != null) card.Add(body);
@@ -270,6 +271,9 @@ namespace RobotVacuum.LevelEditor
             }
         }
 
+        /// <summary>The card of the dialog shown last (to add a style class, e.g. le-dialog--wide), or null.</summary>
+        public VisualElement DialogCard { get; private set; }
+
         public void CancelDialog()
         {
             var cancel = dialogCancel;
@@ -286,7 +290,11 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- toast
 
-        public void Toast(string message, string actionLabel = null, Action action = null)
+        /// <summary>
+        /// Shows a short message at the bottom of the screen for <paramref name="durationMs"/> (default 2.6 s), with an
+        /// optional action button. Give a longer message, or one the user must act on, more time.
+        /// </summary>
+        public void Toast(string message, string actionLabel = null, Action action = null, long durationMs = ToastDurationMs)
         {
             toastText.text = message;
             toastCallback = action;
@@ -298,7 +306,7 @@ namespace RobotVacuum.LevelEditor
             toast.AddToClassList("le-toast--visible");
 
             toastTimer?.Pause();
-            toastTimer = schedule.Execute(HideToast).StartingIn(ToastDurationMs);
+            toastTimer = schedule.Execute(HideToast).StartingIn(durationMs > 0 ? durationMs : ToastDurationMs);
         }
 
         void HideToast()

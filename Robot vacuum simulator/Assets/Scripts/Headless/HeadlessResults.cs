@@ -102,7 +102,7 @@ namespace RobotVacuum.Headless
         public string floorPlan;
         public int configurationIndex;
         public string configuration;
-        /// <summary>The algorithm's catalog id (RandomBounce, BoustrophedonSweep, Legacy.Spiral, or a plugin's Namespace.Class).</summary>
+        /// <summary>The algorithm's catalog id (RandomBounce, BoustrophedonSweep, or a plugin's Namespace.Class).</summary>
         public string algorithm;
 
         /// <summary>Its display name, for reports.</summary>
@@ -116,7 +116,7 @@ namespace RobotVacuum.Headless
         public bool succeeded;
         public string error;
 
-        /// <summary>Completed, BatteryDepleted, TimeCap, StoppedByUser, Error, Degenerate, or NotStarted.</summary>
+        /// <summary>A RunEndReason name (Completed, BatteryDepleted, TimeCap, TimeLimit, StoppedByUser, Error, AlgorithmFault, Stuck, Degenerate, ReturnedLowBattery), or NotStarted.</summary>
         public string endReason;
 
         public float coveragePercent;

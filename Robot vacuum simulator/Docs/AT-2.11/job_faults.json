@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "campaignName": "AT-2.11 deliberate algorithm failures",
+  "description": "One normal run and one run of each deliberately broken test algorithm. Expected: exit code 10; results.json lists the five AT-2.11 runs as failed (AlgorithmFault) with their reasons, and the Boustrophedon Sweep run as succeeded.",
+  "floorPlans": [
+    {
+      "name": "AT-2.11 room",
+      "rooms": [
+        {
+          "name": "Room",
+          "floor": "Hardwood",
+          "outline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 6,
+              "y": 0
+            },
+            {
+              "x": 6,
+              "y": 4
+            },
+            {
+              "x": 0,
+              "y": 4
+            }
+          ]
+        }
+      ],
+      "robotSpawn": {
+        "x": 1,
+        "y": 1
+      }
+    }
+  ],
+  "sweep": {
+    "algorithms": [
+      "BoustrophedonSweep",
+      "AT211.ThrowsInNextGoal",
+      "AT211.ThrowsInInitialize",
+      "AT211.Hangs",
+      "AT211.HangsStubbornly",
+      "AT211.BadOutput"
+    ],
+    "seedStart": 1,
+    "seedCount": 1
+  },
+  "algorithmSources": [
+    {
+      "path": "AT-2.11/AT211_BadOutput.cs",
+      "source": "using System;\nusing System.Collections.Generic;\nusing RobotVacuum.AlgorithmApi;\n\n// AT-2.11 test algorithm: deliberately broken. Copy into the Algorithms folder to use; never ship it.\n// For its first 30 simulated seconds it wanders like the template (short straight legs), then: NextGoal returns a waypoint that is not a number (NaN).\n// Expected: the run stops with \"Algorithm failed\": invalid output from NextGoal.\n\nnamespace AT211\n{\n    public sealed class BadOutput : ICleaningAlgorithm\n    {\n        const float FailAfterSeconds = 30f;\n        AlgorithmContext context;\n        Vec2? goal;\n\n        public string Name => \"AT-2.11 Bad output\";\n        public bool SupportsSlam => true;\n\n        public void Initialize(AlgorithmContext context)\n        {\n\n            this.context = context;\n            goal = null;\n        }\n\n        public Vec2? NextGoal(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (context.SimSeconds >= FailAfterSeconds)\n            {\n                return new Vec2(float.NaN, 0f);\n            }\n            return Wander(map, believedPose, lastStatus);\n        }\n\n        Vec2? Wander(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (goal.HasValue && lastStatus == GoalStatus.InProgress) return goal;\n            Vec2 direction = Pose2.DirectionOf(context.random.NextFloat(0f, 360f));\n            float length = map.FreeDistance(believedPose.position, direction, 2f);\n            Vec2 target = believedPose.position + direction * length;\n            while (length > 0f && map.ObstacleDistance(target) < map.BodyClearanceMeters)\n            {\n                length = Math.Max(0f, length - map.CellSizeMeters);\n                target = believedPose.position + direction * length;\n            }\n            goal = target;\n            return goal;\n        }\n\n    }\n}\n"
+    },
+    {
+      "path": "AT-2.11/AT211_Hangs.cs",
+      "source": "using System;\nusing System.Collections.Generic;\nusing RobotVacuum.AlgorithmApi;\n\n// AT-2.11 test algorithm: deliberately broken. Copy into the Algorithms folder to use; never ship it.\n// For its first 30 simulated seconds it wanders like the template (short straight legs), then: NextGoal never returns (an endless loop).\n// Expected: about 5 s of freeze, then the run stops with \"Algorithm failed\": hung in NextGoal, and it was stopped.\n\nnamespace AT211\n{\n    public sealed class Hangs : ICleaningAlgorithm\n    {\n        const float FailAfterSeconds = 30f;\n        AlgorithmContext context;\n        Vec2? goal;\n\n        public string Name => \"AT-2.11 Hangs\";\n        public bool SupportsSlam => true;\n\n        public void Initialize(AlgorithmContext context)\n        {\n\n            this.context = context;\n            goal = null;\n        }\n\n        public Vec2? NextGoal(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (context.SimSeconds >= FailAfterSeconds)\n            {\n                Spin();\n                return null;\n            }\n            return Wander(map, believedPose, lastStatus);\n        }\n\n        Vec2? Wander(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (goal.HasValue && lastStatus == GoalStatus.InProgress) return goal;\n            Vec2 direction = Pose2.DirectionOf(context.random.NextFloat(0f, 360f));\n            float length = map.FreeDistance(believedPose.position, direction, 2f);\n            Vec2 target = believedPose.position + direction * length;\n            while (length > 0f && map.ObstacleDistance(target) < map.BodyClearanceMeters)\n            {\n                length = Math.Max(0f, length - map.CellSizeMeters);\n                target = believedPose.position + direction * length;\n            }\n            goal = target;\n            return goal;\n        }\n\n        // An endless loop with calls in it (so the simulation can stop it).\n        static void Spin()\n        {\n            var list = new List<int>();\n            while (true)\n            {\n                list.Add(1);\n                if (list.Count > 1000) list.Clear();\n            }\n        }\n    }\n}\n"
+    },
+    {
+      "path": "AT-2.11/AT211_HangsStubbornly.cs",
+      "source": "using System;\nusing System.Collections.Generic;\nusing RobotVacuum.AlgorithmApi;\n\n// AT-2.11 test algorithm: deliberately broken. Copy into the Algorithms folder to use; never ship it.\n// For its first 30 simulated seconds it wanders like the template (short straight legs), then: NextGoal loops forever inside a finally block,\n// where a thread can't be aborted. Expected: about 7 s of freeze, then \"Algorithm failed\": hung, and its thread\n// was abandoned. The program stays usable; the abandoned thread uses a CPU core until the program closes. After 3 such\n// threads in one session, every run is refused until the program is restarted (the guard rail).\n\nnamespace AT211\n{\n    public sealed class HangsStubbornly : ICleaningAlgorithm\n    {\n        const float FailAfterSeconds = 30f;\n        AlgorithmContext context;\n        Vec2? goal;\n\n        public string Name => \"AT-2.11 Hangs stubbornly\";\n        public bool SupportsSlam => true;\n\n        public void Initialize(AlgorithmContext context)\n        {\n\n            this.context = context;\n            goal = null;\n        }\n\n        public Vec2? NextGoal(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (context.SimSeconds >= FailAfterSeconds)\n            {\n                try { }\n                finally\n                {\n                    Spin();\n                }\n                return null;\n            }\n            return Wander(map, believedPose, lastStatus);\n        }\n\n        Vec2? Wander(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (goal.HasValue && lastStatus == GoalStatus.InProgress) return goal;\n            Vec2 direction = Pose2.DirectionOf(context.random.NextFloat(0f, 360f));\n            float length = map.FreeDistance(believedPose.position, direction, 2f);\n            Vec2 target = believedPose.position + direction * length;\n            while (length > 0f && map.ObstacleDistance(target) < map.BodyClearanceMeters)\n            {\n                length = Math.Max(0f, length - map.CellSizeMeters);\n                target = believedPose.position + direction * length;\n            }\n            goal = target;\n            return goal;\n        }\n\n        // An endless loop with calls in it (so the simulation can stop it).\n        static void Spin()\n        {\n            var list = new List<int>();\n            while (true)\n            {\n                list.Add(1);\n                if (list.Count > 1000) list.Clear();\n            }\n        }\n    }\n}\n"
+    },
+    {
+      "path": "AT-2.11/AT211_ThrowsInInitialize.cs",
+      "source": "using System;\nusing System.Collections.Generic;\nusing RobotVacuum.AlgorithmApi;\n\n// AT-2.11 test algorithm: deliberately broken. Copy into the Algorithms folder to use; never ship it.\n// Initialize throws at once.\n// Expected: the run stops at 0 s with \"Algorithm failed\" in Initialize; the robot never moves.\n\nnamespace AT211\n{\n    public sealed class ThrowsInInitialize : ICleaningAlgorithm\n    {\n        const float FailAfterSeconds = 0f; // (never reached: Initialize throws)\n        AlgorithmContext context;\n        Vec2? goal;\n\n        public string Name => \"AT-2.11 Throws in Initialize\";\n        public bool SupportsSlam => true;\n\n        public void Initialize(AlgorithmContext context)\n        {\n            if (context.robotRadius >= 0f) throw new InvalidOperationException(\"Deliberate AT-2.11 test failure in Initialize.\");\n            this.context = context;\n            goal = null;\n        }\n\n        public Vec2? NextGoal(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (context.SimSeconds >= FailAfterSeconds)\n            {\n                return null;\n            }\n            return Wander(map, believedPose, lastStatus);\n        }\n\n        Vec2? Wander(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (goal.HasValue && lastStatus == GoalStatus.InProgress) return goal;\n            Vec2 direction = Pose2.DirectionOf(context.random.NextFloat(0f, 360f));\n            float length = map.FreeDistance(believedPose.position, direction, 2f);\n            Vec2 target = believedPose.position + direction * length;\n            while (length > 0f && map.ObstacleDistance(target) < map.BodyClearanceMeters)\n            {\n                length = Math.Max(0f, length - map.CellSizeMeters);\n                target = believedPose.position + direction * length;\n            }\n            goal = target;\n            return goal;\n        }\n\n    }\n}\n"
+    },
+    {
+      "path": "AT-2.11/AT211_ThrowsInNextGoal.cs",
+      "source": "using System;\nusing System.Collections.Generic;\nusing RobotVacuum.AlgorithmApi;\n\n// AT-2.11 test algorithm: deliberately broken. Copy into the Algorithms folder to use; never ship it.\n// For its first 30 simulated seconds it wanders like the template (short straight legs), then: NextGoal throws an InvalidOperationException.\n// Expected: the run stops with \"Algorithm failed\" (AlgorithmFault), the exception named, the program still usable.\n\nnamespace AT211\n{\n    public sealed class ThrowsInNextGoal : ICleaningAlgorithm\n    {\n        const float FailAfterSeconds = 30f;\n        AlgorithmContext context;\n        Vec2? goal;\n\n        public string Name => \"AT-2.11 Throws in NextGoal\";\n        public bool SupportsSlam => true;\n\n        public void Initialize(AlgorithmContext context)\n        {\n\n            this.context = context;\n            goal = null;\n        }\n\n        public Vec2? NextGoal(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (context.SimSeconds >= FailAfterSeconds)\n            {\n                throw new InvalidOperationException(\"Deliberate AT-2.11 test failure.\");\n            }\n            return Wander(map, believedPose, lastStatus);\n        }\n\n        Vec2? Wander(IBeliefMap map, Pose2 believedPose, GoalStatus lastStatus)\n        {\n            if (goal.HasValue && lastStatus == GoalStatus.InProgress) return goal;\n            Vec2 direction = Pose2.DirectionOf(context.random.NextFloat(0f, 360f));\n            float length = map.FreeDistance(believedPose.position, direction, 2f);\n            Vec2 target = believedPose.position + direction * length;\n            while (length > 0f && map.ObstacleDistance(target) < map.BodyClearanceMeters)\n            {\n                length = Math.Max(0f, length - map.CellSizeMeters);\n                target = believedPose.position + direction * length;\n            }\n            goal = target;\n            return goal;\n        }\n\n    }\n}\n"
+    }
+  ]
+}

@@ -51,6 +51,21 @@ namespace RobotVacuum.Sim.Control
         /// <summary>A whisker contact within this many degrees of straight ahead stops forward driving.</summary>
         public const float FrontContactDegrees = 100f;
 
+        /// <summary>
+        /// A head-on bump (within <see cref="BumperArrivalDegrees"/> of straight ahead) this close to the goal counts as
+        /// arriving: the robot is as close as its bumper lets it get. The bumper fires on anything within
+        /// <see cref="Sensors.WhiskerSensor.LookAheadMeters"/> (9 cm) of the body's front, so a goal right in front of
+        /// a wall (an edge run's corner, a door jamb, a lane's end in a corner) can't be driven onto: without this, the
+        /// robot backed off and tried again until its re-routes ran out and the goal ended Blocked, about 5 cm short,
+        /// after several seconds. 7 cm and 20°: those failures stopped 4–6 cm short at 0–16°. Wider (10 cm, 45°) also
+        /// stopped edge runs early where the wall was to the side, which backing off and re-routing does reach, and
+        /// left the strips by the walls dirtier.
+        /// </summary>
+        public const float BumperArrivalMeters = 0.07f;
+
+        /// <summary>See <see cref="BumperArrivalMeters"/>.</summary>
+        public const float BumperArrivalDegrees = 20f;
+
         /// <summary>After contact, the robot backs straight off this far.</summary>
         public const float BackOffMeters = 0.08f;
 
@@ -77,8 +92,15 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public const float SweepSpeedFloor = RobotVacuum.AlgorithmApi.DriveRequests.SweepSpeedFloor;
 
-        /// <summary>How often the trip home is costed against the battery, simulated seconds.</summary>
+        /// <summary>The shortest gap between two costings of the trip home against the battery, simulated seconds.</summary>
         public const float BatteryCheckSeconds = 1f;
+
+        /// <summary>
+        /// The trip home is costed again once the robot has used this much of its spare charge (charge minus the
+        /// homing reserve) since the last costing. A third keeps the robot above the reserve even if the trip home
+        /// grows as fast as driving away can make it (see MovementBrain.CheckBattery).
+        /// </summary>
+        public const float BatteryCheckSpareFraction = 1f / 3f;
 
         /// <summary>The trip home is costed on normal floor times this (the robot doesn't know every floor's energy cost).</summary>
         public const float HomeFloorMargin = 1.5f;
@@ -168,5 +190,102 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Traversability below this is costed as this (so a very hard floor is avoided, not treated as nearly a wall).</summary>
         public const float PlannerMinTraversability = 0.2f;
+
+        /// <summary>
+        /// Cut off: when the algorithm finishes, or the trip home finds no way, and at least this many cells of mapped
+        /// floor can't be reached now but could be through places the robot reached earlier in the run, something (the
+        /// cat) is blocking the way to them: wait and try again instead of ending. About 0.1 m².
+        /// </summary>
+        public const int BoxedInCutOffCells = 40;
+
+        /// <summary>
+        /// Cut off: the robot first drives to the reachable floor nearest the cut-off floor (so its sensors can see
+        /// the blockage clear) unless it is already within this distance, meters, of it.
+        /// </summary>
+        public const float BoxedInLookoutNearMeters = 0.3f;
+
+        /// <summary>
+        /// After BoxedInTries short waits fail: one last hold, sim seconds, with a warning, before giving up (the
+        /// algorithm finished: return to the dock; on the way home: end the run where the robot is).
+        /// </summary>
+        public const float BoxedInFinalHoldSeconds = 180f;
+
+        /// <summary>
+        /// No way home with the usual clearance (radius + ClearanceMarginMeters): one try along a path planned with this
+        /// fraction of the radius instead, before waiting. The belief map's cells make a sitting cat look wider than it
+        /// is, so a gap the body can squeeze through may still be there.
+        /// </summary>
+        public const float BoxedInSqueezeClearanceFraction = 0.85f;
+
+        /// <summary>
+        /// During that last hold, how often, sim seconds, the way is checked: the hold ends as soon as it is open.
+        /// </summary>
+        public const float BoxedInFinalPollSeconds = 5f;
+
+        /// <summary>
+        /// Blockage: when nothing measurable is cut off, the algorithm finishing within this many sim seconds of a goal
+        /// that ended Blocked or Unreachable makes the controller look for a blockage next to that goal.
+        /// </summary>
+        public const float BoxedInRecentFailSeconds = 10f;
+
+        /// <summary>Blockage: how far, meters, from the failed goal to look for cells the robot drove over that are blocked now.</summary>
+        public const float BoxedInBlockageRadiusMeters = 1f;
+
+        /// <summary>
+        /// Blockage: at least this many cells the robot drove over earlier, blocked now, near the failed goal, count as a
+        /// blockage (something sitting in the way, such as the cat). About 0.05 m².
+        /// </summary>
+        public const int BoxedInBlockageCells = 20;
+
+        /// <summary>
+        /// Blockage near the robot (no failed goal just before the finish): at least this many cells mapped blocked now
+        /// that the robot could reach earlier (something that moves is sitting there)...
+        /// </summary>
+        public const int BoxedInMovedCells = 6;
+
+        /// <summary>
+        /// Blockage near the robot: the moved cells (blocked now, reachable earlier) must span no more than this either
+        /// way: a cat, not a stretch of wall redrawn a few centimeters over by a SLAM pose correction.
+        /// </summary>
+        public const float BoxedInMovedMaxSpanMeters = 0.6f;
+
+        /// <summary>...with at least this many unmapped cells within BoxedInHiddenRadiusMeters of them (what it hides).</summary>
+        public const int BoxedInHiddenCells = 10;
+
+        /// <summary>Blockage near the robot: how close, meters, unmapped cells must be to the moved cells to count as hidden by them.</summary>
+        public const float BoxedInHiddenRadiusMeters = 0.5f;
+
+        /// <summary>
+        /// Cut off: this many unmapped cells bordering floor reachable only through the blockage also count, but only
+        /// together with some cut-off floor still to clean (alone they were SLAM's redrawn map edges): about 0.5 m of edge.
+        /// </summary>
+        public const int BoxedInUnmappedEdgeCells = 10;
+
+        /// <summary>
+        /// Floor counts as still to clean (for the cut-off and blockage checks) below this fraction of the target
+        /// cleanliness, the robot's own belief. Floor already cleaned that is cut off or sat on is not missed.
+        /// </summary>
+        public const float BoxedInDirtyFraction = 0.8f;
+
+        /// <summary>
+        /// Blockage: at least this many cells still to clean, reachable earlier, that the body doesn't fit on now near
+        /// where the algorithm stopped: something (the cat) is sitting on floor that is left. About 0.05 m².
+        /// </summary>
+        public const int BoxedInDirtyInWayCells = 20;
+
+        /// <summary>How often, sim seconds, the floor the robot can reach is recorded (the cut-off check's reference).</summary>
+        public const float BoxedInSampleSeconds = 10f;
+
+        /// <summary>The first wait, sim seconds, before trying again when boxed in; each further wait is twice the last.</summary>
+        public const float BoxedInWaitSeconds = 5f;
+
+        /// <summary>Tries while boxed in before accepting it (a robot truly shut in is still reported).</summary>
+        public const int BoxedInTries = 3;
+
+        /// <summary>An UntilClean hold ends after this many times the time its dirtiest cell needed when the hold began.</summary>
+        public const float HoldCapFactor = 1.5f;
+
+        /// <summary>During a hold the first contact is ignored; a contact at least this long after it ends the hold as Blocked, sim seconds.</summary>
+        public const float HoldSecondContactSeconds = 3f;
     }
 }

@@ -53,6 +53,69 @@ namespace RobotVacuum.Tests
                         writer.SetTraversability(cell.row, cell.col, 0f);
         }
 
+        [Test]
+        public void TheUpdatedClearanceField_IsTheRebuiltOne_ToTheBit()
+        {
+            // A room, a path planned (the field is built), then wall cells added and removed inside it a few at a time
+            // with a path planned after each change (the field is updated, not rebuilt). After every change the field
+            // must equal what a new planner builds from scratch, and both must equal the clearance worked out the long
+            // way, cell by cell.
+            Box(-2f, -2f, 2f, 2f);
+            Wall(new Vector2(-0.6f, 0.6f), new Vector2(0.6f, -0.6f)); // across the straight line, so the planner searches
+            var from = new Vector2(-1.5f, -1.5f);
+            var to = new Vector2(1.5f, 1.5f);
+            var path = new List<Vector2>();
+            planner.FindPath(from, to, path, out _);
+            int rebuilds = planner.FieldRebuilds;
+
+            var rng = new System.Random(7);
+            for (int round = 0; round < 12; round++)
+            {
+                for (int k = 0; k < 6; k++)
+                {
+                    var spot = new Vector2((float)(rng.NextDouble() * 3.2 - 1.6), (float)(rng.NextDouble() * 3.2 - 1.6));
+                    if (Mathf.Abs(spot.x + spot.y) < 0.15f || (spot - from).magnitude < 0.4f || (spot - to).magnitude < 0.4f) continue;
+                    Assert.IsTrue(view.TryWorldToCell(spot, out var cell));
+                    writer.SetTraversability(cell.row, cell.col, round % 3 == 2 ? 1f : 0f);
+                }
+                planner.FindPath(from, to, path, out _);
+
+                var fresh = new PathPlanner(view, Clearance);
+                fresh.FindPath(from, to, new List<Vector2>(), out _);
+                for (float y = -2.4f; y <= 2.4f; y += 0.05f)
+                    for (float x = -2.4f; x <= 2.4f; x += 0.05f)
+                    {
+                        Assert.IsTrue(view.TryWorldToCell(new Vector2(x, y), out var cell));
+                        float updated = planner.ClearanceOf(cell.row, cell.col);
+                        Assert.AreEqual(fresh.ClearanceOf(cell.row, cell.col), updated, 0f, $"round {round}, cell {cell.row},{cell.col}: rebuilt");
+                        Assert.AreEqual(LongWayClearance(cell.row, cell.col), updated, 0f, $"round {round}, cell {cell.row},{cell.col}: the long way");
+                    }
+            }
+            Assert.Greater(planner.FieldUpdates, 0, "the field was updated in place");
+            Assert.AreEqual(rebuilds, planner.FieldRebuilds, "and never rebuilt");
+        }
+
+        /// <summary>A cell's clearance as the planner defines it: the distance from its centre to the nearest blocked cell's edge, capped.</summary>
+        float LongWayClearance(int row, int col)
+        {
+            float cell = view.CellSizeMeters, half = cell * 0.5f;
+            int reach = Mathf.CeilToInt((Clearance + half) / cell) + 1;
+            float best = Clearance + cell;
+            for (int dr = -reach; dr <= reach; dr++)
+                for (int dc = -reach; dc <= reach; dc++)
+                {
+                    if (!view.IsBlocked(row + dr, col + dc)) continue;
+                    float d = 0f;
+                    if (dr != 0 || dc != 0)
+                    {
+                        float dx = Mathf.Max(Math.Abs(dc) * cell - half, 0f), dy = Mathf.Max(Math.Abs(dr) * cell - half, 0f);
+                        d = Mathf.Sqrt(dx * dx + dy * dy);
+                    }
+                    if (d < best) best = d;
+                }
+            return best;
+        }
+
         void AssertPathKeepsClear(List<Vector2> path)
         {
             for (int i = 1; i < path.Count; i++)

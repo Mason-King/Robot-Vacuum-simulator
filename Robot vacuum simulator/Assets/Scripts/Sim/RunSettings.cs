@@ -15,14 +15,9 @@ namespace RobotVacuum.Sim
     [Serializable]
     public class RunSettings
     {
-        // The built-in the run uses, for older code and config files. Hidden in the Inspector: the Algorithm dropdown
-        // below sets it whenever a built-in is picked. algorithmId decides; this follows it.
-        [HideInInspector]
-        public MovementPattern pattern = MovementPattern.RandomBounce;
-
         [Header("Run")]
-        [Tooltip("The movement algorithm: a built-in, or one from the Algorithms folder (Rescan picks up new files). Saved in config.json by id: a built-in's id (RandomBounce, Legacy.Spiral, ...) or a plugin's namespace + class. Empty = the built-in that the pattern names.")]
-        [AlgorithmId(nameof(pattern))]
+        [Tooltip("The movement algorithm: a built-in, or one from the Algorithms folder (Rescan picks up new files). Saved in config.json by id: a built-in's id (RandomBounce, BoustrophedonSweep, ...) or a plugin's namespace + class. Empty = Random.")]
+        [AlgorithmId]
         public string algorithmId = "";
 
         [Tooltip("On: a fresh random seed every run. Off: use Seed below. Either way, the seed actually used is saved in the run's config.json, so the run can be repeated.")]
@@ -95,7 +90,7 @@ namespace RobotVacuum.Sim
         [Tooltip("Cleanliness gained per second of dwell on a floor with a cleaning effort of 1. 0 = default (HeatmapDefaults.BaseVacuumPower).")]
         public float vacuumPower;
 
-        [Tooltip("Ends the run (as TimeCap) after this many simulated seconds if the battery hasn't run out. 0 = the program's safety cap (SimDefaults.MaxSimulatedSeconds). Never above that cap.")]
+        [Tooltip("The run's time limit in simulated seconds: reaching it stops the run (TimeLimit). 0 = no limit of its own; the program's 24 h safety cap (SimDefaults.MaxSimulatedSeconds, TimeCap) still applies. Never above that cap.")]
         public float maxSimulatedSeconds;
 
         /// <summary>The highest noise scale allowed.</summary>
@@ -121,17 +116,16 @@ namespace RobotVacuum.Sim
                 resolved.randomSeed = false;
             }
 
-            // The algorithm: always recorded by id. A built-in's id and the pattern are kept in step.
-            if (string.IsNullOrEmpty(resolved.algorithmId)) resolved.algorithmId = Control.AlgorithmCatalog.IdOf(resolved.pattern);
-            var builtInPattern = Control.AlgorithmCatalog.PatternOf(resolved.algorithmId);
-            if (builtInPattern.HasValue) resolved.pattern = builtInPattern.Value;
+            // The algorithm: always recorded by id. None chosen = the default (Random).
+            resolved.algorithmId = Control.AlgorithmCatalog.OrDefault(resolved.algorithmId);
 
             if (!IsSet(resolved.targetMaxClean)) resolved.targetMaxClean = HeatmapDefaults.TargetMaxClean;
             if (!IsSet(resolved.cellSizeMeters)) resolved.cellSizeMeters = SimDefaults.CellSizeMeters;
             if (!IsSet(resolved.vacuumPower)) resolved.vacuumPower = HeatmapDefaults.BaseVacuumPower;
+            // The run's own limit: unset means none (only the program's 24 h safety cap, which the session applies itself).
             resolved.maxSimulatedSeconds = IsSet(resolved.maxSimulatedSeconds)
                 ? Mathf.Min(resolved.maxSimulatedSeconds, SimDefaults.MaxSimulatedSeconds)
-                : SimDefaults.MaxSimulatedSeconds;
+                : 0f;
 
             // Sensing. The noise scale is touched ONLY when SLAM is on (clamped to 0–MaxNoiseScale). In a Normal
             // run it is neither read nor changed: it is recorded exactly as set, and nothing uses it.

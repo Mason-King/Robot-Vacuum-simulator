@@ -6,6 +6,8 @@ using RobotVacuum.Sim;
 using UnityEngine;
 using UnityEngine.UIElements;
 
+using AlgorithmCatalog = RobotVacuum.Sim.Control.AlgorithmCatalog;
+
 namespace RobotVacuum.LevelEditor
 {
     /// <summary>
@@ -62,7 +64,13 @@ namespace RobotVacuum.LevelEditor
 
             body = Ui.Div(this, "le-analysis");
             Reload(focusedId);
+
+            // A rescan can remove or bring back a run's algorithm: show its "no longer installed" mark as it is now.
+            RegisterCallback<AttachToPanelEvent>(_ => AlgorithmCatalog.Changed += OnAlgorithmsChanged);
+            RegisterCallback<DetachFromPanelEvent>(_ => AlgorithmCatalog.Changed -= OnAlgorithmsChanged);
         }
+
+        void OnAlgorithmsChanged() => Rebuild();
 
         void Reload(string focusId)
         {
@@ -242,7 +250,7 @@ namespace RobotVacuum.LevelEditor
 
             var text = Ui.Div(row, "le-run-row__text");
             Ui.Text(text, run.levelName, "le-run-row__title");
-            Ui.Text(text, $"{run.PatternLabel} · {VacuumSettings.FormatDuration(run.durationSeconds)} · {FormatWhen(run.FinishedAt)}",
+            Ui.Text(text, $"{run.AlgorithmName} · {VacuumSettings.FormatDuration(run.durationSeconds)} · {FormatWhen(run.FinishedAt)}",
                 "le-run-row__meta");
             Ui.Text(row, $"{run.coveragePercent:0.0}%", $"le-run-row__value le-tone-text--{CoverageTone(run.coveragePercent)}");
 
@@ -361,7 +369,7 @@ namespace RobotVacuum.LevelEditor
                 if (source.single != null)
                 {
                     var run = source.single;
-                    Ui.Text(text, $"{run.levelName} · {run.PatternLabel}", "le-run-row__title");
+                    Ui.Text(text, $"{run.levelName} · {run.AlgorithmName}", "le-run-row__title");
                     Ui.Text(text, $"Single run · seed {run.seed} · {FormatWhen(run.FinishedAt)}", "le-run-row__meta");
                 }
                 else
@@ -676,8 +684,19 @@ namespace RobotVacuum.LevelEditor
             var panel = Ui.Div(column, "le-panel");
             var header = Ui.Div(panel, "le-panel__header");
             var titles = Ui.Div(header, "le-panel__titles");
-            Ui.Text(titles, $"{run.levelName} · {run.PatternLabel}", "le-panel__title");
+            // The run records its algorithm by name and id only (versions are the user's to manage): say so when
+            // nothing by that id is installed any more.
+            bool algorithmGone = AlgorithmCatalog.Find(run.AlgorithmKey) == null;
+            Ui.Text(titles, $"{run.levelName} · {run.AlgorithmName}" + (algorithmGone ? " (algorithm no longer installed)" : ""), "le-panel__title");
             Ui.Text(titles, $"{run.FinishedAt:d MMM yyyy, HH:mm} · {run.endReason} · seed {run.seed}", "le-panel__text");
+            if (run.algorithmSwitches != null && run.algorithmSwitches.Count > 0)
+            {
+                // Mid-run switches (2.16): the run is filed under the algorithm it started with.
+                var switches = new List<string>();
+                foreach (var change in run.algorithmSwitches)
+                    switches.Add($"switched to {change.toName} at {change.simSeconds:0.0} s");
+                Ui.Text(titles, $"Started with {run.AlgorithmName}; {string.Join("; ", switches)}.", "le-panel__text");
+            }
 
             var parentBatch = run.IsBatch ? batches.Find(batch => batch.batchId == run.batchId) : null;
             if (parentBatch != null)
@@ -700,11 +719,14 @@ namespace RobotVacuum.LevelEditor
                 Ui.IconButton(header, IconKind.Save, "Open this run's data: telemetry.csv, cell_events.csv, cells_final.csv, parameters.csv, replay.json",
                     () => FloorPlanFiles.Reveal(run.dataFolder), "le-btn--ghost le-btn--small");
             if (!run.IsBatch)
-                Ui.IconButton(header, IconKind.Trash, "Delete this run", () => ConfirmDelete(run.id, $"the {run.PatternLabel} run on {run.levelName}"),
+                Ui.IconButton(header, IconKind.Trash, "Delete this run", () => ConfirmDelete(run.id, $"the {run.AlgorithmName} run on {run.levelName}"),
                     "le-btn--ghost le-btn--small");
 
             if (!string.IsNullOrEmpty(run.failure))
-                Ui.Text(panel, $"The algorithm was stopped: {run.failure}", "le-analysis__failure");
+                Ui.Text(panel, $"Stopped by a failure: {run.failure}", "le-analysis__failure");
+            if (algorithmGone)
+                Ui.Text(panel, $"'{run.AlgorithmName}' ({run.AlgorithmKey}) is no longer in the Algorithms folder, or no longer loads. " +
+                               "An algorithm added later under the same name may not be the same code.", "le-empty-hint");
 
             // Headline numbers, each with a bar where a fraction makes sense.
             var kpis = Ui.Div(panel, "le-kpis");
