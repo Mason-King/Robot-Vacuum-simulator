@@ -36,6 +36,12 @@ namespace RobotVacuum.LevelEditor
         readonly EditHistory history = new EditHistory();
         string savedState;
         string name;
+        readonly string id; // the floor plan's id: its version history (empty: none kept)
+
+        // The edits since the last save, for that version's entry in the history ("Add Room", "Undo Move Doorway").
+        readonly List<string> editLog = new List<string>();
+        string pendingLabel;   // the edit started by the last Checkpoint...
+        string pendingBefore;  // ...and the state before it (an edit that changed nothing isn't logged)
 
         EditorTool tool = EditorTool.Select;
         int selectedRoom = -1;
@@ -59,6 +65,7 @@ namespace RobotVacuum.LevelEditor
 
             snapshot.ApplyTo(Level);
             name = snapshot.name;
+            id = snapshot.id ?? string.Empty;
             FilePath = filePath;
             savedState = Serialize();
         }
@@ -81,6 +88,15 @@ namespace RobotVacuum.LevelEditor
         public FloorPalette Palette => Level.Palette;
         public string FilePath { get; }
         public string Name => name;
+
+        /// <summary>The floor plan's id (<see cref="LevelSnapshot.id"/>); empty when it keeps no version history.</summary>
+        public string Id => id;
+
+        /// <summary>The floor plan's saved versions, or null when it has no id.</summary>
+        public VersionHistory History => string.IsNullOrEmpty(id) ? null : VersionHistory.ForFloorPlan(id);
+
+        /// <summary>The edits since the last save, repeats folded: what the next version will list.</summary>
+        public List<string> UnsavedEdits => VersionHistory.Summarise(editLog);
         public bool IsDirty { get; private set; }
 
         public bool CanUndo => history.CanUndo;
@@ -207,13 +223,19 @@ namespace RobotVacuum.LevelEditor
 
         // ---------------------------------------------------------------- history & persistence
 
-        public string Serialize(bool pretty = false) => LevelSnapshot.Serialize(Level, name, pretty);
+        public string Serialize(bool pretty = false) => LevelSnapshot.Serialize(Level, name, pretty, id);
 
         /// <summary>
         /// Records the current state for undo. Call once before a discrete edit, or once when a drag
         /// first moves; follow with <see cref="Commit"/> when the edit is finished.
         /// </summary>
-        public void Checkpoint(string label) => history.Push(label, Serialize());
+        public void Checkpoint(string label)
+        {
+            string before = Serialize();
+            history.Push(label, before);
+            pendingLabel = label;
+            pendingBefore = before;
+        }
 
         /// <summary>Announces a change made mid-drag. Cheap: no dirty check, no history.</summary>
         public void NotifyLiveChange() => LevelChanged?.Invoke(true);
@@ -225,6 +247,8 @@ namespace RobotVacuum.LevelEditor
             string current = Serialize();
             history.DiscardIfUnchanged(current);
             IsDirty = current != savedState;
+            if (pendingLabel != null && current != pendingBefore) editLog.Add(pendingLabel);
+            pendingLabel = pendingBefore = null;
 
             LevelChanged?.Invoke(false);
             if (selectionDropped) SelectionChanged?.Invoke();
@@ -242,6 +266,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (!history.TryUndo(Serialize(), out string state, out string label)) return false;
             Restore(state);
+            editLog.Add($"Undo {label}");
             Notice?.Invoke($"Undo {label}");
             return true;
         }
@@ -250,6 +275,7 @@ namespace RobotVacuum.LevelEditor
         {
             if (!history.TryRedo(Serialize(), out string state, out string label)) return false;
             Restore(state);
+            editLog.Add($"Redo {label}");
             Notice?.Invoke($"Redo {label}");
             return true;
         }
@@ -271,13 +297,38 @@ namespace RobotVacuum.LevelEditor
             DocumentChanged?.Invoke();
         }
 
-        /// <summary>Writes the level to its file. Throws on IO failure so the caller can report it.</summary>
-        public void Save()
+        /// <summary>
+        /// Writes the level to its file and records it as a new version in its history (unless nothing changed since
+        /// the last version), with the edits made since. Throws on IO failure of the file itself so the caller can
+        /// report it. Returns the version recorded, or null.
+        /// </summary>
+        public VersionInfo Save(string versionLabel = null)
         {
-            LevelLibrary.Write(FilePath, Serialize(true));
+            string json = Serialize(true);
+            LevelLibrary.Write(FilePath, json);
+            var version = LevelLibrary.RecordVersion(id, json, versionLabel ?? "Saved", VersionHistory.Summarise(editLog));
+            editLog.Clear();
             savedState = Serialize();
             IsDirty = false;
             DocumentChanged?.Invoke();
+            return version;
+        }
+
+        /// <summary>
+        /// Brings back saved version <paramref name="number"/> as an ordinary edit: undoable, unsaved until the next
+        /// save (which then records it as a new version, so nothing in the history is lost).
+        /// </summary>
+        public bool RestoreVersion(int number)
+        {
+            var snapshot = LevelSnapshot.Parse(History?.Read(number));
+            if (snapshot == null) return false;
+            Edit($"Restore v{number}", () =>
+            {
+                snapshot.ApplyTo(Level);
+                name = snapshot.name;
+                Level.name = name;
+            });
+            return true;
         }
 
         // ---------------------------------------------------------------- level-wide edits

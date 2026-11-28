@@ -104,6 +104,7 @@ namespace RobotVacuum.LevelEditor
                 return false;
             }
 
+            SimConfig.CommitVersion("Before a run"); // the settings this run uses are in the history
             LevelHandoff.Send(level);
             SimulatedPath = filePath;
             Origin = origin;
@@ -121,6 +122,7 @@ namespace RobotVacuum.LevelEditor
         public static bool RunBatch(LevelSnapshot snapshot, FloorPalette palette, string filePath, BatchSpec spec)
         {
             if (spec == null || spec.algorithmIds.Count == 0 || spec.trials < 1) return false;
+            SimConfig.CommitVersion("Before a batch");
 
             pendingBatch = spec;
             if (Simulate(snapshot, palette, filePath, SimOrigin.StartScreen)) return true;
