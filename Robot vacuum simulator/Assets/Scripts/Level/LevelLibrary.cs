@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using RobotVacuum.Level;
 using UnityEngine;
 
 namespace RobotVacuum.LevelEditor
@@ -50,6 +51,42 @@ namespace RobotVacuum.LevelEditor
 
             entries.Sort((a, b) => b.modified.CompareTo(a.modified));
             return entries;
+        }
+
+        /// <summary>The floor plan a fresh install starts with, and the empty state's "Run the sample".</summary>
+        public const string SampleName = "Sample apartment";
+
+        /// <summary>Written once the library has been seeded, so a deleted sample stays deleted.</summary>
+        static string SeededMarker => Path.Combine(Application.persistentDataPath, "library-seeded");
+
+        /// <summary>
+        /// On the first launch, puts the Sample apartment in an empty library so a run can start with no
+        /// setup (1.1.2, C.13). Runs once per install: deleting the sample later doesn't bring it back.
+        /// </summary>
+        public static void SeedOnFirstLaunch()
+        {
+            try
+            {
+                if (File.Exists(SeededMarker)) return;
+                bool empty = !Directory.Exists(Folder) || Directory.GetFiles(Folder, "*" + FileExtension).Length == 0;
+                if (empty) CreateSample();
+                File.WriteAllText(SeededMarker, DateTime.UtcNow.ToString("o"));
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Level library: could not add the sample floor plan: {exception.Message}");
+            }
+        }
+
+        /// <summary>Saves a new copy of the Sample apartment and returns it, ready to run.</summary>
+        public static Entry CreateSample()
+        {
+            var taken = new List<string>();
+            foreach (var entry in LoadAll()) taken.Add(entry.level.name);
+
+            var snapshot = LevelSnapshot.Create(UniqueName(SampleName, taken), SampleLevels.PopulateApartment);
+            string path = Create(snapshot);
+            return new Entry { path = path, level = snapshot, modified = File.GetLastWriteTime(path) };
         }
 
         public static LevelSnapshot Read(string path) => LevelSnapshot.Parse(File.ReadAllText(path));

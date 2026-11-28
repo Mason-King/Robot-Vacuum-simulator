@@ -1550,6 +1550,10 @@
     margin-top: 22px;
 }
 
+.le-empty__actions > .le-btn {
+    margin: 0 5px;
+}
+
 /* ------------------------------------------------------------ run mode */
 
 .le-run-bar {

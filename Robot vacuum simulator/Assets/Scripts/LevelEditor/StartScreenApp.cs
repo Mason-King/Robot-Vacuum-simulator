@@ -37,6 +37,7 @@ namespace RobotVacuum.LevelEditor
         void Start()
         {
             if (palette == null) runtimePalette = FloorPalette.CreateDefault();
+            LevelLibrary.SeedOnFirstLaunch();
 
             var root = UiPanel.Create(transform, "Start Screen UI", uiScale, out panelSettings);
             app = Ui.Div(root, "le-app");
@@ -158,7 +159,7 @@ namespace RobotVacuum.LevelEditor
                 levels == 1 ? "1 floor plan" : $"{levels} floor plans", () => SimLauncher.OpenLevelEditor());
             BuildStep(steps, 3, IconKind.Play, "Start simulation",
                 "Choose a floor plan and watch the vacuum clean it with your configuration.",
-                levels == 0 ? "Draw a floor plan first" : "Choose a floor plan", () => Show(StartPage.Simulate));
+                levels == 0 ? "Run the sample or draw a floor plan" : "Choose a floor plan", () => Show(StartPage.Simulate));
             BuildStep(steps, 4, IconKind.Chart, "Analysis",
                 "Review each run's coverage over time and compare algorithms side by side.",
                 runs == 1 ? "1 recorded run" : $"{runs} recorded runs", () => Show(StartPage.Analysis));
