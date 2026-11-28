@@ -81,6 +81,7 @@ namespace RobotVacuum.LevelEditor
             var screen = Ui.Div(app, "le-screen");
             screen.pickingMode = PickingMode.Ignore;
 
+            speed = SimLauncher.TakeRerunSpeed() ?? speed; // Run Again keeps the speed the last run was played at
             BuildControls(Ui.Div(screen, "le-float le-run-bar"));
             BuildStats(Ui.Div(screen, "le-float le-run-bar le-run-bar--stats"));
             app.Add(overlay);
@@ -513,6 +514,9 @@ namespace RobotVacuum.LevelEditor
         /// Plays the run at the chosen speed through the time scale. <see cref="SimulationSpeed"/> also lets
         /// Unity take more physics steps per frame, otherwise its per-frame cap would hold the run near 20×.
         /// </summary>
+        /// <summary>The chosen playback speed (simulated seconds per real second).</summary>
+        public float Speed => speed;
+
         void ApplySpeed()
         {
             if (paused) Time.timeScale = 0f;

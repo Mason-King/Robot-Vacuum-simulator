@@ -215,6 +215,110 @@ namespace RobotVacuum.LevelEditor
             return true;
         }
 
+        /// <summary>
+        /// Replaces the configuration with the one a finished run used, its seed fixed, as one undoable step
+        /// (Analysis > Open in Configuration screen). The base is the run folder's configuration.json; the settings
+        /// the run started with (config.json, or the run's summary for older runs) are laid over it, since the
+        /// simulator's bar may have changed some of them during the run. Returns false when nothing was found.
+        /// </summary>
+        public static bool LoadRun(RunReport run)
+        {
+            if (run == null) return false;
+            string folder = run.dataFolder;
+            bool hasFolder = !string.IsNullOrEmpty(folder) && System.IO.Directory.Exists(folder);
+
+            Data next = null;
+            if (hasFolder)
+            {
+                string configurationPath = System.IO.Path.Combine(folder, "configuration.json");
+                try
+                {
+                    if (System.IO.File.Exists(configurationPath))
+                        next = Data.Parse(System.IO.File.ReadAllText(configurationPath));
+                }
+                catch (System.Exception exception)
+                {
+                    Debug.LogWarning($"SimConfig: could not read '{configurationPath}': {exception.Message}");
+                }
+            }
+            next ??= Data.Parse(Current.ToJson());
+
+            RunSettings started = null;
+            if (hasFolder)
+            {
+                string configPath = System.IO.Path.Combine(folder, RunArtifacts.ConfigFileName);
+                try
+                {
+                    if (System.IO.File.Exists(configPath)) started = RunConfig.ReadFrom(configPath)?.settings;
+                }
+                catch (System.Exception exception)
+                {
+                    Debug.LogWarning($"SimConfig: could not read '{configPath}': {exception.Message}");
+                }
+            }
+
+            if (started != null) ApplyStartedSettings(next, started);
+            else ApplyReport(next, run);
+
+            next.seed = run.seed;
+            next.randomSeed = false;
+            next.vacuum.useFeet = Current.vacuum.useFeet; // a display choice, not part of the run
+            Replace(next, "Load a run's configuration");
+            CommitVersion($"From the run on {run.levelName}, seed {run.seed}");
+            return true;
+        }
+
+        /// <summary>The settings a run started with (config.json), over the saved configuration.</summary>
+        static void ApplyStartedSettings(Data data, RunSettings started)
+        {
+            var settings = data.runSettings;
+            if (AlgorithmCatalog.Find(started.algorithmId) != null) settings.algorithmId = started.algorithmId;
+            settings.heatmapMode = started.heatmapMode;
+            settings.slam = started.slam;
+            settings.slamLoopClosure = started.slamLoopClosure;
+            settings.slamCorrectionQuality = started.slamCorrectionQuality;
+            settings.noiseScale = started.noiseScale;
+            settings.lidarEnabled = started.lidarEnabled;
+            settings.lidarHalfAngleDegrees = started.lidarHalfAngleDegrees;
+            settings.lidarRayCount = started.lidarRayCount;
+            settings.floorSensorEnabled = started.floorSensorEnabled;
+            settings.showBeliefOverlay = started.showBeliefOverlay;
+            settings.logAlgorithmDecisions = started.logAlgorithmDecisions;
+
+            if (started.driveSpeed > 0f) data.vacuum.driveSpeed = started.driveSpeed;
+            if (started.reverseSpeed > 0f) data.vacuum.reverseSpeed = started.reverseSpeed;
+            if (started.turnSpeed > 0f) data.vacuum.turnSpeed = started.turnSpeed;
+            if (started.batteryCapacity > 0f) data.vacuum.batteryCapacity = started.batteryCapacity;
+            data.vacuum.shape = started.shape;
+            if (started.cellSizeMeters > 0f) data.cellSize = Mathf.Clamp(started.cellSizeMeters, MinCellSize, MaxCellSize);
+
+            // A run limit below the program's cap was the configuration's own; at the cap there was none.
+            bool limited = started.maxSimulatedSeconds > 0f && started.maxSimulatedSeconds < MaxRunLimitSeconds;
+            data.runLimitEnabled = limited;
+            if (limited) data.runLimitSeconds = Mathf.Clamp(started.maxSimulatedSeconds, 1f, MaxRunLimitSeconds);
+        }
+
+        /// <summary>For a run without config.json: what its summary recorded.</summary>
+        static void ApplyReport(Data data, RunReport run)
+        {
+            var settings = data.runSettings;
+            if (AlgorithmCatalog.Find(run.algorithmId) != null) settings.algorithmId = run.algorithmId;
+            settings.slam = run.slam;
+            settings.lidarEnabled = run.lidarEnabled;
+            if (run.lidarHalfAngleDegrees > 0f) settings.lidarHalfAngleDegrees = run.lidarHalfAngleDegrees;
+            if (run.lidarRayCount > 0) settings.lidarRayCount = run.lidarRayCount;
+            settings.floorSensorEnabled = run.floorSensorEnabled;
+            if (run.vacuum != null && run.vacuum.driveSpeed > 0f)
+            {
+                data.vacuum.driveSpeed = run.vacuum.driveSpeed;
+                data.vacuum.reverseSpeed = run.vacuum.reverseSpeed;
+                data.vacuum.turnSpeed = run.vacuum.turnSpeed;
+                data.vacuum.batteryCapacity = run.vacuum.batteryCapacity;
+                data.vacuum.shape = run.vacuum.shape;
+            }
+            if (run.cellSize > 0f) data.cellSize = Mathf.Clamp(run.cellSize, MinCellSize, MaxCellSize);
+        }
+
         /// <summary>A one-line description for summaries, e.g. "Random · 0.65 m/s · 300 units".</summary>
         public static string Summary =>
             $"{AlgorithmCatalog.NameOf(RunSettings.algorithmId)} · {Vacuum.FormatSpeed(Vacuum.driveSpeed)} · {VacuumSettings.FormatCapacity(Vacuum.batteryCapacity)}";

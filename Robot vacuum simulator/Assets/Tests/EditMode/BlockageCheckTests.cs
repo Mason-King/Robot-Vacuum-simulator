@@ -299,6 +299,57 @@ namespace RobotVacuum.Tests
             Assert.IsNull(check.HeldFloorReachable(analysis, RobotAt));
         }
 
+        // ---- Forgetting watched cells nothing has changed (section 10) ------------------------------------------------
+
+        /// <summary>The cat sat down in the doorway at 45 s; the check at 60 s found the other room cut off.</summary>
+        void CatInDoorwayCheckedAt60()
+        {
+            SampleEvery10s(0f, 40f);
+            writer.Clock = 45f;
+            BlockDoorway();
+            SampleAt(50f);
+            Assert.IsTrue(BoxedIn(60f, -1f, out _), check.LastLine);
+        }
+
+        [Test]
+        public void ForgetWatched_OpensAStaleBlock()
+        {
+            // The cat left where the lidar could not see it go: the map still shows it.
+            CatInDoorwayCheckedAt60();
+            Assert.AreEqual(false, check.HeldFloorReachable(analysis, RobotAt));
+
+            Assert.Greater(check.ForgetWatched(writer), 0);
+            Assert.AreEqual(true, check.HeldFloorReachable(analysis, RobotAt), "with the stale cells forgotten, the room can be reached");
+            Assert.AreEqual(0, check.ForgetWatched(writer), "nothing left to forget");
+        }
+
+        [Test]
+        public void ForgetWatched_LeavesPermanentCells()
+        {
+            CatInDoorwayCheckedAt60();
+            Assert.Greater(check.Watched.Count, 0);
+            var (row, col) = check.Watched[0];
+            writer.MarkPermanent(row, col); // a preloaded wall is never written back
+            int blocked = 0;
+            foreach (var (r, c) in check.Watched) if (view.IsBlocked(r, c)) blocked++;
+
+            Assert.AreEqual(blocked - 1, check.ForgetWatched(writer));
+            Assert.IsTrue(view.IsBlocked(row, col), "the permanent cell stays blocked");
+        }
+
+        [Test]
+        public void ForgetWatched_CatStillThere_IsBlockedAgainByTheNextScan()
+        {
+            CatInDoorwayCheckedAt60();
+
+            check.ForgetWatched(writer);
+            writer.Clock = 90.1f;
+            BlockDoorway(); // the next lidar scan hits the cat again
+            Assert.AreEqual(false, check.HeldFloorReachable(analysis, RobotAt), "still sealed: the hold goes on");
+            Assert.IsTrue(view.TryWorldToCell(Vector2.zero, out var door));
+            Assert.IsFalse(view.Flickers(door.row, door.col), "one forget and one re-block is not flicker");
+        }
+
         // ---- 4. Watched cells ---------------------------------------------------------------------------------------
 
         [Test]

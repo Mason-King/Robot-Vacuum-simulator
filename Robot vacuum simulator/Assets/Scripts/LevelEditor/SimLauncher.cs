@@ -26,6 +26,12 @@ namespace RobotVacuum.LevelEditor
         static StartPage startPage;
         static string focusedRunId;
         static BatchSpec pendingBatch;
+        // The last single run asked for (Simulate), kept so Run Again can build it exactly as the first time.
+        static LevelSnapshot lastSnapshot;
+        static FloorPalette lastPalette;
+        static int? pendingSeed;
+        static float? rerunSpeed;
+        static bool rerunPending;
 
         /// <summary>Where the running simulation was started from.</summary>
         public static SimOrigin Origin { get; private set; }
@@ -85,7 +91,7 @@ namespace RobotVacuum.LevelEditor
         /// <paramref name="filePath"/> is reopened when the player returns to the editor.
         /// </summary>
         public static bool Simulate(LevelSnapshot snapshot, FloorPalette palette, string filePath,
-            SimOrigin origin = SimOrigin.Editor)
+            SimOrigin origin = SimOrigin.Editor, int? seed = null)
         {
             if (snapshot == null || !CanLoad(SimScenePath)) return false;
 
@@ -108,11 +114,64 @@ namespace RobotVacuum.LevelEditor
             LevelHandoff.Send(level);
             SimulatedPath = filePath;
             Origin = origin;
+            lastSnapshot = snapshot;
+            lastPalette = palette;
+            pendingSeed = seed; // a seed chosen for this run (Analysis "Run again"), or the configuration's choice
+            rerunSpeed = null;
+            rerunPending = false;
 
             SceneManager.sceneLoaded -= OnSceneLoaded;
             SceneManager.sceneLoaded += OnSceneLoaded;
             SceneManager.LoadScene(SimScenePath);
             return true;
+        }
+
+        /// <summary>
+        /// Run Again: the floor plan of the last <see cref="Simulate"/> again, built the same way and started from a
+        /// fresh load of the simulation scene, as the first time. Restarting inside the loaded scene left the physics
+        /// world as the earlier run had left it (where the run's bodies sat in its internal lists), so once the vacuum
+        /// touched a cat the run went its own way: Run Again on one seed did not repeat, while launches from the editor
+        /// did. <paramref name="seed"/>: the seed to use (Run Again repeats the one just used), or null for the
+        /// configuration's choice. The return path and origin stay as they were. False if there is nothing to rerun.
+        /// </summary>
+        public static bool SimulateAgain(int? seed, float? speed = null)
+        {
+            if (lastSnapshot == null || !CanLoad(SimScenePath)) return false;
+
+            var level = BuildLevel(lastSnapshot, lastPalette != null ? lastPalette : FallbackPalette());
+            LevelHandoff.Send(level);
+            pendingSeed = seed;
+            rerunSpeed = speed;
+            rerunPending = true;
+
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            SceneManager.LoadScene(SimScenePath);
+            return true;
+        }
+
+        /// <summary>The playback speed the run before a Run Again was played at, handed out once; null if none.</summary>
+        public static float? TakeRerunSpeed()
+        {
+            var speed = rerunSpeed;
+            rerunSpeed = null;
+            return speed;
+        }
+
+        /// <summary>Whether the run being started is a Run Again (<see cref="SimulateAgain"/>), handed out once.</summary>
+        public static bool TakeRerun()
+        {
+            bool rerun = rerunPending;
+            rerunPending = false;
+            return rerun;
+        }
+
+        /// <summary>The seed a Run Again asked for (see <see cref="SimulateAgain"/>), handed out once; null if none.</summary>
+        public static int? TakePendingSeed()
+        {
+            var seed = pendingSeed;
+            pendingSeed = null;
+            return seed;
         }
 
         /// <summary>

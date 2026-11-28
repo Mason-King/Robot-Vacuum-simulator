@@ -107,6 +107,10 @@ namespace RobotVacuum.Sim
         bool watchPending;
         float lastFullCheck = float.NegativeInfinity;
         float nextFallbackCheck;
+        // A fallback check found the way still closed and forgot the watched cells still blocked (the map is not trusted
+        // where nothing changed): when to check again (negative: not pending), and how many cells were forgotten.
+        float forgetRecheckAt = -1f;
+        int forgottenCells;
         // No way home with the usual clearance: one try along a path planned with less clearance (the belief map's
         // cells make a sitting cat look wider than it is), driven with this planner.
         PathPlanner squeezePlanner;
@@ -332,6 +336,7 @@ namespace RobotVacuum.Sim
             boxedGoingToLook = false;
             finishEpisodeStart = homeEpisodeStart = -1f;
             watchPending = false;
+            forgetRecheckAt = -1f;
             BlockageEvents = 0;
             EndedByBlockage = false;
             BlockageLeftSquareMeters = 0f;
@@ -986,6 +991,7 @@ namespace RobotVacuum.Sim
             watchPending = false;
             lastFullCheck = simTime; // the check that started the hold just ran
             nextFallbackCheck = simTime + ControllerConstants.BoxedInFallbackPollSeconds;
+            forgetRecheckAt = -1f;
         }
 
         /// <summary>
@@ -993,21 +999,42 @@ namespace RobotVacuum.Sim
         /// live map; when one has cleared, the full check runs (at most once per BoxedInCheckSpacingSeconds), and also
         /// every BoxedInFallbackPollSeconds whatever they show. A check that finds the way still closed takes the watched
         /// cells as they are now, so only a new change triggers the next one.
+        ///
+        /// A fallback check that finds the way still closed also stops trusting the map there: the watched cells still
+        /// blocked are forgotten (written back to passable) and the way is checked again BoxedInForgetRecheckSeconds
+        /// later. A blocker still there is back on the map by then (the lidar sees it), and the hold goes on; one that
+        /// left where the sensors could not see it clear no longer holds the robot, which drives to find out (and holds
+        /// again with the episode's time left if it meets it). claude/Boxed_In_Improvements_Design.md, section 10.
         /// </summary>
         bool HoldCanEnd()
         {
             if (!watchPending && blockage.WatchedCellCleared()) watchPending = true;
             bool triggered = watchPending && simTime >= lastFullCheck + ControllerConstants.BoxedInCheckSpacingSeconds;
             bool fallback = simTime >= nextFallbackCheck;
-            if (!triggered && !fallback) return false;
+            bool recheck = forgetRecheckAt >= 0f && simTime >= forgetRecheckAt;
+            if (!triggered && !fallback && !recheck) return false;
 
             watchPending = false;
             lastFullCheck = simTime;
             if (fallback) nextFallbackCheck = simTime + ControllerConstants.BoxedInFallbackPollSeconds;
+            if (recheck) forgetRecheckAt = -1f;
             if (WayOpen())
             {
-                Debug.Log($"The way is open again at {simTime:F0} s: ending the hold after {simTime - holdStarted:F0} s.", this);
+                Debug.Log(recheck
+                    ? $"The way is open at {simTime:F0} s with {forgottenCells} unconfirmed blocked cells taken as clear: ending the hold after {simTime - holdStarted:F0} s to go and look."
+                    : $"The way is open again at {simTime:F0} s: ending the hold after {simTime - holdStarted:F0} s.", this);
                 return true;
+            }
+            if (fallback && !recheck)
+            {
+                int forgotten = blockage.ForgetWatched(writer);
+                if (forgotten > 0)
+                {
+                    forgottenCells = forgotten;
+                    forgetRecheckAt = simTime + ControllerConstants.BoxedInForgetRecheckSeconds;
+                    Debug.Log($"[Blockage check {simTime:F0} s] the way is still closed at the {ControllerConstants.BoxedInFallbackPollSeconds:F0} s check: " +
+                              $"{forgotten} watched cells still blocked are taken as clear; checking again in {ControllerConstants.BoxedInForgetRecheckSeconds:F0} s.", this);
+                }
             }
             blockage.RefreshWatched();
             return false;
@@ -1206,6 +1233,7 @@ namespace RobotVacuum.Sim
             boxedGoingToLook = false;
             finishEpisodeStart = homeEpisodeStart = -1f;
             watchPending = false;
+            forgetRecheckAt = -1f;
             EndedByBlockage = false;
             BlockageLeftSquareMeters = 0f;
             BlockageReason = null;

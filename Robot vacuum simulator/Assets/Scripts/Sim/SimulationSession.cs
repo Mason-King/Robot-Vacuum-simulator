@@ -224,6 +224,12 @@ namespace RobotVacuum.Sim
         /// </summary>
         public bool Restart(out string error) => Restart(false, out error);
 
+        /// <summary>
+        /// Ends and saves the run as left by Run Again, for a rerun that is built elsewhere (a fresh scene load, see
+        /// SimLauncher.SimulateAgain). Close the session afterwards.
+        /// </summary>
+        public void EndForRunAgain() => EndIfNotEnded(RunStopEvent_RunAgain);
+
         public bool Restart(bool sameSeed, out string error)
         {
             if (State == Phase.Closed)

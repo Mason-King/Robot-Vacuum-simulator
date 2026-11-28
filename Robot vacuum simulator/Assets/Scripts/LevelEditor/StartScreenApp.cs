@@ -114,6 +114,11 @@ namespace RobotVacuum.LevelEditor
                     view.SimulateRequested += () => Show(StartPage.Simulate);
                     view.EditRequested += path => SimLauncher.OpenLevelEditor(path);
                     view.RerunRequested += Rerun;
+                    view.ConfigureRunRequested += report =>
+                    {
+                        if (SimConfig.LoadRun(report)) Show(StartPage.Configuration);
+                        else overlay.Toast("That run's settings couldn't be read.");
+                    };
                     return view;
                 }
 
@@ -231,7 +236,8 @@ namespace RobotVacuum.LevelEditor
         /// <summary>How long a "can't run this" message stays up: it is long, and the user has to act on it.</summary>
         const long RefusalToastMs = 7600;
 
-        void Run(LevelSnapshot level, string path)
+        /// <param name="seed">The seed to use instead of the configuration's choice (Analysis "Run again"), or null.</param>
+        void Run(LevelSnapshot level, string path, int? seed = null)
         {
             if (level == null || level.ValidRoomCount == 0)
             {
@@ -252,7 +258,7 @@ namespace RobotVacuum.LevelEditor
             RunChecks.ConfirmThen(overlay, RunChecks.Problems(level), () =>
             {
                 // Only a serialized palette asset outlives this scene; the launcher supplies its own otherwise.
-                if (!SimLauncher.Simulate(level, palette, path, SimOrigin.StartScreen))
+                if (!SimLauncher.Simulate(level, palette, path, SimOrigin.StartScreen, seed))
                     overlay.Toast("The simulator scene isn't in the build's scene list.");
             }, "Fix in editor", () => SimLauncher.OpenLevelEditor(path));
         }
@@ -475,14 +481,14 @@ namespace RobotVacuum.LevelEditor
             }, "Fix in editor", () => SimLauncher.OpenLevelEditor(path));
         }
 
-        void Rerun(RunReport report)
+        void Rerun(RunReport report, int seed)
         {
             LevelSnapshot level = null;
             try { level = LevelLibrary.Read(report.levelPath); }
             catch (Exception exception) { Debug.LogWarning($"Start screen: could not read '{report.levelPath}': {exception.Message}"); }
 
             if (level == null) overlay.Toast("That floor plan no longer exists.");
-            else Run(level, report.levelPath);
+            else Run(level, report.levelPath, seed);
         }
 
         void HookKeyboard(IPanel panel)

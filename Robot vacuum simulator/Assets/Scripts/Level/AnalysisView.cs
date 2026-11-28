@@ -35,13 +35,56 @@ namespace RobotVacuum.LevelEditor
         ComparativeReport cachedReport;
         string cachedReportKey;
 
+        // The seed "Run again" uses, chosen beside the button; kept while the screen is open.
+        enum RerunSeed { Reuse, Random, New }
+        static readonly List<string> RerunSeedChoices = new List<string> { "Reuse current seed", "Use random seed", "Use new seed" };
+        RerunSeed rerunSeed = RerunSeed.Reuse;
+        int rerunNewSeed = 1;
+
         public event Action BackRequested;
         public event Action SimulateRequested;
 
-        /// <summary>Run this floor plan again with the current configuration.</summary>
-        public event Action<RunReport> RerunRequested;
+        /// <summary>Run this floor plan again with the current configuration and this seed (chosen beside the button).</summary>
+        public event Action<RunReport, int> RerunRequested;
 
         public event Action<string> EditRequested;
+
+        /// <summary>Open the Configuration screen with this run's settings and seed loaded.</summary>
+        public event Action<RunReport> ConfigureRunRequested;
+
+        /// <summary>
+        /// The seed choice beside "Run again": reuse this run's seed (the default, so the run repeats), draw a random
+        /// one, or type a new one in the box, which is only editable for that choice.
+        /// </summary>
+        void BuildRerunSeed(VisualElement header, RunReport run)
+        {
+            var row = Ui.Div(header, "le-analysis-rerun");
+            var mode = new DropdownField(RerunSeedChoices, (int)rerunSeed);
+            mode.AddToClassList("le-analysis-rerun__mode");
+            row.Add(mode);
+            Ui.Tooltip(mode, $"Reuse current seed: {run.seed}, so the run repeats. Use random seed: a fresh one, drawn when you press Run again. Use new seed: the one in the box.");
+
+            var seed = Ui.TextInput(row, rerunNewSeed.ToString(System.Globalization.CultureInfo.InvariantCulture), text =>
+            {
+                if (int.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int value))
+                    rerunNewSeed = value;
+            }, "le-analysis-rerun__seed");
+            seed.SetEnabled(rerunSeed == RerunSeed.New);
+            Ui.Tooltip(seed, "The seed for \"Use new seed\"");
+
+            mode.RegisterValueChangedCallback(_ =>
+            {
+                if (mode.index >= 0) rerunSeed = (RerunSeed)mode.index;
+                seed.SetEnabled(rerunSeed == RerunSeed.New);
+            });
+        }
+
+        int RerunSeedFor(RunReport run) => rerunSeed switch
+        {
+            RerunSeed.Random => Guid.NewGuid().GetHashCode() & int.MaxValue, // as RunSettings draws a fresh seed
+            RerunSeed.New => rerunNewSeed,
+            _ => run.seed,
+        };
 
         public AnalysisView(OverlayLayer overlay, FloorPalette palette, string focusedId)
         {
@@ -631,11 +674,15 @@ namespace RobotVacuum.LevelEditor
             bool levelExists = !string.IsNullOrEmpty(run.levelPath) && File.Exists(run.levelPath);
             if (levelExists)
             {
-                var again = Ui.Button(header, "Run again", IconKind.Play, () => RerunRequested?.Invoke(run), "le-btn--ghost");
-                Ui.Tooltip(again, "Run this floor plan with the current configuration");
+                var again = Ui.Button(header, "Run again", IconKind.Play, () => RerunRequested?.Invoke(run, RerunSeedFor(run)), "le-btn--ghost");
+                Ui.Tooltip(again, "Run this floor plan with the current configuration and the seed chosen beside this button");
+                BuildRerunSeed(header, run);
                 Ui.IconButton(header, IconKind.Pen, "Open in level editor", () => EditRequested?.Invoke(run.levelPath),
                     "le-btn--ghost le-btn--small");
             }
+            Ui.IconButton(header, IconKind.Sliders,
+                "Open in Configuration screen: this run's algorithm, vacuum, sensors and seed replace the current configuration (Undo brings it back)",
+                () => ConfigureRunRequested?.Invoke(run), "le-btn--ghost le-btn--small");
             if (!string.IsNullOrEmpty(run.dataFolder) && Directory.Exists(run.dataFolder))
                 Ui.IconButton(header, IconKind.Save, "Open this run's data: telemetry.csv, cell_events.csv, cells_final.csv, parameters.csv, replay.json",
                     () => FloorPlanFiles.Reveal(run.dataFolder), "le-btn--ghost le-btn--small");

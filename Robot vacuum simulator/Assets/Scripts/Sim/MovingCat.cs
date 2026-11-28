@@ -222,7 +222,7 @@ namespace RobotVacuum.Sim
                 }
             }
 
-            Vector2 robot = vacuum != null ? (Vector2)vacuum.transform.position : Vector2.zero;
+            Vector2 robot = vacuum != null ? VacuumPosition() : Vector2.zero;
             float vacuumDistance = vacuum != null ? Vector2.Distance(position, robot) : float.PositiveInfinity;
             float vacuumSpeed = vacuum != null ? vacuum.SpeedMetersPerSecond : 0f;
             Vector2 forward = vacuum != null ? vacuum.Forward : Vector2.up;
@@ -352,6 +352,15 @@ namespace RobotVacuum.Sim
         /// <summary>The body rotation that points the cat's nose (its local +y) along <paramref name="heading"/>.</summary>
         public static float HeadingDegrees(Vector2 heading) => Mathf.Atan2(heading.y, heading.x) * Mathf.Rad2Deg - 90f;
 
+        /// <summary>
+        /// Where the vacuum is in the physics world. Not its transform: the vacuum's body interpolates, so between
+        /// physics steps its transform shows a pose smoothed for drawing, which depends on how many physics steps the
+        /// last frame ran (the frame rate and the speed governor). Read from the transform, the cat reacted to a
+        /// slightly different robot each run, so runs with a cat were not the same on one seed.
+        /// </summary>
+        Vector2 VacuumPosition() =>
+            vacuum.Body != null ? vacuum.Body.position : (Vector2)vacuum.transform.position;
+
         void OnCollisionEnter2D(Collision2D collision)
         {
             if (!Application.isPlaying || collision.contactCount == 0) return;
@@ -359,7 +368,7 @@ namespace RobotVacuum.Sim
             // Bumped by the vacuum: that's a scare.
             if (vacuum != null && collision.rigidbody != null && collision.rigidbody.gameObject == vacuum.gameObject)
             {
-                BeginStartle(body.position, vacuum.transform.position, vacuum.Forward);
+                BeginStartle(body.position, VacuumPosition(), vacuum.Forward);
                 return;
             }
 

@@ -518,6 +518,11 @@ namespace RobotVacuum.Sim.Control
                         queue.Clear();
                         return view.CellCenter(row, col);
                     }
+                    // Only through floor and places reached earlier (the blocker), as FindHomeLookout: a wall stops the
+                    // search, so the lookout is on the robot's side of the blocker, where its sensors can see it, never
+                    // across a wall from the cut-off floor.
+                    bool free = analysis.IsExplored(row, col) && !analysis.IsBlocked(row, col);
+                    if (!free && !EverReached(row, col)) continue;
                     queue.Enqueue(nr * cols + nc);
                 }
             }
@@ -555,6 +560,27 @@ namespace RobotVacuum.Sim.Control
         {
             for (int i = 0; i < watched.Count; i++)
                 watchedBlocked[i] = view.IsBlocked(watched[i].row, watched[i].col);
+        }
+
+        /// <summary>
+        /// The hold has seen no change for a while: stop trusting the map there. Every watched cell still blocked on the
+        /// map is written back to passable (its floor's ease), except preloaded walls. If the blocker is really there,
+        /// the lidar blocks those cells again within a scan or two (or the drive bumps it), and the hold goes on; if it
+        /// has gone where the sensors could not see it clear (round a corner, or from a lookout that does not see it),
+        /// the way opens and the robot drives to find out. Flickering cells are never watched, so never forgotten.
+        /// Returns how many cells were forgotten. claude/Boxed_In_Improvements_Design.md, section 10.
+        /// </summary>
+        public int ForgetWatched(InternalModelWriter writer)
+        {
+            int forgotten = 0;
+            for (int i = 0; i < watched.Count; i++)
+            {
+                var (row, col) = watched[i];
+                if (!view.IsBlocked(row, col) || writer.IsPermanent(row, col)) continue;
+                writer.SetTraversability(row, col, Mathf.Max(NormalPreload.MinFloorEase, writer.EaseAt(row, col)));
+                forgotten++;
+            }
+            return forgotten;
         }
 
         void ClearSeen(int count)

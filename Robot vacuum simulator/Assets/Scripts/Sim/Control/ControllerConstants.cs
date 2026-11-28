@@ -231,6 +231,14 @@ namespace RobotVacuum.Sim.Control
         public const float BoxedInFallbackPollSeconds = 30f;
 
         /// <summary>
+        /// While holding, a fallback check (every BoxedInFallbackPollSeconds) that finds the way still closed stops
+        /// trusting the map: the watched cells still blocked are written back to passable (BlockageCheck.ForgetWatched),
+        /// and the way is checked again this many sim seconds later (a few lidar scans): if the blocker is still there,
+        /// the lidar has blocked them again by then.
+        /// </summary>
+        public const float BoxedInForgetRecheckSeconds = 1f;
+
+        /// <summary>
         /// A blocked cell counts as something that moved in (a cat) only if it was free within this many sim seconds
         /// before the blockage episode began; one blocked for longer is treated as a wall (furniture the map learned
         /// late, such as chair legs the Normal preload marks as floor). Measured from the episode's start, so a hold in

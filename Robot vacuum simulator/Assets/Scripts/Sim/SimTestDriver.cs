@@ -75,6 +75,15 @@ namespace RobotVacuum.Sim
                 fromApp.floorSensorEnabled = settings.floorSensorEnabled;
                 fromApp.logAlgorithmDecisions = settings.logAlgorithmDecisions;
                 fromApp.vacuumPower = settings.vacuumPower;
+                // A seed chosen for this run: Run Again's (exactly the seed just used), or the one picked beside the
+                // Analysis screen's "Run again".
+                int? chosenSeed = SimLauncher.TakePendingSeed();
+                if (chosenSeed.HasValue)
+                {
+                    fromApp.randomSeed = false;
+                    fromApp.seed = chosenSeed.Value;
+                }
+                if (SimLauncher.TakeRerun()) source += " again";
                 settings = fromApp;
             }
 
@@ -193,6 +202,20 @@ namespace RobotVacuum.Sim
         void RunAgain(bool sameSeed)
         {
             if (session == null) return;
+
+            // A run from the app: save this one, then build the next from a fresh load of this scene, exactly as the
+            // first (SimLauncher.SimulateAgain says why). Played straight from this scene: restart in place.
+            if (handedLevel != null)
+            {
+                int? seed = sameSeed && session.Settings != null ? session.Settings.seed : (int?)null;
+                float? speed = hud != null ? hud.Speed : (float?)null;
+                session.EndForRunAgain();
+                CloseRun();
+                if (SimLauncher.SimulateAgain(seed, speed)) return;
+                Debug.LogError("SimTestDriver: can't run again: the floor plan to rerun is gone. Start it from the editor.", this);
+                SimLauncher.ReturnFromSimulation();
+                return;
+            }
 
             if (!session.Restart(sameSeed, out string error))
             {
