@@ -592,6 +592,7 @@ namespace RobotVacuum.Tests
         public void PlaceDoorway_OnASharedWall_LinksBothRooms()
         {
             session = Open(SampleLevels.PopulateApartment);
+            session.Level.Doorways.RemoveAt(0); // the sample's living room ↔ kitchen doorway: one per wall
 
             Assert.IsTrue(session.PlaceDoorway(new Vector2(1.65f, -1f)));
 
@@ -614,6 +615,7 @@ namespace RobotVacuum.Tests
         public void MoveDoorwayLive_RelinksToTheNewWall_WithoutRecordingHistory()
         {
             session = Open(SampleLevels.PopulateApartment);
+            session.Level.Doorways.RemoveAt(2); // the sample's hall ↔ bedroom doorway: one per wall
 
             session.MoveDoorwayLive(0, new Vector2(-2.2f, -2.6f)); // hall ↔ bedroom wall
 
