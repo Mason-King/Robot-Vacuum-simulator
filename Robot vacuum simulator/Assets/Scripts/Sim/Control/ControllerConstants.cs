@@ -205,10 +205,11 @@ namespace RobotVacuum.Sim.Control
         public const float BoxedInLookoutNearMeters = 0.3f;
 
         /// <summary>
-        /// After BoxedInTries short waits fail: one last hold, sim seconds, with a warning, before giving up (the
-        /// algorithm finished: return to the dock; on the way home: end the run where the robot is).
+        /// One blockage episode (at the finish, or on the way home) holds the robot still for at most this long in all,
+        /// sim seconds, watching the blocker, before giving up (the algorithm finished: return to the dock; on the way
+        /// home: end the run where the robot is). Time held carries over when the robot is blocked again after resuming.
         /// </summary>
-        public const float BoxedInFinalHoldSeconds = 180f;
+        public const float BoxedInMaxHoldSeconds = 180f;
 
         /// <summary>
         /// No way home with the usual clearance (radius + ClearanceMarginMeters): one try along a path planned with this
@@ -218,9 +219,46 @@ namespace RobotVacuum.Sim.Control
         public const float BoxedInSqueezeClearanceFraction = 0.85f;
 
         /// <summary>
-        /// During that last hold, how often, sim seconds, the way is checked: the hold ends as soon as it is open.
+        /// While holding, a watched cell (the blocker's footprint) reading clear triggers the full way-open check, but no
+        /// more often than this, sim seconds: the full check updates the map analysis (5–13 ms).
         /// </summary>
-        public const float BoxedInFinalPollSeconds = 5f;
+        public const float BoxedInCheckSpacingSeconds = 5f;
+
+        /// <summary>
+        /// While holding, the full way-open check also runs this often, sim seconds, whatever the watched cells show (a
+        /// way can open with none of them changing, such as unmapped floor being mapped).
+        /// </summary>
+        public const float BoxedInFallbackPollSeconds = 30f;
+
+        /// <summary>
+        /// A blocked cell counts as something that moved in (a cat) only if it was free within this many sim seconds
+        /// before the blockage episode began; one blocked for longer is treated as a wall (furniture the map learned
+        /// late, such as chair legs the Normal preload marks as floor). Measured from the episode's start, so a hold in
+        /// progress doesn't age the blocker out.
+        /// </summary>
+        public const float BoxedInRecentBlockSeconds = 120f;
+
+        /// <summary>At most this many cells are watched while holding (read every step).</summary>
+        public const int BoxedInWatchedCellsMax = 2000;
+
+        /// <summary>
+        /// When flickering cells (thin static obstacles, such as chair legs) are among the blocked ones, at least this
+        /// many recently blocked cells that don't flicker are needed for a blockage or a cut-off: a leg cell or two that
+        /// hasn't flipped enough times yet to be marked flickering is not a cat (a cat is a dozen cells or more). Without
+        /// flickering cells, one is enough. (From Tommy's commit 0764bad.)
+        /// </summary>
+        public const int BoxedInMovedMinCells = 3;
+
+        // ---- Flicker (InternalModelWriter.Flickers; from Tommy's commit 0764bad) ----
+
+        /// <summary>Flips of a cell between blocked and clear at most this far apart, sim seconds, count as one streak.</summary>
+        public const float FlickerGapSeconds = 1f;
+
+        /// <summary>A streak of this many flips marks the cell as flickering: something thin the lidar half sees, not the cat.</summary>
+        public const int FlickerFlips = 4;
+
+        /// <summary>A cell counts as flickering for this long, sim seconds, after its last streak (static furniture stays put).</summary>
+        public const float FlickerMemorySeconds = 600f;
 
         /// <summary>
         /// Blockage: when nothing measurable is cut off, the algorithm finishing within this many sim seconds of a goal
@@ -273,40 +311,9 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public const int BoxedInDirtyInWayCells = 20;
 
-        /// <summary>How often, sim seconds, the floor the robot can reach is recorded (the cut-off check's reference).</summary>
+        /// <summary>How often, sim seconds, the floor the robot can reach, and the cells free now, are recorded (the cut-off and recently-blocked checks' reference).</summary>
         public const float BoxedInSampleSeconds = 10f;
 
-        /// <summary>The first wait, sim seconds, before trying again when boxed in; each further wait is twice the last.</summary>
-        public const float BoxedInWaitSeconds = 5f;
-
-        /// <summary>Tries while boxed in before accepting it (a robot truly shut in is still reported).</summary>
-        public const int BoxedInTries = 3;
-
-        /// <summary>
-        /// The way home failed and the robot isn't boxed in: wait for it to clear only if at least this many cells the
-        /// robot reached earlier are blocked now (and not flickering) within BoxedInBlockageRadiusMeters of the dock or
-        /// of the reachable floor next to the blockage: something moved in. Otherwise nothing there will move (a closed
-        /// door, a wall the level lacks a gap in) and the run parks as Dock Unreachable at once instead of ~215 s later.
-        /// </summary>
-        public const int BoxedInHomeMovedCells = 3;
-
-        /// <summary>
-        /// When flickering cells are among the blocked ones near where the algorithm stopped, the "in the way" rules
-        /// also need at least this many moved cells that don't flicker: the in-way cells may all be the clearance around
-        /// a chair's legs.
-        /// </summary>
-        public const int BoxedInMovedMinCells = 3;
-
-        // ---- Flicker (InternalModelWriter.Flickers) ----
-
-        /// <summary>Flips of one cell between blocked and clear at most this far apart, sim seconds, count as one streak.</summary>
-        public const float FlickerGapSeconds = 1f;
-
-        /// <summary>A streak of this many flips marks the cell as flickering: something thin the lidar half sees, not the cat.</summary>
-        public const int FlickerFlips = 4;
-
-        /// <summary>A cell counts as flickering for this long, sim seconds, after its last streak (static furniture stays put).</summary>
-        public const float FlickerMemorySeconds = 600f;
 
         /// <summary>An UntilClean hold ends after this many times the time its dirtiest cell needed when the hold began.</summary>
         public const float HoldCapFactor = 1.5f;

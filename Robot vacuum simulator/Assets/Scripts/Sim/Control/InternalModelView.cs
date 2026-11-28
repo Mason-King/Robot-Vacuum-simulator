@@ -92,6 +92,12 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public bool IsBlocked(int row, int col) => IsWall(grid.GetCell(row, col).traversabilityBelief, row, col);
 
+        /// <summary>
+        /// Controller only (the boxed-in check): the cell keeps flipping between blocked and clear, so it is a thin
+        /// static obstacle the lidar half sees (chair legs), not something that moved in. See <see cref="InternalModelWriter.Flickers"/>.
+        /// </summary>
+        public bool Flickers(int row, int col) => writer.Flickers(row, col);
+
         bool IsWall(float traversability, int row, int col) =>
             traversability <= 0f ||
             (traversability < 1f && traversability < ControllerConstants.WallEaseFraction * writer.EaseAt(row, col));

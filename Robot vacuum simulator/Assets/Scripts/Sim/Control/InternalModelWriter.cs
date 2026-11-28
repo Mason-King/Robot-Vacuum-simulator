@@ -78,11 +78,11 @@ namespace RobotVacuum.Sim.Control
 
         // ---- Flicker ---------------------------------------------------------
         //
-        // A thin obstacle the lidar only half sees (a chair leg between beams) flips its cells between blocked and
-        // clear many times while in view. To the boxed-in check those cells look like "floor reached earlier that is
-        // blocked now", which is how it recognizes something that moved in, such as the cat (a static chair once cost
-        // a run 220 s of waiting). So each flip is noted here: only on the flip itself (already the rare branch of a
-        // write), sparsely, and nothing is ever changed on the map.
+        // (From Tommy's commit 0764bad on AI-Analysis, 2026-11-27.) A thin obstacle the lidar only half sees (a chair
+        // leg between beams) flips its cells between blocked and clear many times while in view. To the boxed-in check
+        // (BlockageCheck) those cells look like "floor reached earlier that is blocked now", which is how it recognizes
+        // something that moved in, such as the cat. So each flip is noted here: only on the flip itself (already the
+        // rare branch of a write), sparsely, and nothing is ever changed on the map.
 
         struct FlipRecord
         {
