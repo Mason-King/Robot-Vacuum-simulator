@@ -107,7 +107,6 @@ namespace RobotVacuum.Sim
         bool boxedFinalHolding;  // in the long last hold now: checked every BoxedInFinalPollSeconds, left as soon as the way opens
         float nextBoxedPoll;
         float boxedLookWait;    // the wait to start on arrival
-        readonly List<(int row, int col)> cutCells = new List<(int row, int col)>(); // from the last BoxedIn: what to look at
         // The algorithm's last goal that ended Blocked or Unreachable, and when; and, once a blockage next to it has been
         // found, that goal kept as the place to watch until the algorithm finds work again.
         Vector2 lastFailedGoal;
@@ -115,9 +114,9 @@ namespace RobotVacuum.Sim
         Vector2? blockageFocus;
         bool lastBoxedByBlockage; // the last BoxedIn found a blockage (not cut-off floor)
         int lastUnmappedEdge;     // the last BoxedIn: unmapped cells bordering the cut-off side
-        // Every floor cell the robot has been able to reach this run (sampled), over a rectangle of the map.
-        bool[] everReached = System.Array.Empty<bool>();
-        int everRow0, everCol0, everRows, everCols;
+        // Every floor cell the robot has been able to reach this run (sampled), and the checks made against it.
+        readonly BlockageMap blockage = new BlockageMap();
+        string noWaitReason; // the way home failed and WaitIfBoxedIn chose not to wait: why (for the Dock Unreachable message)
         float nextReachSample;
         Vector2 dockPosition;
         float nextBatteryCheckTime;
@@ -351,8 +350,8 @@ namespace RobotVacuum.Sim
             lastFailedTime = float.NegativeInfinity;
             blockageFocus = null;
             lastBoxedByBlockage = false;
-            everReached = System.Array.Empty<bool>();
-            everRow0 = everCol0 = everRows = everCols = 0;
+            blockage.Clear();
+            noWaitReason = null;
             nextReachSample = 0f;
             Outcome = RunOutcome.None;
             OutcomeMessage = null;
@@ -518,6 +517,7 @@ namespace RobotVacuum.Sim
 
             float dt = Time.fixedDeltaTime;
             simTime += dt;
+            writer.Clock = simTime; // for telling flickering cells (thin furniture) from something that moved in
             long fullStepStarted = System.Diagnostics.Stopwatch.GetTimestamp(); // for msLongestFullStep
 
             if (robot.AlgorithmId != activeAlgorithmId) SwitchAlgorithm(robot.AlgorithmId);
@@ -885,7 +885,8 @@ namespace RobotVacuum.Sim
                     var at = believedPose.position;
                     Park(RunOutcome.DockUnreachable,
                         $"The dock could not be reached ({(homing == Homing.Finished ? "job finished" : "battery low")}): " +
-                        $"{(driver.Status == GoalStatus.Unreachable ? "no path" : "blocked")} from ({at.x:F2}, {at.y:F2}) to ({dockPosition.x:F2}, {dockPosition.y:F2}).");
+                        $"{(driver.Status == GoalStatus.Unreachable ? "no path" : "blocked")} from ({at.x:F2}, {at.y:F2}) to ({dockPosition.x:F2}, {dockPosition.y:F2})" +
+                        (noWaitReason != null ? $"; {noWaitReason}." : "."));
                     break;
             }
         }
@@ -933,7 +934,12 @@ namespace RobotVacuum.Sim
             // On the way home any failure gets the wait: the cat may be sitting on the dock (or the way to it) without
             // boxing the robot in at all. When the algorithm finishes, only a real boxing-in does.
             bool boxed = BoxedIn(out int cutOff);
+            noWaitReason = null;
             if (!boxed && !homeward) return false;
+            // On the way home and not boxed in: wait only if something that moved in is in the way (the cat on the dock
+            // or in a doorway). A way home that was never open (a closed door, a level without a gap) won't open by
+            // waiting, so park now rather than after the waits and the hold. Judged once, at the first failure.
+            if (homeward && !boxed && tries == 0 && !SomethingMovedOnWayHome(out noWaitReason)) return false;
             if (final && (homeward ? boxedHomeFinalHeld : boxedFinalHeld))
             {
                 // All used and still blocked: give up (go home / park) and say so in the results.
@@ -1032,82 +1038,15 @@ namespace RobotVacuum.Sim
             boxedWaitUntil = simTime + boxedLookWait;
         }
 
-        /// <summary>
-        /// On the way home: the reachable floor nearest the dock along the way. A search spreads out from the dock
-        /// through any mapped free cell or place reached earlier (a path a point could take, through the blockage) to
-        /// the first cell the robot can reach: next to whatever blocks the way. Uses the analysis BoxedIn just updated.
-        /// </summary>
+        /// <summary>On the way home: the reachable floor nearest the dock along the way (see <see cref="BlockageMap.FindHomeLookout"/>).</summary>
         Vector2? FindHomeLookout()
         {
-            var analysis = mapAnalysis ?? boxedAnalysis;
-            if (analysis == null || analysis.IsEmpty || !view.TryWorldToCell(dockPosition, out var dock)) return null;
-            int row0 = analysis.MinRow, col0 = analysis.MinCol, rows = analysis.Rows, cols = analysis.Cols;
-            int dr = dock.row - row0, dc = dock.col - col0;
-            if (dr < 0 || dr >= rows || dc < 0 || dc >= cols) return null;
-            bool EverReached(int row, int col)
-            {
-                int r = row - everRow0, c = col - everCol0;
-                return r >= 0 && r < everRows && c >= 0 && c < everCols && everReached[r * everCols + c];
-            }
-            var seen = new bool[rows * cols];
-            var queue = new Queue<int>();
-            seen[dr * cols + dc] = true;
-            queue.Enqueue(dr * cols + dc);
-            while (queue.Count > 0)
-            {
-                int index = queue.Dequeue();
-                int r = index / cols, c = index % cols;
-                for (int k = 0; k < 4; k++)
-                {
-                    int nr = r + (k == 0 ? 1 : k == 1 ? -1 : 0), nc = c + (k == 2 ? 1 : k == 3 ? -1 : 0);
-                    if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || seen[nr * cols + nc]) continue;
-                    seen[nr * cols + nc] = true;
-                    int row = row0 + nr, col = col0 + nc;
-                    if (analysis.BodyFits(row, col) && !float.IsPositiveInfinity(analysis.ReachDistance(row, col)))
-                        return view.CellCenter(row, col);
-                    bool free = analysis.IsExplored(row, col) && !analysis.IsBlocked(row, col);
-                    if (free || EverReached(row, col)) queue.Enqueue(nr * cols + nc);
-                }
-            }
-            return null;
+            if (!view.TryWorldToCell(dockPosition, out var dock)) return null;
+            return blockage.FindHomeLookout(mapAnalysis ?? boxedAnalysis, view.CellCenter, dock.row, dock.col);
         }
 
-        /// <summary>
-        /// The reachable floor nearest the cut-off floor: a search spreading out from every cut-off cell across the map
-        /// (through the blockage) to the first cell the robot can reach. Only run when the robot is cut off (rarely).
-        /// Uses the analysis BoxedIn just updated.
-        /// </summary>
-        Vector2? FindLookout()
-        {
-            var analysis = mapAnalysis ?? boxedAnalysis;
-            if (analysis == null || analysis.IsEmpty || cutCells.Count == 0) return null;
-            int row0 = analysis.MinRow, col0 = analysis.MinCol, rows = analysis.Rows, cols = analysis.Cols;
-            var seen = new bool[rows * cols];
-            var queue = new Queue<int>();
-            foreach (var (row, col) in cutCells)
-            {
-                int r = row - row0, c = col - col0;
-                if (r < 0 || r >= rows || c < 0 || c >= cols || seen[r * cols + c]) continue;
-                seen[r * cols + c] = true;
-                queue.Enqueue(r * cols + c);
-            }
-            while (queue.Count > 0)
-            {
-                int index = queue.Dequeue();
-                int r = index / cols, c = index % cols;
-                for (int k = 0; k < 4; k++)
-                {
-                    int nr = r + (k == 0 ? 1 : k == 1 ? -1 : 0), nc = c + (k == 2 ? 1 : k == 3 ? -1 : 0);
-                    if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || seen[nr * cols + nc]) continue;
-                    seen[nr * cols + nc] = true;
-                    int row = row0 + nr, col = col0 + nc;
-                    if (analysis.BodyFits(row, col) && !float.IsPositiveInfinity(analysis.ReachDistance(row, col)))
-                        return view.CellCenter(row, col);
-                    queue.Enqueue(nr * cols + nc);
-                }
-            }
-            return null;
-        }
+        /// <summary>The reachable floor nearest the cut-off floor the last BoxedIn found (see <see cref="BlockageMap.FindLookout"/>).</summary>
+        Vector2? FindLookout() => blockage.FindLookout(mapAnalysis ?? boxedAnalysis, view.CellCenter);
 
         void EndBoxedWait()
         {
@@ -1123,14 +1062,6 @@ namespace RobotVacuum.Sim
         }
 
         /// <summary>
-        /// Floor is cut off now: at least BoxedInCutOffCells cells of mapped floor the body fits on can't be reached
-        /// from here, but could be if everywhere the robot has reached this run were still open. That takes in floor
-        /// the robot never got to (the far end of a hallway the cat sits in) as well as floor it did, while floor that
-        /// only walls separate (outside the house, seen through a doorway) never counts: no path of reached cells leads
-        /// to it. Whatever is in the way (the cat) is not itself counted: its cells and the clearance around them
-        /// aren't floor the body fits on. Leaves the cut-off cells in cutCells for FindLookout.
-        /// </summary>
-        /// <summary>
         /// During the long last hold: is the way open again? On the way home, the dock (any cell within the robot's
         /// radius of it) can be reached; otherwise nothing is cut off or blocked any more.
         /// </summary>
@@ -1140,92 +1071,22 @@ namespace RobotVacuum.Sim
             var analysis = mapAnalysis ?? (boxedAnalysis ??= new MapAnalysis(map));
             analysis.Update(believedPose.position.ToApi());
             if (analysis.IsEmpty || !view.TryWorldToCell(dockPosition, out var dock)) return false;
-            int reachCells = Mathf.CeilToInt(robot.Radius / analysis.CellSize);
-            for (int row = dock.row - reachCells; row <= dock.row + reachCells; row++)
-                for (int col = dock.col - reachCells; col <= dock.col + reachCells; col++)
-                    if (analysis.Contains(row, col) && analysis.BodyFits(row, col) &&
-                        !float.IsPositiveInfinity(analysis.ReachDistance(row, col)))
-                        return true;
-            return false;
+            return BlockageMap.DockReachable(analysis, dock.row, dock.col, Mathf.CeilToInt(robot.Radius / analysis.CellSize));
         }
 
+        /// <summary>
+        /// Boxed in: floor still to clean is cut off, or something is sitting in the way near where the algorithm
+        /// stopped (see <see cref="BlockageMap.BoxedIn"/>). Updates the map analysis first.
+        /// </summary>
         bool BoxedIn(out int cutOff, bool log = true)
         {
             var analysis = mapAnalysis ?? (boxedAnalysis ??= new MapAnalysis(map));
             analysis.Update(believedPose.position.ToApi());
             cutOff = 0;
-            cutCells.Clear();
-            if (analysis.IsEmpty || everRows == 0) return false;
-            int row0 = analysis.MinRow, col0 = analysis.MinCol, rows = analysis.Rows, cols = analysis.Cols;
-
-            float dirtyBelow = targetCleanliness * ControllerConstants.BoxedInDirtyFraction;
-            bool Dirty(int row, int col) => analysis.Cleanliness(row, col) < dirtyBelow;
-            bool Reachable(int row, int col) =>
-                analysis.BodyFits(row, col) && !float.IsPositiveInfinity(analysis.ReachDistance(row, col));
-            bool EverReached(int row, int col)
-            {
-                int r = row - everRow0, c = col - everCol0;
-                return r >= 0 && r < everRows && c >= 0 && c < everCols && everReached[r * everCols + c];
-            }
-
-            // Spread out from the floor reachable now, through anywhere reached before (even if blocked now) and any
-            // mapped floor the body fits on. What it finds that can't be reached now is cut off.
-            var seen = new bool[rows * cols];
-            var queue = new Queue<int>();
-            for (int r = 0; r < rows; r++)
-                for (int c = 0; c < cols; c++)
-                    if (Reachable(row0 + r, col0 + c))
-                    {
-                        seen[r * cols + c] = true;
-                        queue.Enqueue(r * cols + c);
-                    }
-            int unmappedEdge = 0;
-            while (queue.Count > 0)
-            {
-                int index = queue.Dequeue();
-                int r = index / cols, c = index % cols;
-                bool cutSide = !Reachable(row0 + r, col0 + c); // reached only through the blockage
-                for (int k = 0; k < 4; k++)
-                {
-                    int nr = r + (k == 0 ? 1 : k == 1 ? -1 : 0), nc = c + (k == 2 ? 1 : k == 3 ? -1 : 0);
-                    if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || seen[nr * cols + nc]) continue;
-                    int row = row0 + nr, col = col0 + nc;
-                    // Unmapped space bordering the cut-off side: what lies past the blockage that the robot never saw
-                    // (a room behind a doorway the cat sits in). Counted, not entered.
-                    if (cutSide && !analysis.IsExplored(row, col))
-                    {
-                        seen[nr * cols + nc] = true;
-                        unmappedEdge++;
-                        cutCells.Add((row0 + r, col0 + c));
-                        continue;
-                    }
-                    bool floor = analysis.IsExplored(row, col) && analysis.BodyFits(row, col);
-                    if (!floor && !EverReached(row, col)) continue;
-                    seen[nr * cols + nc] = true;
-                    queue.Enqueue(nr * cols + nc);
-                    if (floor) // can't be reachable now: every reachable cell was a starting cell
-                    {
-                        cutCells.Add((row, col));
-                        if (Dirty(row, col)) cutOff++; // only floor still to clean counts
-                    }
-                }
-            }
             lastBoxedByBlockage = false;
-            lastUnmappedEdge = unmappedEdge;
-            // Unmapped edge alone is not enough: in SLAM the map's edges are redrawn as the pose is corrected, which leaves
-            // unmapped seams next to floor reached earlier with nothing cut off at all (a false alarm cost a 3-minute
-            // hold). It only adds to floor that is really cut off and still to clean.
-            if (cutOff >= ControllerConstants.BoxedInCutOffCells ||
-                cutOff > 0 && unmappedEdge >= ControllerConstants.BoxedInUnmappedEdgeCells)
-                return true;
 
-            // Nothing measurable cut off (what lies behind may never have been mapped: a cat in a narrow hallway hides
-            // it from the lidar, or it sits on the floor that is left). Look at the blockage itself instead, near the
-            // algorithm's last failed goal if that was just before the finish, else near the robot (it stopped where the
-            // algorithm ran out of floor):
-            //  - in the way: cells reachable earlier that the body doesn't fit on now; those still to clean matter;
-            //  - moved: cells mapped blocked now that the robot could reach earlier (walls and furniture never were):
-            //    something that moves, such as the cat, is sitting there.
+            // Where to look for a blockage: the one found before; else the algorithm's last failed goal if that was
+            // just before the finish; else the robot (it stopped where the algorithm ran out of floor).
             bool fromFailure = false;
             Vector2? focus = blockageFocus;
             if (!focus.HasValue)
@@ -1233,101 +1094,48 @@ namespace RobotVacuum.Sim
                 fromFailure = simTime - lastFailedTime <= ControllerConstants.BoxedInRecentFailSeconds;
                 focus = fromFailure ? lastFailedGoal : believedPose.position;
             }
-            float radius = ControllerConstants.BoxedInBlockageRadiusMeters;
-            float hideRadius = ControllerConstants.BoxedInHiddenRadiusMeters;
-            int inWay = 0, dirtyInWay = 0;
-            var inWayCells = new List<(int row, int col)>();
-            var moved = new List<Vector2>();
-            var unknown = new List<Vector2>();
-            for (int r = 0; r < rows; r++)
-                for (int c = 0; c < cols; c++)
-                {
-                    int row = row0 + r, col = col0 + c;
-                    Vector2 at = view.CellCenter(row, col);
-                    float d2 = (at - focus.Value).sqrMagnitude;
-                    if (d2 > (radius + hideRadius) * (radius + hideRadius)) continue;
-                    if (!analysis.IsExplored(row, col)) { unknown.Add(at); continue; }
-                    if (d2 > radius * radius || !EverReached(row, col) || analysis.BodyFits(row, col)) continue;
-                    inWay++;
-                    if (Dirty(row, col)) dirtyInWay++;
-                    inWayCells.Add((row, col));
-                    if (analysis.IsBlocked(row, col)) moved.Add(at);
-                }
-            float movedSpan = 0f;
-            if (moved.Count > 0)
-            {
-                float minX = float.MaxValue, maxX = float.MinValue, minY = float.MaxValue, maxY = float.MinValue;
-                foreach (var m in moved)
-                {
-                    minX = Mathf.Min(minX, m.x); maxX = Mathf.Max(maxX, m.x);
-                    minY = Mathf.Min(minY, m.y); maxY = Mathf.Max(maxY, m.y);
-                }
-                movedSpan = Mathf.Max(maxX - minX, maxY - minY);
-            }
-            int hidden = 0;
-            foreach (var u in unknown)
-                foreach (var m in moved)
-                    if ((u - m).sqrMagnitude <= hideRadius * hideRadius) { hidden++; break; }
 
-            if (log) Debug.Log($"[Blockage check {simTime:F0} s] near {(blockageFocus.HasValue ? "the blockage" : fromFailure ? "the failed goal" : "the robot")} " +
-                      $"({focus.Value.x:F2}, {focus.Value.y:F2}): cut-off floor {cutOff}, unmapped edge past it {unmappedEdge}, in the way {inWay} ({dirtyInWay} still to clean), moved {moved.Count} (span {movedSpan:F2} m), " +
-                      $"unmapped next to moved {hidden}.", this);
+            bool boxed = blockage.BoxedIn(analysis, view.CellCenter, targetCleanliness * ControllerConstants.BoxedInDirtyFraction,
+                focus.Value, blockageFocus.HasValue || fromFailure, writer.Flickers, out var check);
+            lastUnmappedEdge = check.UnmappedEdge;
+            cutOff = check.CutOff;
+            lastBoxedByBlockage = check.ByBlockage;
 
-            // A blockage: something sitting on floor the robot could reach before that still needs cleaning (the cat at
-            // the end of a hallway, on the floor that is left). A cat napping on floor already cleaned doesn't count.
-            // The moved cells must also be compact, cat-sized: in SLAM a correction of the pose redraws a stretch of
-            // wall a few centimeters over, which also turns floor reached earlier into blocked cells, but in a long
-            // thin line (a false alarm near the end of a run, when the drift is largest, cost a 3-minute hold).
-            bool compact = movedSpan <= ControllerConstants.BoxedInMovedMaxSpanMeters;
-            bool blockage = compact && dirtyInWay >= ControllerConstants.BoxedInDirtyInWayCells
-                            || (blockageFocus.HasValue || fromFailure) && inWay >= ControllerConstants.BoxedInBlockageCells && cutOff > 0
-                            || compact && moved.Count >= ControllerConstants.BoxedInMovedCells && hidden >= ControllerConstants.BoxedInHiddenCells;
-            if (!blockage) return false;
-            blockageFocus = focus;
-            lastBoxedByBlockage = true;
-            cutOff = inWay;
-            cutCells.Clear();
-            cutCells.AddRange(inWayCells);
-            return true;
+            if (log && blockage.HasRecord && !analysis.IsEmpty)
+                Debug.Log($"[Blockage check {simTime:F0} s] near {(blockageFocus.HasValue ? "the blockage" : fromFailure ? "the failed goal" : "the robot")} " +
+                          $"({focus.Value.x:F2}, {focus.Value.y:F2}): cut-off floor {(check.ByBlockage ? 0 : check.CutOff)}, unmapped edge past it {check.UnmappedEdge}, " +
+                          $"in the way {check.InWay} ({check.DirtyInWay} still to clean), moved {check.Moved} (span {check.MovedSpan:F2} m), " +
+                          $"flickering {check.Flickering}, unmapped next to moved {check.Hidden}.", this);
+
+            if (check.ByBlockage) blockageFocus = focus;
+            return boxed;
         }
 
         /// <summary>
-        /// Every BoxedInSampleSeconds: marks the floor reachable in the algorithm's latest map analysis (no update of
-        /// its own: one pass over the cells) as reached this run.
+        /// The way home failed and the robot isn't boxed in: has something moved into the way (cells the robot reached
+        /// earlier, blocked now and not flickering, near the dock or the blockage)? With no record yet, assume so.
         /// </summary>
+        bool SomethingMovedOnWayHome(out string reason)
+        {
+            reason = null;
+            if (!blockage.HasRecord) return true;
+            var analysis = mapAnalysis ?? boxedAnalysis; // just updated by BoxedIn
+            Vector2? lookout = FindHomeLookout();
+            int moved = blockage.MovedNear(analysis, view.CellCenter, dockPosition, lookout,
+                ControllerConstants.BoxedInBlockageRadiusMeters, writer.Flickers);
+            if (moved >= ControllerConstants.BoxedInHomeMovedCells) return true;
+            reason = lookout.HasValue
+                ? $"nothing that moved is in the way ({moved} cell(s) blocked now that were reached earlier), so it was not waited out"
+                : "no way to it through floor reached earlier, so nothing in the way can move off it";
+            Debug.Log($"No way to the dock at {simTime:F0} s and {reason}.", this);
+            return false;
+        }
+
+        /// <summary>Every BoxedInSampleSeconds: records the floor reachable in the algorithm's latest map analysis (one pass, no update of its own).</summary>
         void SampleReach()
         {
             nextReachSample = simTime + ControllerConstants.BoxedInSampleSeconds;
-            var analysis = mapAnalysis;
-            if (analysis == null || analysis.IsEmpty) return;
-
-            // Grow the record to cover the analysis's rectangle (a SLAM map grows), keeping what it holds.
-            int row0 = analysis.MinRow, col0 = analysis.MinCol, rows = analysis.Rows, cols = analysis.Cols;
-            if (everRows == 0 || row0 < everRow0 || col0 < everCol0 ||
-                row0 + rows > everRow0 + everRows || col0 + cols > everCol0 + everCols)
-            {
-                int newRow0 = everRows == 0 ? row0 : System.Math.Min(row0, everRow0);
-                int newCol0 = everRows == 0 ? col0 : System.Math.Min(col0, everCol0);
-                int newRowEnd = everRows == 0 ? row0 + rows : System.Math.Max(row0 + rows, everRow0 + everRows);
-                int newColEnd = everRows == 0 ? col0 + cols : System.Math.Max(col0 + cols, everCol0 + everCols);
-                int newRows = newRowEnd - newRow0, newCols = newColEnd - newCol0;
-                var grown = new bool[newRows * newCols];
-                for (int r = 0; r < everRows; r++)
-                    System.Array.Copy(everReached, r * everCols, grown, (everRow0 + r - newRow0) * newCols + (everCol0 - newCol0), everCols);
-                everReached = grown;
-                everRow0 = newRow0;
-                everCol0 = newCol0;
-                everRows = newRows;
-                everCols = newCols;
-            }
-
-            for (int row = row0; row < row0 + rows; row++)
-            {
-                int offset = (row - everRow0) * everCols - everCol0;
-                for (int col = col0; col < col0 + cols; col++)
-                    if (analysis.BodyFits(row, col) && !float.IsPositiveInfinity(analysis.ReachDistance(row, col)))
-                        everReached[offset + col] = true;
-            }
+            blockage.Sample(mapAnalysis);
         }
 
         void Park(RunOutcome outcome, string message)

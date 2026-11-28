@@ -67,10 +67,64 @@ namespace RobotVacuum.Sim.Control
             if (!Grid.SetCell(row, col, cell)) return; // beyond the runaway guard
 
             if (wasWall != IsWall(row, col, value)) LogWallChange(row, col);
-            if ((old <= 0f) != (value <= 0f)) TopologyVersion++;
+            if ((old <= 0f) != (value <= 0f))
+            {
+                TopologyVersion++;
+                NoteFlip(row, col);
+            }
             if (Mathf.Abs(value - old) >= ReportThreshold || (old <= 0f) != (value <= 0f)) Record(row, col);
             if (value <= 0f) Unsettle(row, col); // anything that blocks a cell ends its "settled floor" status
         }
+
+        // ---- Flicker ---------------------------------------------------------
+        //
+        // A thin obstacle the lidar only half sees (a chair leg between beams) flips its cells between blocked and
+        // clear many times while in view. To the boxed-in check those cells look like "floor reached earlier that is
+        // blocked now", which is how it recognizes something that moved in, such as the cat (a static chair once cost
+        // a run 220 s of waiting). So each flip is noted here: only on the flip itself (already the rare branch of a
+        // write), sparsely, and nothing is ever changed on the map.
+
+        struct FlipRecord
+        {
+            public float last;        // sim time of the last flip
+            public int streak;        // flips in a row, each within FlickerGapSeconds of the one before
+            public bool flickered;    // the streak has reached FlickerFlips at some point...
+            public float lastFlicker; // ...most recently at this sim time
+        }
+
+        readonly Dictionary<long, FlipRecord> flipRecords = new Dictionary<long, FlipRecord>();
+        int flickerCells;
+
+        /// <summary>Sim time of the writes, set by the controller each step (for telling flicker apart).</summary>
+        public float Clock { get; set; }
+
+        /// <summary>Cells that have flickered at some point this run.</summary>
+        public int FlickerCellCount => flickerCells;
+
+        void NoteFlip(int row, int col)
+        {
+            long key = CellIndex.Pack(row, col);
+            bool known = flipRecords.TryGetValue(key, out var record);
+            if (known && Clock == record.last) return; // several writes in one step count once
+            record.streak = known && Clock - record.last <= ControllerConstants.FlickerGapSeconds ? record.streak + 1 : 1;
+            record.last = Clock;
+            if (record.streak >= ControllerConstants.FlickerFlips)
+            {
+                if (!record.flickered) flickerCells++;
+                record.flickered = true;
+                record.lastFlicker = Clock;
+            }
+            flipRecords[key] = record;
+        }
+
+        /// <summary>
+        /// True when the cell has kept flipping between blocked and clear (<see cref="ControllerConstants.FlickerFlips"/>
+        /// flips, each within <see cref="ControllerConstants.FlickerGapSeconds"/> of the last) within the last
+        /// <see cref="ControllerConstants.FlickerMemorySeconds"/>: a thin static obstacle, not something that moved in.
+        /// </summary>
+        public bool Flickers(int row, int col) =>
+            flickerCells > 0 && flipRecords.TryGetValue(CellIndex.Pack(row, col), out var record) && record.flickered &&
+            Clock - record.lastFlicker <= ControllerConstants.FlickerMemorySeconds;
 
         public void SetVacuumResistance(int row, int col, float value)
         {

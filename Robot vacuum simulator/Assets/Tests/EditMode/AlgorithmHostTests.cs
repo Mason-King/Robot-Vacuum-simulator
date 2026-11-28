@@ -296,10 +296,10 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void Fingerprint_OfABuiltIn_IsBuiltIn_AndOfAMissingOne_IsEmpty()
+        public void Fingerprint_OfABuiltIn_IsBuiltIn_AndOfAMissingOne_IsNotLoaded()
         {
             Assert.AreEqual("built-in", AlgorithmCatalog.Fingerprint(AlgorithmCatalog.RandomBounceId));
-            Assert.AreEqual("", AlgorithmCatalog.Fingerprint("No.Such.Algorithm"));
+            Assert.AreEqual(AlgorithmCatalog.NotLoaded, AlgorithmCatalog.Fingerprint("No.Such.Algorithm"));
         }
 
         [Test]

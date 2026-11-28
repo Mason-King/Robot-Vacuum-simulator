@@ -282,6 +282,32 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Tries while boxed in before accepting it (a robot truly shut in is still reported).</summary>
         public const int BoxedInTries = 3;
 
+        /// <summary>
+        /// The way home failed and the robot isn't boxed in: wait for it to clear only if at least this many cells the
+        /// robot reached earlier are blocked now (and not flickering) within BoxedInBlockageRadiusMeters of the dock or
+        /// of the reachable floor next to the blockage: something moved in. Otherwise nothing there will move (a closed
+        /// door, a wall the level lacks a gap in) and the run parks as Dock Unreachable at once instead of ~215 s later.
+        /// </summary>
+        public const int BoxedInHomeMovedCells = 3;
+
+        /// <summary>
+        /// When flickering cells are among the blocked ones near where the algorithm stopped, the "in the way" rules
+        /// also need at least this many moved cells that don't flicker: the in-way cells may all be the clearance around
+        /// a chair's legs.
+        /// </summary>
+        public const int BoxedInMovedMinCells = 3;
+
+        // ---- Flicker (InternalModelWriter.Flickers) ----
+
+        /// <summary>Flips of one cell between blocked and clear at most this far apart, sim seconds, count as one streak.</summary>
+        public const float FlickerGapSeconds = 1f;
+
+        /// <summary>A streak of this many flips marks the cell as flickering: something thin the lidar half sees, not the cat.</summary>
+        public const int FlickerFlips = 4;
+
+        /// <summary>A cell counts as flickering for this long, sim seconds, after its last streak (static furniture stays put).</summary>
+        public const float FlickerMemorySeconds = 600f;
+
         /// <summary>An UntilClean hold ends after this many times the time its dirtiest cell needed when the hold began.</summary>
         public const float HoldCapFactor = 1.5f;
 
