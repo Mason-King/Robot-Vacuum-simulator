@@ -17,6 +17,71 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(MovingCat.Behavior.Roaming, MovingCat.ChooseBehavior(2f, 0.5f));
         }
 
+        // ---- Keeping out of the vacuum's way ----------------------------------------------------------------
+
+        [Test]
+        public void CatAheadOfAMovingVacuum_IsInItsPath_OnTheSideItIsOn()
+        {
+            // Vacuum at the origin driving up (+y). A cat 0.8 m ahead, a little to the left.
+            Assert.IsTrue(MovingCat.InVacuumPath(new Vector2(-0.1f, 0.8f), Vector2.zero, Vector2.up, 0.3f, 1.3f, out float side));
+            Assert.AreEqual(1f, side, "left of the heading");
+            Assert.IsTrue(MovingCat.InVacuumPath(new Vector2(0.1f, 0.8f), Vector2.zero, Vector2.up, 0.3f, 1.3f, out side));
+            Assert.AreEqual(-1f, side);
+        }
+
+        [Test]
+        public void CatBehindBesideOrFarFromTheVacuum_OrAStoppedVacuum_IsNotInItsPath()
+        {
+            Assert.IsFalse(MovingCat.InVacuumPath(new Vector2(0f, -0.8f), Vector2.zero, Vector2.up, 0.3f, 1.3f, out _), "behind");
+            Assert.IsFalse(MovingCat.InVacuumPath(new Vector2(0.9f, 0.5f), Vector2.zero, Vector2.up, 0.3f, 1.3f, out _), "off to the side");
+            Assert.IsFalse(MovingCat.InVacuumPath(new Vector2(0f, 2.5f), Vector2.zero, Vector2.up, 0.3f, 1.3f, out _), "far ahead");
+            Assert.IsFalse(MovingCat.InVacuumPath(new Vector2(0f, 0.8f), Vector2.zero, Vector2.up, 0f, 1.3f, out _), "the vacuum is stopped");
+        }
+
+        [Test]
+        public void SteppingAside_LeavesThePath_OnTheSideItWasOn()
+        {
+            Vector2 cat = new Vector2(-0.1f, 0.8f);
+            MovingCat.InVacuumPath(cat, Vector2.zero, Vector2.up, 0.3f, 1.3f, out float side);
+            Vector2 aside = MovingCat.YieldTarget(cat, Vector2.zero, Vector2.up, side);
+
+            Assert.Less(aside.x, 0f, "stays on the left");
+            Assert.AreEqual(cat.y, aside.y, 1e-4f, "straight sideways, not ahead of the vacuum");
+            Assert.IsFalse(MovingCat.InVacuumPath(aside, Vector2.zero, Vector2.up, 0.3f, 1.3f, out _));
+        }
+
+        [Test]
+        public void Bolting_GoesAwayAndSideways_NotStraightDownThePath()
+        {
+            Vector2 cat = new Vector2(-0.05f, 0.35f);
+            Vector2 flee = MovingCat.FleeDirection(cat, Vector2.zero, Vector2.up, 1f);
+
+            Assert.Greater(Vector2.Dot(flee, cat.normalized), 0f, "away from the vacuum");
+            Assert.Less(flee.x, -0.7f, "mostly sideways, to the left");
+            Assert.AreEqual(1f, flee.magnitude, 1e-4f);
+        }
+
+        [Test]
+        public void Hallways_AreNarrow_OpenFloorAndCornersAreNot()
+        {
+            var level = ScriptableObject.CreateInstance<LevelData>();
+            try
+            {
+                // A 4 m × 3 m room and a 0.9 m wide hallway off it.
+                level.AddRoom(new Room { outline = { new Vector2(0f, 0f), new Vector2(4f, 0f), new Vector2(4f, 3f), new Vector2(0f, 3f) } });
+                level.AddRoom(new Room { outline = { new Vector2(4f, 1f), new Vector2(7f, 1f), new Vector2(7f, 1.9f), new Vector2(4f, 1.9f) } });
+
+                Assert.IsTrue(MovingCat.Narrow(level, new Vector2(5.5f, 1.45f)), "middle of the hallway");
+                Assert.IsFalse(MovingCat.Narrow(level, new Vector2(2f, 1.5f)), "middle of the room");
+                Assert.IsFalse(MovingCat.Narrow(level, new Vector2(0.3f, 0.3f)), "a corner of the room");
+                Assert.IsFalse(MovingCat.Narrow(level, new Vector2(2f, 0.3f)), "along one wall");
+            }
+            finally
+            {
+                Object.DestroyImmediate(level);
+            }
+        }
+
         [Test]
         public void ReflectDirectionTurnsAwayFromContactSurface()
         {
