@@ -334,8 +334,8 @@ namespace RobotVacuum.Tests
             session.Undo();
             Assert.IsTrue(session.GetObstacle(0).blocksVacuum);
 
-            session.SetObstacleBlocks(0, true);
-            Assert.AreEqual("Add Furniture", session.UndoLabel);
+            session.SetObstacleBlocks(0, true); // already blocks: a no-op, so nothing new to undo
+            Assert.AreEqual("Add Sofa", session.UndoLabel);
         }
 
         [Test]

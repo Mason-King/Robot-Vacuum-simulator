@@ -3315,3 +3315,85 @@
     margin-top: 2px;
     color: var(--text-2);
 }
+
+/* Version history (VersionHistoryDialog): saved versions of a floor plan or the configuration, and comparing two. */
+.le-dialog--history {
+    width: 760px;
+}
+
+.le-history__list {
+    max-height: 380px;
+    margin-top: 12px;
+    border-top-width: 1px;
+    border-color: var(--border);
+}
+
+.le-history__row {
+    flex-direction: row;
+    align-items: center;
+    padding: 8px 4px;
+    border-bottom-width: 1px;
+    border-color: var(--border);
+}
+
+.le-history__row--current {
+    background-color: var(--accent-soft);
+}
+
+.le-history__row > .le-btn {
+    flex-shrink: 0;
+    margin-left: 6px;
+}
+
+.le-history__pick {
+    margin-right: 8px;
+}
+
+.le-history__main {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.le-history__title {
+    -unity-font-style: bold;
+}
+
+.le-history__meta {
+    margin-top: 2px;
+    font-size: 12px;
+    white-space: normal;
+    color: var(--text-2);
+}
+
+.le-history__footer {
+    flex-direction: row;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+.le-history__maps {
+    flex-direction: row;
+    margin-top: 12px;
+}
+
+.le-history__map {
+    flex-grow: 1;
+    flex-basis: 0;
+    margin-right: 8px;
+}
+
+.le-history__map-view {
+    height: 240px;
+    margin-top: 4px;
+}
+
+.le-history__diff {
+    max-height: 260px;
+    margin-top: 12px;
+}
+
+.le-history__diff-line {
+    margin-top: 3px;
+    white-space: normal;
+}

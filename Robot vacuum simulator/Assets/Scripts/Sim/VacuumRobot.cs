@@ -98,6 +98,16 @@ namespace RobotVacuum.Sim
         /// <summary>Why the algorithm was stopped, or null while it runs.</summary>
         public string FailureReason => stuckReason ?? (Brain != null && Brain.Failed ? Brain.Failure : null);
 
+        /// <summary>
+        /// The kind of failure behind <see cref="FailureReason"/>, for the run history and the comparative report: an
+        /// <see cref="Control.AlgorithmFaultKind"/> name (Exception, Hang, InvalidOutput, Refused, GuardTripped), "Stalled"
+        /// when the body stopped a run going nowhere, or null.
+        /// </summary>
+        public string FailureKind =>
+            stuckReason != null ? "Stalled"
+            : Brain != null && Brain.Failed && Brain.Fault != null ? Brain.Fault.Kind.ToString()
+            : null;
+
         /// <summary>True when the body stopped a run that was going nowhere (no progress for <see cref="NoProgressSeconds"/>).</summary>
         public bool Stuck => stuckReason != null;
 

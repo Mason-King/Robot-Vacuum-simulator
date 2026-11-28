@@ -297,6 +297,11 @@ namespace RobotVacuum.LevelEditor
                 MenuEntry.Item("Open", () => OpenLevel(entry.path), IconKind.Select),
                 MenuEntry.Item("Simulate", () => SimulateLevel(entry.level, entry.path), IconKind.Play),
                 MenuEntry.Item("Duplicate", () => DuplicateLevel(entry), IconKind.Duplicate),
+                MenuEntry.Item("Version history…", () =>
+                {
+                    OpenLevel(entry.path);
+                    if (session != null) ShowHistory();
+                }, IconKind.Undo),
                 MenuEntry.Item("Export…", () => ExportLevel(entry.level), IconKind.Save),
                 MenuEntry.Separator(),
                 MenuEntry.Item("Delete…", () => ConfirmDeleteLevel(entry), IconKind.Trash, danger: true),
@@ -342,7 +347,7 @@ namespace RobotVacuum.LevelEditor
                 var taken = new List<string>();
                 foreach (var entry in LevelLibrary.LoadAll()) taken.Add(entry.level.name);
                 level.name = LevelLibrary.UniqueName(level.name, taken);
-                LevelLibrary.Create(level);
+                LevelLibrary.Create(level, "Imported");
                 FloorPlanFiles.MarkImported(path);
                 imported++;
             }
@@ -358,7 +363,7 @@ namespace RobotVacuum.LevelEditor
             {
                 var copy = LevelSnapshot.Parse(entry.level.ToJson(false));
                 copy.name = UniqueLevelName(entry.level.name + " copy");
-                LevelLibrary.Create(copy);
+                LevelLibrary.Create(copy, $"Duplicated from “{entry.level.name}”");
                 library.Refresh();
             }
             catch (Exception exception)
@@ -371,7 +376,7 @@ namespace RobotVacuum.LevelEditor
         {
             overlay.ShowDialog(
                 $"Delete “{entry.level.name}”?",
-                "This removes the floor plan from this device. It can't be undone.",
+                "This removes the floor plan and all its saved versions from this device. It can't be undone.",
                 null,
                 new DialogButton("Cancel", ButtonStyle.Ghost, null),
                 new DialogButton("Delete", ButtonStyle.Danger, () =>
@@ -407,6 +412,16 @@ namespace RobotVacuum.LevelEditor
             {
                 overlay.Toast("That file isn't a readable floor plan.");
                 return;
+            }
+
+            // A plan from before version history gets its id (and its current state as version 1) now.
+            try
+            {
+                LevelLibrary.EnsureId(path, snapshot);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Version history: couldn't start a history for '{path}': {exception.Message}");
             }
 
             CloseSession();
@@ -482,6 +497,35 @@ namespace RobotVacuum.LevelEditor
                 ReportError("Couldn't save", exception);
                 return false;
             }
+        }
+
+        /// <summary>The open floor plan's saved versions: compare, rename, restore.</summary>
+        void ShowHistory()
+        {
+            if (session == null) return;
+            var history = session.History;
+            if (history == null)
+            {
+                overlay.Toast("This floor plan has no version history (it couldn't be given one when opened).");
+                return;
+            }
+
+            var palette = Palette;
+            VersionHistoryDialog.Show(overlay, new VersionHistoryDialog.Source
+            {
+                Name = $"“{session.Name}”",
+                History = history,
+                CurrentContent = () => session?.Serialize(true),
+                UnsavedEdits = () => session != null ? session.UnsavedEdits : new List<string>(),
+                Compare = (a, b) => LevelDiff.Compare(LevelSnapshot.Parse(a), LevelSnapshot.Parse(b), palette),
+                Preview = json =>
+                {
+                    var level = LevelSnapshot.Parse(json);
+                    return level != null ? new FloorMapView(level, palette) : null;
+                },
+                Restore = number => session != null && session.RestoreVersion(number),
+                RestoredNote = "Undo puts it back; Save keeps it as a new version.",
+            });
         }
 
         void ReportError(string title, Exception exception)
@@ -561,6 +605,8 @@ namespace RobotVacuum.LevelEditor
             Ui.Div(bar, "le-divider");
             undoButton = Ui.IconButton(bar, IconKind.Undo, $"Undo ({Shortcut("Z")})", () => session.Undo(), "le-btn--ghost");
             redoButton = Ui.IconButton(bar, IconKind.Redo, $"Redo ({Shortcut("⇧Z")})", () => session.Redo(), "le-btn--ghost");
+            var history = Ui.Button(bar, "History", null, ShowHistory, "le-btn--ghost");
+            Ui.Tooltip(history, "Saved versions of this floor plan: compare or restore them");
             Ui.Div(bar, "le-divider");
 
             Ui.Button(bar, "Save", IconKind.Save, () => TrySave(true), "le-btn--ghost");
@@ -1086,7 +1132,11 @@ namespace RobotVacuum.LevelEditor
                 return;
             }
 
-            RunChecks.ConfirmThen(overlay, RunChecks.Problems(session.Level), BeginRun);
+            RunChecks.ConfirmThen(overlay, RunChecks.Problems(session.Level), () =>
+            {
+                SimConfig.CommitVersion("Before a run"); // the settings this run uses are in the history
+                BeginRun();
+            });
         }
 
         bool CanStartSimulation()

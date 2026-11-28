@@ -62,6 +62,7 @@ namespace RobotVacuum.LevelEditor
         float measuredSince;
         float measuredSimTime;
         float achievedSpeed;
+        float offFloorSince = -1f;
 
         Label statusLabel;
         Label detailLabel;
@@ -140,8 +141,7 @@ namespace RobotVacuum.LevelEditor
             return true;
         }
 
-        const float EscapeGraceSeconds = 0.5f; // the same as the run screen's (SimHud)
-        float offFloorSince = -1f;
+        const float EscapeGraceSeconds = SimWorld.EscapeGraceSeconds; // the same as the run screen's (SimHud)
 
         void StartTrial()
         {
@@ -254,6 +254,18 @@ namespace RobotVacuum.LevelEditor
             catch (Exception exception)
             {
                 UnityEngine.Debug.LogWarning($"Batch: could not save results: {exception.Message}");
+            }
+
+            // Every batch gets its comparative report written next to the run data, ready for offline use.
+            try
+            {
+                if (finished.Count > 0)
+                    ComparativeReport.Build(finished, ComparativeReport.BatchOptions(finished[0].levelName))
+                        .WriteTo(ComparativeReport.BatchFolder(spec.batchId));
+            }
+            catch (Exception exception)
+            {
+                UnityEngine.Debug.LogWarning($"Batch: could not write the comparative report: {exception.Message}");
             }
 
             if (finished.Count > 0) SimLauncher.OpenAnalysis(spec.batchId);

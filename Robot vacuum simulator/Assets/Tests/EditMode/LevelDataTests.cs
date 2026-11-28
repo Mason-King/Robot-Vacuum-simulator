@@ -265,6 +265,10 @@ namespace RobotVacuum.Tests
                 wall.isFloor = false;
                 palette.Add(wall);
                 level.Palette = palette;
+                // A 3 m square room of its own (the sample apartment's walls aren't at y = -1.5), bottom wall first.
+                level.Rooms.Clear();
+                level.Doorways.Clear();
+                level.AddRoom(new Room { floorIndex = 0, outline = TestLevels.Square(new Vector2(-1.5f, -1.5f), 3f) });
                 Vector2 nearBottomWall = new Vector2(0f, -1.49f);
 
                 Assert.IsNull(level.FloorTypeAt(nearBottomWall));

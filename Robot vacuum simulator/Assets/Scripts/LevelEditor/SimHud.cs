@@ -23,7 +23,7 @@ namespace RobotVacuum.LevelEditor
         const float MinRecordedSeconds = 2f;
 
         /// <summary>How long the vacuum must be off the floor plan before the run is stopped.</summary>
-        const float EscapeGraceSeconds = 0.5f;
+        const float EscapeGraceSeconds = SimWorld.EscapeGraceSeconds;
 
         /// <summary>
         /// Optional. When set, restarting calls this instead of restarting the session itself, so the owner of the run
@@ -463,6 +463,16 @@ namespace RobotVacuum.LevelEditor
         void OpenAnalysis()
         {
             if (!leaving) leaving = SimLauncher.OpenAnalysis(lastSavedId ?? recorder?.Report.id);
+        }
+
+        /// <summary>True when this run has a recording to open on the Analysis page.</summary>
+        public bool CanViewAnalysis => lastSavedId != null || recorder != null;
+
+        /// <summary>Opens the Analysis page on this run (the run-end panel's "View analysis").</summary>
+        public void ViewAnalysis()
+        {
+            if (!saved) SaveIfWorthKeeping();
+            OpenAnalysis();
         }
 
         void Leave()

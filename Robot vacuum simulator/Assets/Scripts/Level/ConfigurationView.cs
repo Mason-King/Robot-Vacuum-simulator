@@ -19,6 +19,7 @@ namespace RobotVacuum.LevelEditor
         readonly FloorPalette palette;
         readonly ScrollView content;
         readonly Label subtitle;
+        readonly VisualElement undoButton, redoButton;
 
         public event Action BackRequested;
         public event Action SimulateRequested;
@@ -32,11 +33,16 @@ namespace RobotVacuum.LevelEditor
 
             var header = Ui.PageHeader(this, "Configuration", "Start screen", () => BackRequested?.Invoke(), out subtitle);
             subtitle.text = "Used by every simulation and preview run";
+            undoButton = Ui.IconButton(header, IconKind.Undo, $"Undo ({Shortcut("Z")})", () => Step(true), "le-btn--ghost");
+            redoButton = Ui.IconButton(header, IconKind.Redo, $"Redo ({Shortcut("Shift+Z")})", () => Step(false), "le-btn--ghost");
+            var history = Ui.Button(header, "History", null, ShowHistory, "le-btn--ghost");
+            Ui.Tooltip(history, "Saved versions of the configuration: compare or restore them");
+            var saveVersion = Ui.Button(header, "Save version", null, AskSaveVersion, "le-btn--ghost");
+            Ui.Tooltip(saveVersion, "Keep the settings as they are now as a named version");
             Ui.Button(header, "Reset to defaults", IconKind.Undo, () =>
             {
-                SimConfig.ResetToDefaults();
-                Rebuild();
-                overlay.Toast("Configuration reset to defaults");
+                SimConfig.ResetToDefaults(); // undoable; rebuilt through SimConfig.Replaced
+                overlay.Toast("Configuration reset to defaults", "Undo", () => Step(true));
             }, "le-btn--ghost");
             Ui.Button(header, "Load…", IconKind.Plus, LoadConfiguration, "le-btn--ghost");
             Ui.Button(header, "Save…", IconKind.Save, SaveConfiguration, "le-btn--ghost");
@@ -47,7 +53,94 @@ namespace RobotVacuum.LevelEditor
             content.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
             Add(content);
 
+            // Undo and redo follow every change; the controls are rebuilt when the settings are replaced from outside
+            // them (undo, redo, a restored version, a load, a reset). Leaving the screen keeps the changes as a version.
+            focusable = true;
+            RegisterCallback<KeyDownEvent>(OnKeyDown, TrickleDown.TrickleDown);
+            RegisterCallback<AttachToPanelEvent>(_ =>
+            {
+                SimConfig.Edited += RefreshUndo;
+                SimConfig.Replaced += OnReplaced;
+                RefreshUndo();
+            });
+            RegisterCallback<DetachFromPanelEvent>(_ =>
+            {
+                SimConfig.Edited -= RefreshUndo;
+                SimConfig.Replaced -= OnReplaced;
+                SimConfig.CommitVersion("Configuration edited");
+            });
+
             Rebuild();
+        }
+
+        // ---- undo, redo, versions -------------------------------------------------------------------------------
+
+        void Step(bool back)
+        {
+            string label = back ? SimConfig.UndoLabel : SimConfig.RedoLabel;
+            if (!(back ? SimConfig.Undo() : SimConfig.Redo())) return;
+            overlay.Toast($"{(back ? "Undo" : "Redo")} {label}");
+        }
+
+        void RefreshUndo()
+        {
+            undoButton.SetEnabled(SimConfig.CanUndo);
+            redoButton.SetEnabled(SimConfig.CanRedo);
+        }
+
+        void OnReplaced()
+        {
+            Rebuild();
+            RefreshUndo();
+        }
+
+        static bool IsMac => Application.platform == RuntimePlatform.OSXPlayer || Application.platform == RuntimePlatform.OSXEditor;
+        static string Shortcut(string key) => IsMac ? $"⌘{key.Replace("Shift+", "⇧")}" : $"Ctrl+{key}";
+
+        void OnKeyDown(KeyDownEvent evt)
+        {
+            if (evt.keyCode != KeyCode.Z || !(IsMac ? evt.commandKey : evt.ctrlKey) || Ui.IsTyping(panel)) return;
+            Step(!evt.shiftKey);
+            evt.StopPropagation();
+        }
+
+        void ShowHistory()
+        {
+            SimConfig.CommitVersion("Configuration edited"); // so what is on screen now can be compared too
+            VersionHistoryDialog.Show(overlay, new VersionHistoryDialog.Source
+            {
+                Name = "Configuration",
+                History = SimConfig.Versions,
+                CurrentContent = () => SimConfig.VersionContent,
+                UnsavedEdits = () => SimConfig.UnversionedEdits,
+                Compare = (a, b) => ConfigDiff.Compare(SimConfig.Data.Parse(a), SimConfig.Data.Parse(b)),
+                Preview = null,
+                Restore = SimConfig.RestoreVersion,
+                RestoredNote = "Undo puts it back.",
+            });
+        }
+
+        void AskSaveVersion()
+        {
+            string name = string.Empty;
+            var body = Ui.Div(null, "le-history");
+            var field = Ui.TextInput(body, name, value => name = value);
+            field.RegisterValueChangedCallback(evt => name = evt.newValue);
+            overlay.ShowDialog("Save a version", "Optional: a name to find it by, such as “Slow carpet test”.", body, null,
+                new DialogButton("Cancel", ButtonStyle.Ghost, null),
+                new DialogButton("Save version", ButtonStyle.Primary, () =>
+                {
+                    var version = SimConfig.CommitVersion(string.IsNullOrWhiteSpace(name) ? "Saved" : name);
+                    if (version != null) overlay.Toast($"Saved as v{version.number}");
+                    else if (SimConfig.Versions.Latest is VersionInfo latest)
+                    {
+                        // Nothing changed since the latest version: name that one instead, if a name was given.
+                        if (!string.IsNullOrWhiteSpace(name)) SimConfig.Versions.Relabel(latest.number, name);
+                        overlay.Toast($"No changes since v{latest.number}{(string.IsNullOrWhiteSpace(name) ? "" : "; named it instead")}");
+                    }
+                    else overlay.Toast("Couldn't save a version (see the Console).");
+                }));
+            field.schedule.Execute(() => field.Focus());
         }
 
         void Rebuild()
@@ -260,8 +353,7 @@ namespace RobotVacuum.LevelEditor
                 }
 
                 FloorPlanFiles.MarkImported(path);
-                Rebuild();
-                overlay.Toast("Configuration loaded");
+                overlay.Toast("Configuration loaded (saved as a version; Undo puts the old one back)");
             }
             catch (Exception exception)
             {

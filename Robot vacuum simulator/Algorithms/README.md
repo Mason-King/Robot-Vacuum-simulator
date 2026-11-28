@@ -62,8 +62,10 @@ alike. Everything not listed here is refused.
 A refused use is reported like a compile error, with the file, line and the code `RV0048`, for example
 `MyAlgorithm.cs(14,20): RV0048 'System.IO.File' is not available to algorithms. Algorithms cannot read or write files.`
 
-What the sandbox does not cover: an algorithm that loops forever or uses too much memory. Those are handled by the run
-limits (each run's time limit, 2.11) and, for headless and network jobs, by running each job in its own process.
+What the sandbox checks is what code can *reach*, not how it *behaves*. Behaviour is the run guard's job (see
+"Failures stop the run" above): an algorithm that crashes, loops forever or makes an invalid move ends its run, in
+every kind of run. Memory use is not capped by either; that is left to the run limits (each run's time limit, 2.11)
+and, for headless and network jobs, to running each job in its own process.
 
 ## Errors
 

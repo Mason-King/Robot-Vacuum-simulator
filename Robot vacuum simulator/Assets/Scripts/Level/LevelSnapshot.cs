@@ -18,6 +18,13 @@ namespace RobotVacuum.LevelEditor
         public const string DefaultName = "Untitled floor plan";
 
         public int version = CurrentVersion;
+
+        /// <summary>
+        /// Stable identity for the floor plan's version history (<see cref="VersionHistory.ForFloorPlan"/>): kept across
+        /// renames, new for a duplicate or an import. Empty in files made before version history.
+        /// </summary>
+        public string id = string.Empty;
+
         public string name = DefaultName;
         public List<Room> rooms = new List<Room>();
         public List<Doorway> doorways = new List<Doorway>();
@@ -28,10 +35,11 @@ namespace RobotVacuum.LevelEditor
         public Vector2 robotSpawn;
 
         /// <summary>Serialises a live level straight to JSON. Nothing in the result is shared with the level.</summary>
-        public static string Serialize(LevelData level, string name, bool pretty = false)
+        public static string Serialize(LevelData level, string name, bool pretty = false, string id = null)
         {
             var snapshot = new LevelSnapshot
             {
+                id = id ?? string.Empty,
                 name = name,
                 rooms = level.Rooms,
                 doorways = level.Doorways,
@@ -85,6 +93,7 @@ namespace RobotVacuum.LevelEditor
         void Sanitise()
         {
             if (string.IsNullOrWhiteSpace(name)) name = DefaultName;
+            id ??= string.Empty;
             rooms ??= new List<Room>();
             doorways ??= new List<Doorway>();
             wallStrokes ??= new List<WallStroke>();

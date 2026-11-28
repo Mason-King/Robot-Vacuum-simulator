@@ -136,6 +136,7 @@ namespace RobotVacuum.Sim.Control
     {
         public const float NextGoalBudgetSeconds = 5f;
         public const float InitializeBudgetSeconds = 15f;
+        public const float ProbeBudgetSeconds = 5f;
         public const float AbortWaitSeconds = 2f;
         public const int MaxZombiesPerRun = 1;
         public const int MaxLiveZombies = 3;
@@ -211,6 +212,14 @@ namespace RobotVacuum.Sim.Control
 
         public Outcome<Vec2?> NextGoal(ICleaningAlgorithm algorithm, IBeliefMap map, Pose2 pose, GoalStatus status) =>
             Run(AlgorithmCall.NextGoal, NextGoalBudgetSeconds, () => algorithm.NextGoal(map, pose, status));
+
+        /// <summary>
+        /// Loading the Algorithms folder: creates an algorithm and reads its Name and SupportsSlam, within
+        /// <see cref="ProbeBudgetSeconds"/>. A constructor or property that loops forever then skips that algorithm
+        /// instead of freezing the load.
+        /// </summary>
+        public Outcome<(string name, bool supportsSlam)> Probe(Func<(string, bool)> createAndRead) =>
+            Run(AlgorithmCall.Create, ProbeBudgetSeconds, createAndRead);
 
         /// <summary>Ends the worker thread (a fresh one is started by the next call). Safe to call twice.</summary>
         public void Dispose()

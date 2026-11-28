@@ -289,19 +289,34 @@ namespace RobotVacuum.Sim.Control
                     continue;
                 }
 
+                // Probed under the run guard, so a constructor or property that loops forever skips this algorithm instead of freezing the load.
                 string name;
                 bool supportsSlam;
-                try
+                using (var host = new AlgorithmHost())
                 {
-                    var probe = (ICleaningAlgorithm)constructor.Invoke(null);
-                    name = probe.Name?.Trim();
-                    supportsSlam = probe.SupportsSlam;
-                }
-                catch (Exception exception)
-                {
-                    var inner = exception is TargetInvocationException && exception.InnerException != null ? exception.InnerException : exception;
-                    unit.errors.Add($"{label}: creating it failed: {inner.GetType().Name}: {inner.Message}");
-                    continue;
+                    var probed = host.Probe(() =>
+                    {
+                        ICleaningAlgorithm probe;
+                        try
+                        {
+                            probe = (ICleaningAlgorithm)constructor.Invoke(null);
+                        }
+                        catch (TargetInvocationException wrapped) when (wrapped.InnerException != null)
+                        {
+                            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(wrapped.InnerException).Throw();
+                            throw;
+                        }
+                        return (probe.Name?.Trim(), probe.SupportsSlam);
+                    });
+                    if (!probed.Ok)
+                    {
+                        var fault = probed.Fault;
+                        unit.errors.Add(fault.Kind == AlgorithmFaultKind.Exception
+                            ? $"{label}: creating it failed: {fault.ExceptionType}: {fault.Message}"
+                            : $"{label}: creating it and reading Name / SupportsSlam: {fault.Message}");
+                        continue;
+                    }
+                    (name, supportsSlam) = probed.Value;
                 }
 
                 if (string.IsNullOrEmpty(name))

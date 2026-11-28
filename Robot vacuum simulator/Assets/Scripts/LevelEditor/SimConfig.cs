@@ -210,9 +210,8 @@ namespace RobotVacuum.LevelEditor
         public static bool TryImport(string json)
         {
             if (string.IsNullOrWhiteSpace(json) || !json.TrimStart().StartsWith("{") || !json.Contains("\"vacuum\"")) return false;
-            current = Data.Parse(json);
-            ApplyFloorTuning();
-            Save();
+            Replace(Data.Parse(json), "Load configuration");
+            CommitVersion("Loaded from a file");
             return true;
         }
 
@@ -220,15 +219,40 @@ namespace RobotVacuum.LevelEditor
         public static string Summary =>
             $"{AlgorithmCatalog.NameOf(RunSettings.algorithmId)} · {Vacuum.FormatSpeed(Vacuum.driveSpeed)} · {VacuumSettings.FormatCapacity(Vacuum.batteryCapacity)}";
 
-        public static void Save() => PlayerPrefs.SetString(PrefsKey, Current.ToJson());
+        /// <summary>
+        /// Stores the settings (after changing fields on them directly) and makes the change undoable. Changes to the
+        /// same setting less than <see cref="MergeSeconds"/> apart (a slider being dragged) are one undo step.
+        /// </summary>
+        public static void Save()
+        {
+            string now = Current.ToJson();
+            PlayerPrefs.SetString(PrefsKey, now);
+            if (lastState == null || now == lastState)
+            {
+                lastState = now;
+                return;
+            }
+
+            string label = ConfigDiff.Label(Data.Parse(lastState), current);
+            double time = Clock();
+            bool merge = label == lastPushLabel && time - lastPushTime < MergeSeconds;
+            if (!merge)
+            {
+                undo.Push(label, lastState);
+                editLog.Add(label);
+            }
+            lastPushLabel = label;
+            lastPushTime = time;
+            lastState = now;
+            Edited?.Invoke();
+        }
 
         public static void ResetToDefaults()
         {
-            bool feet = Current.vacuum.useFeet;
-            current = new Data();
-            current.vacuum.useFeet = feet;
-            ApplyFloorTuning();
-            Save();
+            var defaults = new Data();
+            defaults.vacuum.useFeet = Current.vacuum.useFeet;
+            Replace(defaults, "Reset to defaults");
+            CommitVersion("Reset to defaults");
         }
 
         static Data Load()
@@ -237,11 +261,169 @@ namespace RobotVacuum.LevelEditor
 
             FloorTuning.ClearAll();
             foreach (var entry in data.floorEfforts) FloorTuning.SetCleaningEffort(entry.floor, entry.effort);
+            lastState = loadedState = data.ToJson();
+            if (!quitHooked)
+            {
+                // Whatever changed since the last version is kept when the program closes.
+                quitHooked = true;
+                Application.quitting += () => CommitVersion("When the program closed");
+            }
             return data;
+        }
+
+        static bool quitHooked;
+
+        // ---- Undo/redo and version history ----------------------------------------------------------------------
+        //
+        // Undo/redo covers every change made through Save (the Configuration screen, the run setup, the simulator's
+        // bar) for as long as the program runs. Versions are the lasting record: one is committed when the user leaves
+        // the Configuration screen, saves a version, loads or resets, and before a run starts, if anything changed.
+
+        /// <summary>Changes to the same setting closer together than this, real seconds, are one undo step.</summary>
+        public const double MergeSeconds = 1.0;
+
+        static readonly EditHistory undo = new EditHistory();
+        static readonly List<string> editLog = new List<string>();
+        static string lastState;    // the settings as last stored: the "before" of the next change
+        static string loadedState;  // as loaded at startup: the first version, if there was none
+        static string lastPushLabel;
+        static double lastPushTime = double.NegativeInfinity;
+        static VersionHistory versions;
+
+        /// <summary>Real time for merging changes, seconds. Tests replace it.</summary>
+        internal static System.Func<double> Clock = () => Time.realtimeSinceStartupAsDouble;
+
+        /// <summary>Any change, including each step of a slider drag: refresh undo/redo state, not the controls.</summary>
+        public static event System.Action Edited;
+
+        /// <summary>
+        /// The settings were replaced from outside the controls showing them (undo, redo, a restored version, a loaded
+        /// file, a reset): screens showing them should rebuild.
+        /// </summary>
+        public static event System.Action Replaced;
+
+        public static bool CanUndo => undo.CanUndo;
+        public static bool CanRedo => undo.CanRedo;
+        public static string UndoLabel => undo.UndoLabel;
+        public static string RedoLabel => undo.RedoLabel;
+
+        public static bool Undo() => Step(true);
+        public static bool Redo() => Step(false);
+
+        static bool Step(bool back)
+        {
+            string now = Current.ToJson();
+            string state, label;
+            bool stepped = back ? undo.TryUndo(now, out state, out label) : undo.TryRedo(now, out state, out label);
+            if (!stepped) return false;
+            Adopt(Data.Parse(state));
+            ApplyFloorTuning();
+            lastState = current.ToJson();
+            PlayerPrefs.SetString(PrefsKey, lastState);
+            editLog.Add($"{(back ? "Undo" : "Redo")} {label}");
+            lastPushLabel = null;
+            Edited?.Invoke();
+            Replaced?.Invoke();
+            return true;
+        }
+
+        /// <summary>Replaces all the settings as one undoable step.</summary>
+        static void Replace(Data next, string label)
+        {
+            string before = Current.ToJson();
+            Adopt(next);
+            ApplyFloorTuning();
+            string now = current.ToJson();
+            PlayerPrefs.SetString(PrefsKey, now);
+            lastState = now;
+            lastPushLabel = null;
+            if (now == before) return;
+            undo.Push(label, before);
+            editLog.Add(label);
+            Edited?.Invoke();
+            Replaced?.Invoke();
+        }
+
+        /// <summary>
+        /// Takes on <paramref name="next"/>'s values while keeping the objects screens hold (Vacuum, RunSettings, the
+        /// effort list): nested settings are overwritten in place, not swapped, so a screen built before an undo or a
+        /// restore still edits the live settings.
+        /// </summary>
+        static void Adopt(Data next)
+        {
+            if (current == null)
+            {
+                current = next;
+                return;
+            }
+            foreach (var field in typeof(Data).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                object mine = field.GetValue(current), theirs = field.GetValue(next);
+                if (mine is System.Collections.IList list && theirs is System.Collections.IList items)
+                {
+                    list.Clear();
+                    foreach (object item in items) list.Add(item);
+                }
+                else if (mine != null && theirs != null && !field.FieldType.IsValueType && field.FieldType != typeof(string))
+                    JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(theirs), mine);
+                else field.SetValue(current, theirs);
+            }
+        }
+
+        /// <summary>Every saved version of the configuration.</summary>
+        public static VersionHistory Versions => versions ??= VersionHistory.ForConfiguration();
+
+        /// <summary>The changes since the last version, repeats folded: what the next version will list.</summary>
+        public static List<string> UnversionedEdits => VersionHistory.Summarise(editLog);
+
+        /// <summary>The settings as a version stores them (indented JSON).</summary>
+        public static string VersionContent => JsonUtility.ToJson(Current, true);
+
+        /// <summary>
+        /// Records the settings as a new version unless they equal the latest one. The first time, the settings as
+        /// they were at startup go in first, so the first change can be compared. A history that can't be written is
+        /// logged, not thrown. Returns the version, or null.
+        /// </summary>
+        public static VersionInfo CommitVersion(string label)
+        {
+            try
+            {
+                string content = VersionContent;
+                if (Versions.Latest == null && loadedState != null && loadedState != Current.ToJson())
+                    Versions.Record(JsonUtility.ToJson(Data.Parse(loadedState), true), "Starting configuration");
+                var version = Versions.Record(content, label, UnversionedEdits);
+                if (version != null) editLog.Clear();
+                return version;
+            }
+            catch (System.Exception exception)
+            {
+                Debug.LogWarning($"Version history: could not record a version of the configuration: {exception.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>Brings back version <paramref name="number"/> as one undoable change. False if it can't be read.</summary>
+        public static bool RestoreVersion(int number)
+        {
+            string json = Versions.Read(number);
+            if (string.IsNullOrEmpty(json)) return false;
+            Replace(Data.Parse(json), $"Restore v{number}");
+            return true;
         }
 
         // Statics survive entering Play Mode when domain reload is off.
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        static void ResetStatics() => current = null;
+        static void ResetStatics()
+        {
+            current = null;
+            undo.Clear();
+            editLog.Clear();
+            lastState = loadedState = lastPushLabel = null;
+            lastPushTime = double.NegativeInfinity;
+            versions = null;
+        }
+
+        /// <summary>Tests: forget everything held in memory; the next read loads from PlayerPrefs again.</summary>
+        internal static void ResetForTests() => ResetStatics();
     }
 }

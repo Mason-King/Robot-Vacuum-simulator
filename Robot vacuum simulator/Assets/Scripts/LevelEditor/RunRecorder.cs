@@ -106,6 +106,9 @@ namespace RobotVacuum.LevelEditor
 
         public bool OffFloor => Robot != null && Level != null && LevelGeometry.IsOffFloor(Level, Robot.LevelPosition);
 
+        /// <summary>How long the vacuum must stay off the floor plan before a run counts it as escaped, seconds (one stray step is not an escape).</summary>
+        public const float EscapeGraceSeconds = 0.5f;
+
         /// <summary>Applies the shared vacuum settings to the current run's robot, beyond the four the session sets.</summary>
         public void ApplyVacuumSettings() => SimConfig.Vacuum.ApplyTo(Robot, Battery);
 
@@ -210,6 +213,19 @@ namespace RobotVacuum.LevelEditor
                 telemetryInterval = telemetryInterval,
             };
             report.algorithmName = AlgorithmCatalog.NameOf(report.algorithmId);
+
+            var settings = world.Session.Settings;
+            if (settings != null)
+            {
+                report.conditionsRecorded = true;
+                report.slam = settings.slam;
+                report.noiseScale = settings.slam ? settings.noiseScale : 0f;
+                report.lidarEnabled = settings.lidarEnabled;
+                report.lidarRangeMeters = settings.lidarRangeMeters;
+                report.lidarHalfAngleDegrees = settings.lidarHalfAngleDegrees;
+                report.lidarRayCount = settings.lidarRayCount;
+                report.floorSensorEnabled = settings.floorSensorEnabled;
+            }
             report.dataFolder = world.Session.RunFolder ?? RunHistory.DataFolderFor(report.id);
 
             replay.sampleInterval = telemetryInterval;
@@ -502,6 +518,10 @@ namespace RobotVacuum.LevelEditor
             report.batteryUsed = world.Battery != null ? Mathf.Max(0f, batteryAtStart - world.Battery.CurrentCharge) : 0f;
             report.batteryEmptied = world.Battery != null && !world.Battery.CanOperate;
             report.failure = !string.IsNullOrEmpty(failure) ? failure : robot != null ? robot.FailureReason : null;
+            report.failureKind = string.IsNullOrEmpty(report.failure) ? null
+                : robot != null && robot.FailureKind != null ? robot.FailureKind
+                : world.Session.LastFault != null && !string.IsNullOrEmpty(world.Session.LastFault.kind) ? world.Session.LastFault.kind
+                : null;
             report.floorArea = world.Level != null ? world.Level.TotalFloorArea() : 0f;
 
             var cleaning = world.Cleaning;
