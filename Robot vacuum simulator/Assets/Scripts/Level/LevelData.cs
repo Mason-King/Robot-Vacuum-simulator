@@ -174,6 +174,33 @@ namespace RobotVacuum.Level
             return false;
         }
 
+        /// <summary>
+        /// True when a doorway of this width centred here would overlap another doorway cutting the
+        /// same room edge, or leave less than <paramref name="minSolid"/> of wall between them.
+        /// </summary>
+        public bool DoorwayOverlapsOnWall(
+            int roomIndex, int edge, Vector2 center, float width, float minSolid, int exceptDoorwayIndex = -1)
+        {
+            var room = GetRoom(roomIndex);
+            if (room == null || edge < 0 || edge >= room.EdgeCount) return false;
+
+            Vector2 start = room.EdgeStart(edge);
+            Vector2 direction = (room.EdgeEnd(edge) - start).normalized;
+            float position = Vector2.Dot(center - start, direction);
+
+            for (int i = 0; i < doorways.Count; i++)
+            {
+                if (i == exceptDoorwayIndex) continue;
+                var doorway = doorways[i];
+                if (doorway == null || !LevelGeometry.DoorwayCutsEdge(this, doorway, roomIndex, edge)) continue;
+
+                float other = Vector2.Dot(doorway.center - start, direction);
+                if (Mathf.Abs(position - other) < (width + doorway.width) * 0.5f + minSolid) return true;
+            }
+
+            return false;
+        }
+
         void OnValidate()
         {
             wallThickness = Mathf.Max(0.01f, wallThickness);

@@ -592,7 +592,7 @@ namespace RobotVacuum.Tests
         public void PlaceDoorway_OnASharedWall_LinksBothRooms()
         {
             session = Open(SampleLevels.PopulateApartment);
-            session.Level.Doorways.RemoveAt(0); // the sample's living room ↔ kitchen doorway: one per wall
+            session.Level.Doorways.RemoveAt(0); // the sample's living room ↔ kitchen doorway sits here
 
             Assert.IsTrue(session.PlaceDoorway(new Vector2(1.65f, -1f)));
 
@@ -601,15 +601,75 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void PlaceDoorway_RefusesASecondDoorwayOnTheSameWall()
+        public void PlaceDoorway_TwoApartOnTheSameWall_AreBothAccepted()
+        {
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(-1.2f, -1.5f)));
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(1.2f, -1.5f)));
+
+            Assert.AreEqual(2, session.Level.Doorways.Count);
+        }
+
+        [Test]
+        public void PlaceDoorway_TwoApartOnTheSameWall_BothCutTheWall()
+        {
+            session.PlaceDoorway(new Vector2(-1.2f, -1.5f));
+            session.PlaceDoorway(new Vector2(1.2f, -1.5f));
+
+            foreach (var doorway in session.Level.Doorways)
+                foreach (var segment in LevelGeometry.CollectWallSegments(session.Level))
+                    Assert.Greater(Poly2D.DistanceToSegment(doorway.center, segment.a, segment.b, out _), 0.3f,
+                        "a wall segment still crosses the doorway at " + doorway.center);
+        }
+
+        [Test]
+        public void PlaceDoorway_OverlappingAnotherOnTheSameWall_IsRefused()
         {
             Assert.IsTrue(session.PlaceDoorway(new Vector2(0f, -1.5f)));
 
-            Assert.IsFalse(session.PlaceDoorway(new Vector2(1f, -1.5f)));
+            Assert.IsFalse(session.PlaceDoorway(new Vector2(0.5f, -1.5f)));
 
             Assert.AreEqual(1, session.Level.Doorways.Count);
-            Assert.AreEqual("This wall already has a doorway.", notices.Last());
+            Assert.AreEqual("That would overlap another doorway on this wall.", notices.Last());
         }
+
+        [Test]
+        public void PlaceDoorway_SecondOnASharedWall_LinksTheSameRooms()
+        {
+            session = Open(SampleLevels.PopulateApartment);
+            var first = session.Level.Doorways[0]; // living room ↔ kitchen
+            int before = session.Level.Doorways.Count;
+
+            Assert.IsTrue(session.PlaceDoorway(new Vector2(1.65f, -1f)));
+
+            Assert.AreEqual(before + 1, session.Level.Doorways.Count);
+            var added = session.Level.Doorways.Last();
+            CollectionAssert.AreEquivalent(new[] { first.roomA, first.roomB }, new[] { added.roomA, added.roomB });
+        }
+
+        [Test]
+        public void MoveDoorwayLive_OntoAnotherDoorway_IsIgnored()
+        {
+            session.PlaceDoorway(new Vector2(-1.2f, -1.5f));
+            session.PlaceDoorway(new Vector2(1.2f, -1.5f));
+            Vector2 before = session.Level.Doorways[1].center;
+
+            session.MoveDoorwayLive(1, new Vector2(-0.9f, -1.5f));
+
+            TestLevels.AssertNear(before, session.Level.Doorways[1].center);
+        }
+
+        [Test]
+        public void SetDoorwayWidthLive_WideningIntoANeighbour_IsRefused()
+        {
+            session.PlaceDoorway(new Vector2(-1.2f, -1.5f));
+            session.PlaceDoorway(new Vector2(0.2f, -1.5f));
+
+            session.SetDoorwayWidthLive(1, 2.5f);
+
+            Assert.AreEqual(DefaultWidth, session.Level.Doorways[1].width, 1e-4f);
+        }
+
+        const float DefaultWidth = EditorSession.DefaultDoorwayWidth;
 
         [Test]
         public void MoveDoorwayLive_RelinksToTheNewWall_WithoutRecordingHistory()
@@ -752,6 +812,46 @@ namespace RobotVacuum.Tests
             TestLevels.AssertNear(new Vector2(2f, 1f), session.Snap(point, 100f, skipRoom: 0, skipVertex: 2));
             TestLevels.AssertNear(new Vector2(2f, 1f), session.Snap(point, 100f, skipRoom: 0));
             TestLevels.AssertNear(new Vector2(2f, 1.5f), session.Snap(point, 100f, skipRoom: 0, skipVertex: 1));
+        }
+
+        [Test]
+        public void Snap_ToWalls_PutsAPointNearAWallOnTheWall()
+        {
+            session.SnapIncrement = 0.3f; // room 1's right wall (x = 2) is off this grid: it rounds to 2.1
+            var point = new Vector2(2.04f, 0.13f);
+
+            TestLevels.AssertNear(new Vector2(2.1f, 0f), session.Snap(point, 100f));
+            TestLevels.AssertNear(new Vector2(2f, 0f), session.Snap(point, 100f, toWalls: true));
+            TestLevels.AssertNear(new Vector2(2.1f, 0f), session.Snap(point, 100f, skipRoom: 0, toWalls: true));
+        }
+
+        [Test]
+        public void Snap_ToWalls_StillPrefersACorner()
+        {
+            session.SnapIncrement = 1f;
+            TestLevels.AssertNear(new Vector2(2f, 1.5f), session.Snap(new Vector2(1.98f, 1.45f), 100f, toWalls: true));
+        }
+
+        [Test]
+        public void AddRoom_DrawnAgainstAnOffGridWall_SharesTheWall()
+        {
+            // The bug: with this grid the line nearest room 1's right wall (x = 2) is x = 1.8, inside room 1, so an
+            // outline clicked along that wall overlapped it a little and was refused.
+            session.SnapIncrement = 0.45f;
+            var clicks = new[] { new Vector2(1.99f, -0.6f), new Vector2(3.6f, -0.6f), new Vector2(3.6f, 0.6f), new Vector2(1.99f, 0.6f) };
+
+            var gridOnly = new List<Vector2>();
+            var onWall = new List<Vector2>();
+            foreach (var click in clicks)
+            {
+                gridOnly.Add(session.Snap(click, 100f));
+                onWall.Add(session.Snap(click, 100f, toWalls: true));
+            }
+
+            Assert.IsFalse(session.CanPlaceRoom(gridOnly), "grid-only corners fall inside room 1");
+            Assert.AreEqual(2f, onWall[0].x, 1e-5f);
+            Assert.AreEqual(2f, onWall[3].x, 1e-5f);
+            Assert.IsTrue(session.AddRoom(onWall), notices.Count > 0 ? notices.Last() : "");
         }
 
         [Test]

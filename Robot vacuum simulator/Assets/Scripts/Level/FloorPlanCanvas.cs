@@ -287,7 +287,7 @@ namespace RobotVacuum.LevelEditor
                 case EditorTool.Select: BeginSelect(evt.clickCount, evt.pointerId); break;
 
                 case EditorTool.Rect:
-                    rectStart = SnapPoint(cursorLevel);
+                    rectStart = SnapRoomPoint(cursorLevel);
                     BeginDrag(Drag.RectCreate, evt.pointerId);
                     break;
 
@@ -397,6 +397,15 @@ namespace RobotVacuum.LevelEditor
 
         Vector2 SnapPoint(Vector2 point, int skipRoom = -1, int skipVertex = -1) =>
             session.Snap(point, zoom, skipRoom, skipVertex);
+
+        // A point that shapes a room (outline and rectangle corners, a dragged corner) also snaps onto other rooms'
+        // walls, so a room drawn against one shares that wall exactly instead of overlapping it a little.
+        Vector2 SnapRoomPoint(Vector2 point, int skipRoom = -1, int skipVertex = -1) =>
+            session.Snap(point, zoom, skipRoom, skipVertex, toWalls: true);
+
+        // The point the current drawing tool would place at the cursor.
+        Vector2 SnapForTool(Vector2 point) =>
+            session.Tool == EditorTool.Pen || session.Tool == EditorTool.Rect ? SnapRoomPoint(point) : SnapPoint(point);
 
         void BeginDrag(Drag kind, int pointerId)
         {
@@ -651,7 +660,7 @@ namespace RobotVacuum.LevelEditor
             if (dragVertex < 0 || dragVertex >= room.outline.Count) return;
 
             RecordOnce("Move Point");
-            Vector2 target = SnapPoint(cursorLevel, dragRoom, dragVertex);
+            Vector2 target = SnapRoomPoint(cursorLevel, dragRoom, dragVertex);
             var proposed = new List<Vector2>(room.outline);
             proposed[dragVertex] = target;
             float currentArea = Poly2D.SignedArea(room.outline);
@@ -811,7 +820,7 @@ namespace RobotVacuum.LevelEditor
 
         Vector2 RectEnd(out Vector2 min, out Vector2 max)
         {
-            Vector2 end = SnapPoint(cursorLevel);
+            Vector2 end = SnapForTool(cursorLevel); // rooms snap to walls; furniture doesn't
             min = Vector2.Min(rectStart, end);
             max = Vector2.Max(rectStart, end);
 
@@ -855,7 +864,7 @@ namespace RobotVacuum.LevelEditor
 
         void AddPenPoint()
         {
-            Vector2 snapped = SnapPoint(cursorLevel);
+            Vector2 snapped = SnapRoomPoint(cursorLevel);
 
             if (penPoints.Count >= 3 && Vector2.Distance(snapped, penPoints[0]) <= EditorSession.HandlePixels * 1.6f / zoom)
             {
@@ -1005,7 +1014,7 @@ namespace RobotVacuum.LevelEditor
 
                 case EditorTool.Pen:
                     hoverPenClose = penPoints.Count >= 3 &&
-                        Vector2.Distance(SnapPoint(point), penPoints[0]) <= EditorSession.HandlePixels * 1.6f / zoom;
+                        Vector2.Distance(SnapRoomPoint(point), penPoints[0]) <= EditorSession.HandlePixels * 1.6f / zoom;
                     break;
             }
         }
@@ -1088,7 +1097,7 @@ namespace RobotVacuum.LevelEditor
             }
             else if (session.Tool == EditorTool.Pen && penPoints.Count > 0 && cursorInside)
             {
-                text = Ui.FormatLength(Vector2.Distance(penPoints[penPoints.Count - 1], SnapPoint(cursorLevel)));
+                text = Ui.FormatLength(Vector2.Distance(penPoints[penPoints.Count - 1], SnapRoomPoint(cursorLevel)));
             }
             else if (drag == Drag.ObstacleHandle && dragMoved && session.GetObstacle(dragObstacle) != null)
             {
@@ -1786,7 +1795,7 @@ namespace RobotVacuum.LevelEditor
             if (drawing && cursorInside && drag != Drag.Pan)
             {
                 // A small reticle shows exactly where the next point will land after snapping.
-                Vector2 snapped = ToLocal(drag == Drag.WallCreate ? WallEnd() : SnapPoint(cursorLevel));
+                Vector2 snapped = ToLocal(drag == Drag.WallCreate ? WallEnd() : SnapForTool(cursorLevel));
                 StrokeCircle(painter, snapped, 4.5f, 1.5f, Accent);
                 FillCircle(painter, snapped, 1.5f, Accent);
             }
@@ -1813,7 +1822,7 @@ namespace RobotVacuum.LevelEditor
 
             if (cursorInside)
             {
-                Vector2 target = hoverPenClose ? penPoints[0] : SnapPoint(cursorLevel);
+                Vector2 target = hoverPenClose ? penPoints[0] : SnapRoomPoint(cursorLevel);
                 StrokeLine(painter, penPoints[penPoints.Count - 1], target, 1.5f, new Color(Accent.r, Accent.g, Accent.b, 0.6f));
             }
             painter.lineCap = LineCap.Butt;

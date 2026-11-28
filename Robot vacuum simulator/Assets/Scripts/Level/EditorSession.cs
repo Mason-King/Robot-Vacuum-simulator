@@ -30,6 +30,9 @@ namespace RobotVacuum.LevelEditor
         public const float MaxDoorwayWidth = 3f;
         public const float DefaultDoorwayWidth = 0.9f;
 
+        /// <summary>Least wall left standing between two doorways on the same wall, in metres.</summary>
+        public const float MinWallBetweenDoorways = 0.1f;
+
         /// <summary>Grid steps in metres; the editor offers <see cref="Ui.SnapSteps"/> for the chosen units.</summary>
         public static float[] SnapSteps => Ui.SnapSteps;
 
@@ -668,9 +671,9 @@ namespace RobotVacuum.LevelEditor
             snapped = fittedCenter;
 
             if (TryFindAnyEdge(snapped, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
-                Level.HasDoorwayOnWall(wallRoom, wallEdge))
+                Level.DoorwayOverlapsOnWall(wallRoom, wallEdge, snapped, fittedWidth, MinWallBetweenDoorways))
             {
-                Notice?.Invoke("This wall already has a doorway.");
+                Notice?.Invoke("That would overlap another doorway on this wall.");
                 return false;
             }
 
@@ -700,14 +703,15 @@ namespace RobotVacuum.LevelEditor
             if (doorway == null) return;
 
             Vector2 snapped = SnapToNearestWall(point, out int roomA, out int roomB);
+            float width = doorway.width;
             if (roomA >= 0)
             {
-                if (!TryFitDoorwayToWall(roomA, snapped, doorway.width, out Vector2 fittedCenter, out _)) return;
+                if (!TryFitDoorwayToWall(roomA, snapped, doorway.width, out Vector2 fittedCenter, out width)) return;
                 snapped = fittedCenter;
             }
 
             if (TryFindAnyEdge(snapped, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
-                Level.HasDoorwayOnWall(wallRoom, wallEdge, index))
+                Level.DoorwayOverlapsOnWall(wallRoom, wallEdge, snapped, width, MinWallBetweenDoorways, index))
                 return;
 
             doorway.center = snapped;
@@ -725,12 +729,24 @@ namespace RobotVacuum.LevelEditor
             var doorway = GetDoorway(index);
             if (doorway == null) return;
 
+            Vector2 previousCenter = doorway.center;
+            float previousWidth = doorway.width;
+
             doorway.width = Mathf.Clamp(width, MinDoorwayWidth, MaxDoorwayWidth);
             if (doorway.roomA >= 0 &&
                 TryFitDoorwayToWall(doorway.roomA, doorway.center, doorway.width, out Vector2 fittedCenter, out float fittedWidth))
             {
                 doorway.center = fittedCenter;
                 doorway.width = fittedWidth;
+            }
+
+            // Widening into a neighbouring doorway on the same wall is refused.
+            if (TryFindAnyEdge(doorway.center, Level.DoorwaySnapDistance, out int wallRoom, out int wallEdge, out _) &&
+                Level.DoorwayOverlapsOnWall(wallRoom, wallEdge, doorway.center, doorway.width, MinWallBetweenDoorways, index))
+            {
+                doorway.center = previousCenter;
+                doorway.width = previousWidth;
+                return;
             }
             NotifyLiveChange();
         }
@@ -935,7 +951,17 @@ namespace RobotVacuum.LevelEditor
         /// optional alignment grid. <paramref name="zoom"/> is canvas pixels per metre.
         /// A <paramref name="skipRoom"/> with <paramref name="skipVertex"/> of -1 ignores that whole room.
         /// </summary>
-        public Vector2 Snap(Vector2 point, float zoom, int skipRoom = -1, int skipVertex = -1)
+        /// <summary>
+        /// Where a click at <paramref name="point"/> lands: a room corner within reach, else (with
+        /// <paramref name="toWalls"/>) a point on a room's wall within reach, else the alignment grid.
+        /// <paramref name="toWalls"/> is for points that shape a room (outline corners, a rectangle's corners, a
+        /// dragged corner): a room drawn against another room's wall then shares it exactly. Without it, the grid
+        /// point beside a wall that isn't on the grid (a dragged or slanted wall) fell a little inside the other room,
+        /// and the room was refused as overlapping. The point on the wall is the grid point moved onto the wall, so
+        /// it stays lined up with the grid where it can. Corners and walls both follow "snap to corners"; the room
+        /// being edited (<paramref name="skipRoom"/>) never attracts its own points.
+        /// </summary>
+        public Vector2 Snap(Vector2 point, float zoom, int skipRoom = -1, int skipVertex = -1, bool toWalls = false)
         {
             if (!snapEnabled) return point;
 
@@ -965,9 +991,41 @@ namespace RobotVacuum.LevelEditor
                 }
 
                 if (found) return result;
+
+                if (toWalls && TryNearestWall(point, HandlePixels * 1.4f / zoom, skipRoom, out Vector2 wallA, out Vector2 wallB))
+                {
+                    Poly2D.DistanceToSegment(SnapToGridStep(point), wallA, wallB, out float t);
+                    return Vector2.Lerp(wallA, wallB, t);
+                }
             }
 
             return SnapToGridStep(point);
+        }
+
+        /// <summary>The room edge nearest <paramref name="point"/> within <paramref name="reach"/>, skipping one room.</summary>
+        bool TryNearestWall(Vector2 point, float reach, int skipRoom, out Vector2 a, out Vector2 b)
+        {
+            a = b = default;
+            float best = reach;
+            bool found = false;
+            for (int r = 0; r < Level.Rooms.Count; r++)
+            {
+                var room = Level.Rooms[r];
+                if (room == null || r == skipRoom || room.outline == null || room.outline.Count < 2) continue;
+
+                for (int v = 0; v < room.outline.Count; v++)
+                {
+                    Vector2 start = room.outline[v], end = room.outline[(v + 1) % room.outline.Count];
+                    float distance = Poly2D.DistanceToSegment(point, start, end, out _);
+                    if (distance > best) continue;
+
+                    best = distance;
+                    a = start;
+                    b = end;
+                    found = true;
+                }
+            }
+            return found;
         }
 
         /// <summary>Rounds to the alignment grid when grid snapping is on, ignoring room corners.</summary>
