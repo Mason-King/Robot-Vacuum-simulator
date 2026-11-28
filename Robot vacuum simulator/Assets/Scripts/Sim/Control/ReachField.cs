@@ -19,8 +19,11 @@ namespace RobotVacuum.Sim.Control
         public const float StartSearchMeters = 0.4f;
 
         float[] distance = new float[0];
-        readonly List<int> heapIndex = new List<int>();
-        readonly List<float> heapKey = new List<float>();
+        // A binary min-heap in two arrays (index, key). Pushes and pops follow the same order as the List version it
+        // replaced, so ties are broken the same way and the distances come out bit-identical.
+        int[] heapIndex = new int[0];
+        float[] heapKey = new float[0];
+        int heapCount;
         MapSnapshot snapshot;
 
         public float Distance(int row, int col)
@@ -37,8 +40,7 @@ namespace RobotVacuum.Sim.Control
             int rows = snapshot.Rows, cols = snapshot.Cols, n = rows * cols;
             if (distance.Length < n) distance = new float[n];
             for (int i = 0; i < n; i++) distance[i] = float.PositiveInfinity;
-            heapIndex.Clear();
-            heapKey.Clear();
+            heapCount = 0;
             if (n == 0 || !map.TryWorldToCell(from, out var start)) return;
 
             float cell = snapshot.CellSize;
@@ -58,7 +60,8 @@ namespace RobotVacuum.Sim.Control
                 }
 
             float diagonal = cell * 1.41421356f;
-            while (heapIndex.Count > 0)
+            bool[] fits = snapshot.FitsByIndex;
+            while (heapCount > 0)
             {
                 Pop(out int i, out float d);
                 if (d > distance[i]) continue;
@@ -69,11 +72,11 @@ namespace RobotVacuum.Sim.Control
                         if (dr == 0 && dc == 0) continue;
                         int rr = r + dr, cc = c + dc;
                         if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) continue;
-                        int row = snapshot.MinRow + rr, col = snapshot.MinCol + cc;
-                        if (!snapshot.BodyFits(row, col)) continue;
-                        if (dr != 0 && dc != 0 && (!snapshot.BodyFits(row - dr, col) || !snapshot.BodyFits(row, col - dc))) continue;
-                        float next = d + (dr != 0 && dc != 0 ? diagonal : cell);
                         int j = rr * cols + cc;
+                        if (!fits[j]) continue;
+                        // No cutting a corner: both cells beside a diagonal step must fit too (both are inside the grid).
+                        if (dr != 0 && dc != 0 && (!fits[r * cols + cc] || !fits[rr * cols + c])) continue;
+                        float next = d + (dr != 0 && dc != 0 ? diagonal : cell);
                         if (next >= distance[j]) continue;
                         distance[j] = next;
                         Push(j, next);
@@ -81,11 +84,42 @@ namespace RobotVacuum.Sim.Control
             }
         }
 
+        /// <summary>
+        /// Copies which cells are reachable into <paramref name="into"/> (resized to the snapshot) and returns true when
+        /// that set differs from what <paramref name="into"/> held. Lets the room split be reused when nothing it reads changed.
+        /// </summary>
+        internal bool CopyReachable(ref bool[] into)
+        {
+            int n = snapshot != null ? snapshot.Rows * snapshot.Cols : 0;
+            bool differs = false;
+            if (into == null || into.Length != n)
+            {
+                into = new bool[n];
+                differs = true;
+            }
+            for (int i = 0; i < n; i++)
+            {
+                bool reachable = !float.IsPositiveInfinity(distance[i]);
+                if (into[i] != reachable)
+                {
+                    into[i] = reachable;
+                    differs = true;
+                }
+            }
+            return differs;
+        }
+
         void Push(int index, float key)
         {
-            heapIndex.Add(index);
-            heapKey.Add(key);
-            int i = heapIndex.Count - 1;
+            if (heapCount == heapIndex.Length)
+            {
+                int size = Math.Max(1024, heapIndex.Length * 2);
+                Array.Resize(ref heapIndex, size);
+                Array.Resize(ref heapKey, size);
+            }
+            heapIndex[heapCount] = index;
+            heapKey[heapCount] = key;
+            int i = heapCount++;
             while (i > 0)
             {
                 int up = (i - 1) / 2;
@@ -99,17 +133,15 @@ namespace RobotVacuum.Sim.Control
         {
             index = heapIndex[0];
             key = heapKey[0];
-            int last = heapIndex.Count - 1;
+            int last = --heapCount;
             heapIndex[0] = heapIndex[last];
             heapKey[0] = heapKey[last];
-            heapIndex.RemoveAt(last);
-            heapKey.RemoveAt(last);
             int i = 0;
             while (true)
             {
                 int l = 2 * i + 1, r = l + 1, s = i;
-                if (l < heapIndex.Count && heapKey[l] < heapKey[s]) s = l;
-                if (r < heapIndex.Count && heapKey[r] < heapKey[s]) s = r;
+                if (l < heapCount && heapKey[l] < heapKey[s]) s = l;
+                if (r < heapCount && heapKey[r] < heapKey[s]) s = r;
                 if (s == i) break;
                 Swap(i, s);
                 i = s;

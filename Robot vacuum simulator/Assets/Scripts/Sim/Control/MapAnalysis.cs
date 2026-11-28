@@ -32,6 +32,8 @@ namespace RobotVacuum.Sim.Control
 
         public bool SkipRooms { get; set; }
         bool roomsStale; // rooms were skipped since they were last found
+        bool roomsBuilt;
+        bool[] roomsReachable; // the reachable cells the room split was last built from
 
         public bool Update(Vec2 robot)
         {
@@ -44,7 +46,15 @@ namespace RobotVacuum.Sim.Control
             if (SkipRooms) roomsStale = true;
             else
             {
-                rooms.Build(snapshot, map, reach, changed || roomsStale);
+                // The room split reads only the walls (changed) and which cells are reachable. When neither moved, the
+                // last split stands; a robot that ends up on floor cut off from where it was changes the reachable set.
+                bool reachChanged = reach.CopyReachable(ref roomsReachable);
+                if (changed || roomsStale || reachChanged || !roomsBuilt)
+                {
+                    rooms.Build(snapshot, map, reach, changed || roomsStale || !roomsBuilt);
+                    roomsBuilt = true;
+                    RoomBuilds++;
+                }
                 roomsStale = false;
             }
             long done = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -62,6 +72,9 @@ namespace RobotVacuum.Sim.Control
         /// <summary>Update calls, and how many found the walls or explored cells changed (redoing the distance transform and doorway search).</summary>
         public int Updates { get; private set; }
         public int ChangedUpdates { get; private set; }
+
+        /// <summary>Updates that redid the room split (the rest reused it: walls and reachable cells unchanged).</summary>
+        public int RoomBuilds { get; private set; }
 
         /// <summary>Real ms in Update's three parts: copying the map (and, when changed, its distance transform), the reach flood, the rooms.</summary>
         public double SnapshotMs { get; private set; }

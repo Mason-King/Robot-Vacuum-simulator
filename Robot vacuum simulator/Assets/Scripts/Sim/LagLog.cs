@@ -315,7 +315,8 @@ namespace RobotVacuum.Sim
             {
                 double total = analysis.SnapshotMs + analysis.ReachMs + analysis.RoomsMs;
                 line.Append("\n  Map analysis (inside algorithm): ").Append((analysis.Updates / seconds).ToString("F2"))
-                    .Append(" updates per sim second (").Append(analysis.ChangedUpdates).Append(" with the map changed), ")
+                    .Append(" updates per sim second (").Append(analysis.ChangedUpdates).Append(" with the map changed, ")
+                    .Append(analysis.RoomBuilds).Append(" redoing the rooms), ")
                     .Append((total / seconds).ToString("F2")).Append(" ms per sim second: snapshot ")
                     .Append((analysis.SnapshotMs / seconds).ToString("F2")).Append(", reach ")
                     .Append((analysis.ReachMs / seconds).ToString("F2")).Append(", rooms ")

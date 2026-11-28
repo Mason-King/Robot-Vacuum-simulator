@@ -21,6 +21,8 @@ namespace RobotVacuum.Sim.Control
         bool[] wasExplored = new bool[0];
         int lastMinRow, lastMinCol, lastRows = -1, lastCols = -1;
         float[] distance = new float[0];   // metres from the cell's centre to the nearest blocked cell's edge (conservative)
+        bool[] fits = new bool[0];         // BodyFits per element, redone with the distance transform or when the clearance changes
+        float fitsClearance = float.NaN;
         float[] scratchF = new float[0];
         int[] scratchV = new int[0];
         float[] scratchZ = new float[0];
@@ -115,6 +117,14 @@ namespace RobotVacuum.Sim.Control
                 DistanceTransform();
                 TransformMs += (System.Diagnostics.Stopwatch.GetTimestamp() - copied) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             }
+            if (changed || Clearance != fitsClearance || fits.Length < n)
+            {
+                // The same test as BodyFits, worked out once per change instead of on every query (the reach flood
+                // asks up to 24 times per cell).
+                if (fits.Length < n) fits = new bool[n];
+                for (int i = 0; i < n; i++) fits[i] = explored[i] > 0.5f && distance[i] >= Clearance;
+                fitsClearance = Clearance;
+            }
             return changed;
         }
 
@@ -146,7 +156,13 @@ namespace RobotVacuum.Sim.Control
         public float ObstacleDistance(int row, int col) => Contains(row, col) ? distance[Index(row, col)] : float.PositiveInfinity;
 
         /// <summary>The body fits with its centre here: explored, and at least the clearance from anything blocked.</summary>
-        public bool BodyFits(int row, int col) => IsExplored(row, col) && ObstacleDistance(row, col) >= Clearance;
+        public bool BodyFits(int row, int col) => Contains(row, col) && fits[Index(row, col)];
+
+        /// <summary>
+        /// <see cref="BodyFits"/> for every element (index as <see cref="IndexOf"/>), for floods that test every cell's
+        /// neighbours. Read only; valid until the next <see cref="Take"/>.
+        /// </summary>
+        internal bool[] FitsByIndex => fits;
 
         // ---- Euclidean distance transform ----------------------------------------------------------------
 
