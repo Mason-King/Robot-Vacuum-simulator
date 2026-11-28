@@ -230,9 +230,8 @@ namespace RobotVacuum.Headless
 
                 var settings = new RunSettings
                 {
-                    // The job has already resolved the name to a catalog id; a built-in's pattern follows it (RunSettings.Resolved).
+                    // The job has already resolved the name to a catalog id.
                     algorithmId = run.algorithm,
-                    pattern = AlgorithmCatalog.PatternOf(run.algorithm) ?? MovementPattern.RandomBounce,
                     randomSeed = false,
                     seed = run.seed,
                     targetMaxClean = currentConfig.simulation.targetMaxClean,

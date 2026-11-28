@@ -27,9 +27,7 @@ namespace RobotVacuum.Sim.Control
     /// Not covered (disclosed, C.4): a hand-written .dll whose IL is deliberately unverifiable is not detected. DLLs
     /// are only ever loaded from the user's own Algorithms folder; jobs sent to other machines carry source only, so
     /// remote code always goes through the full source check. A plugin that loops forever or allocates without limit
-    /// is a reliability problem, not a trust one: <see cref="AlgorithmGuard"/> handles it at run time in every run (a
-    /// crash, a hang or an invalid move ends that run, not the simulator), backed by the run limits and process
-    /// isolation of headless jobs (2.11).
+    /// is a reliability problem handled by the run limits and process isolation of headless jobs (2.11), not by this.
     /// </summary>
     public static class AlgorithmSandbox
     {
@@ -173,7 +171,7 @@ namespace RobotVacuum.Sim.Control
             if (name.StartsWith("System.Numerics.Vector", StringComparison.Ordinal))
                 return " Its size depends on the processor, so results would differ between machines (2.1).";
             if (name == "System.Diagnostics.Process" || Under("System.Diagnostics.Process")) return " Algorithms cannot start other programs.";
-            if (Under("System.Threading")) return " An algorithm runs on the simulation's thread: threads, tasks, timers and locks are not available.";
+            if (Under("System.Threading")) return " The simulation calls an algorithm one call at a time and waits for it (on a thread it manages): threads, tasks, timers and locks are not available.";
             if (Under("System.IO")) return " Algorithms cannot read or write files.";
             if (Under("System.Net")) return " Algorithms cannot use the network.";
             if (Under("System.Runtime.InteropServices")) return " Native code is not available to algorithms.";

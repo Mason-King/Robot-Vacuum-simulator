@@ -341,7 +341,7 @@ namespace RobotVacuum.LevelEditor
             foreach (var run in runs)
             {
                 if (run == null) continue;
-                if (run.mixedPatterns)
+                if (run.algorithmSwitches != null && run.algorithmSwitches.Count > 0) // switched algorithm mid-run
                 {
                     report.excludedMixed++;
                     continue;

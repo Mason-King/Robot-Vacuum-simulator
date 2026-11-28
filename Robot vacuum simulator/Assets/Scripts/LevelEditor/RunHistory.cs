@@ -31,16 +31,19 @@ namespace RobotVacuum.LevelEditor
         public string finishedAt;
         public string endReason;
 
-        public MovementPattern pattern;
-
         /// <summary>
         /// The <see cref="AlgorithmCatalog"/> id and name the run used. Empty in runs recorded before they existed;
-        /// <see cref="AlgorithmKey"/> and <see cref="AlgorithmName"/> fall back to <see cref="pattern"/> then.
+        /// <see cref="AlgorithmKey"/> and <see cref="AlgorithmName"/> fall back to the default (Random) then.
         /// </summary>
         public string algorithmId;
         public string algorithmName;
 
-        public bool mixedPatterns;
+        /// <summary>
+        /// Mid-run switches of algorithm (2.16), oldest first. <see cref="algorithmId"/> is the one the run started
+        /// with. Empty when it never switched (and in runs recorded before 2026-11-26).
+        /// </summary>
+        public List<RunAlgorithmSwitch> algorithmSwitches = new List<RunAlgorithmSwitch>();
+
         public VacuumSettings vacuum;
 
         /// <summary>The random seed the run started from; the same seed and settings replay it exactly.</summary>
@@ -113,6 +116,14 @@ namespace RobotVacuum.LevelEditor
         public List<int> roomVisits = new List<int>();
         public List<float> roomArea = new List<float>();
 
+        /// <summary>
+        /// Coverage of each floor type on its own (graded against the target, like <see cref="coveragePercent"/>),
+        /// with <see cref="floorNames"/> alongside: the rooms on that floor, weighted by their area. Empty for runs
+        /// recorded before this existed.
+        /// </summary>
+        public List<string> floorNames = new List<string>();
+        public List<float> floorCoverage = new List<float>();
+
         /// <summary>Every setting changed during the run.</summary>
         public List<ParameterEvent> parameterEvents = new List<ParameterEvent>();
 
@@ -133,12 +144,10 @@ namespace RobotVacuum.LevelEditor
         public List<float> coverageSamples = new List<float>();
         public float sampleInterval = 1f;
 
-        public string PatternLabel => mixedPatterns ? "Mixed" : AlgorithmName;
-
         /// <summary>What runs are grouped by when algorithms are compared.</summary>
-        public string AlgorithmKey => !string.IsNullOrEmpty(algorithmId) ? algorithmId : AlgorithmCatalog.IdOf(pattern);
+        public string AlgorithmKey => AlgorithmCatalog.OrDefault(algorithmId);
 
-        public string AlgorithmName => !string.IsNullOrEmpty(algorithmName) ? algorithmName : MovementAlgorithms.LabelOf(pattern);
+        public string AlgorithmName => !string.IsNullOrEmpty(algorithmName) ? algorithmName : AlgorithmCatalog.NameOf(AlgorithmKey);
 
         public bool IsBatch => !string.IsNullOrEmpty(batchId);
 

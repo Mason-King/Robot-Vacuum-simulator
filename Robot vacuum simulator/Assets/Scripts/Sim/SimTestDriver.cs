@@ -37,7 +37,6 @@ namespace RobotVacuum.Sim
         LevelData runLevel;
         LevelData handedLevel;
         SimHud hud;
-        RunEndPanel endPanel;
         bool overlayBox; // the Show Belief Overlay box as last applied, so only a change of the box is passed on
         HeatmapMode heatmapBox; // the Heatmap Mode as last applied, likewise
 
@@ -82,10 +81,13 @@ namespace RobotVacuum.Sim
             if (!SimulationSession.TryStart(runLevel, settings, headless: false, out session, out string error))
             {
                 Debug.LogError($"SimTestDriver: {error}", this);
+
+                // Started from the app: go back to where the run was started from rather than leave an empty scene
+                // with no way out. (Played straight from this scene in the editor: stay, the error is in the Console.)
+                if (handedLevel != null) SimLauncher.ReturnFromSimulation();
                 return;
             }
 
-            session.Finished += OnRunFinished;
             session.Closed += OnSessionClosed;
             overlayBox = settings.showBeliefOverlay;
             heatmapBox = settings.heatmapMode;
@@ -93,8 +95,7 @@ namespace RobotVacuum.Sim
 
             FrameCamera();
 
-            endPanel = RunEndPanel.Create(transform);
-
+            // The HUD handles the run's stops and end (the stop card, Resume, Run Again, Finish, Back), 2.11.
             hud = new GameObject("Simulator HUD").AddComponent<SimHud>();
             hud.RestartRequested = RunAgain;
             hud.LeaveRequested = LeaveToEditor;
@@ -125,7 +126,6 @@ namespace RobotVacuum.Sim
         {
             if (session != null)
             {
-                session.Finished -= OnRunFinished;
                 session.Closed -= OnSessionClosed;
                 session.Close(); // records the run as stopped by user if it was still going
                 session = null;
@@ -189,27 +189,12 @@ namespace RobotVacuum.Sim
 
         // ---------------------------------------------------------------- run end
 
-        void OnRunFinished(SimulationSession finished)
-        {
-            var result = finished.Result;
-            string detail = result == null
-                ? "No result was recorded."
-                : $"Coverage {result.coveragePercent:0.0}%  ·  {FormatTime(result.simulatedSeconds)} simulated  ·  seed {result.seed}";
-
-            if (result != null && !string.IsNullOrEmpty(result.errorMessage))
-                detail += "\n" + result.errorMessage;
-
-            endPanel.Show($"Run finished: {Describe(result != null ? result.endReason : RunEndReason.None)}",
-                detail, RunAgain, CloseRun, hud != null && hud.CanViewAnalysis ? hud.ViewAnalysis : (System.Action)null);
-        }
-
-        void RunAgain()
+        /// <param name="sameSeed">True: Run Again (exactly the seed just used). False: the bar's Restart (the configuration's seed choice).</param>
+        void RunAgain(bool sameSeed)
         {
             if (session == null) return;
 
-            if (endPanel != null) endPanel.Hide();
-
-            if (!session.Restart(out string error))
+            if (!session.Restart(sameSeed, out string error))
             {
                 Debug.LogError($"SimTestDriver: {error}", this);
                 return;
@@ -232,8 +217,6 @@ namespace RobotVacuum.Sim
 
         void OnSessionClosed(SimulationSession closed)
         {
-            if (endPanel != null) endPanel.Hide();
-
             // With the run gone the HUD has nothing to show. Destroying it also puts the time scale back and
             // releases the run's level.
             if (hud != null) Destroy(hud.gameObject);
@@ -262,31 +245,6 @@ namespace RobotVacuum.Sim
             SimLauncher.FrameCamera(camera, world);
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color(0.063f, 0.075f, 0.094f);
-        }
-
-        // ---------------------------------------------------------------- text
-
-        static string Describe(RunEndReason reason)
-        {
-            switch (reason)
-            {
-                case RunEndReason.Completed: return "completed";
-                case RunEndReason.BatteryDepleted: return "battery empty";
-                case RunEndReason.TimeCap: return "time limit reached";
-                case RunEndReason.StoppedByUser: return "stopped";
-                case RunEndReason.Error: return "error";
-                case RunEndReason.Degenerate: return "could not complete";
-                case RunEndReason.ReturnedLowBattery: return "returned to dock (battery low)";
-                default: return "unknown";
-            }
-        }
-
-        static string FormatTime(float seconds)
-        {
-            var span = System.TimeSpan.FromSeconds(Mathf.Max(0f, seconds));
-            return span.TotalHours >= 1
-                ? $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}"
-                : $"{span.Minutes:00}:{span.Seconds:00}";
         }
     }
 }

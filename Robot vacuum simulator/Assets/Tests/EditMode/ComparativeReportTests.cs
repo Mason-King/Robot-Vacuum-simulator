@@ -133,11 +133,12 @@ namespace RobotVacuum.Tests
 
     public class ComparativeReportTests
     {
-        static RunReport Run(MovementPattern pattern, int seed, float coverage, string level = "Flat", float timeTo90 = -1f) => new RunReport
+        static RunReport Run(string algorithm, int seed, float coverage, string level = "Flat", float timeTo90 = -1f) => new RunReport
         {
             id = Guid.NewGuid().ToString("N"),
             levelName = level,
-            pattern = pattern,
+            algorithmId = algorithm,
+            algorithmName = algorithm,
             seed = seed,
             coveragePercent = coverage,
             durationSeconds = 600f,
@@ -161,9 +162,9 @@ namespace RobotVacuum.Tests
             for (int seed = 1; seed <= 10; seed++)
             {
                 float lawn = seed == 7 && lawnmowerOnSeed7 >= 0 ? lawnmowerOnSeed7 : 92f + (float)random.NextDouble() * 4f;
-                runs.Add(Run(MovementPattern.Lawnmower, seed, lawn, level, lawn >= 90f ? 300f : -1f));
-                runs.Add(Run(MovementPattern.RandomBounce, seed, 60f + (float)random.NextDouble() * 10f, level));
-                runs.Add(Run(MovementPattern.WallFollow, seed, 60f + (float)random.NextDouble() * 10f, level));
+                runs.Add(Run("Lawnmower", seed, lawn, level, lawn >= 90f ? 300f : -1f));
+                runs.Add(Run("RandomBounce", seed, 60f + (float)random.NextDouble() * 10f, level));
+                runs.Add(Run("WallFollow", seed, 60f + (float)random.NextDouble() * 10f, level));
             }
             return runs;
         }
@@ -177,24 +178,24 @@ namespace RobotVacuum.Tests
             var coverage = report.conditions[0].For(ReportMetrics.Coverage);
             Assert.AreEqual("Friedman", coverage.omnibus.test, "shared seeds → Friedman");
             Assert.Less(coverage.omnibus.pValue, 0.001);
-            Assert.AreEqual(MovementPattern.Lawnmower, coverage.ranking[0].runs[0].pattern);
+            Assert.AreEqual("Lawnmower", coverage.ranking[0].runs[0].AlgorithmKey);
 
             foreach (var pair in coverage.pairs)
             {
                 Assert.IsTrue(pair.paired);
                 Assert.AreEqual("Wilcoxon signed-rank", pair.test.test);
                 Assert.GreaterOrEqual(pair.pAdjusted, pair.test.pValue, "Holm never lowers p");
-                bool involvesLawnmower = pair.a.runs[0].pattern == MovementPattern.Lawnmower || pair.b.runs[0].pattern == MovementPattern.Lawnmower;
+                bool involvesLawnmower = pair.a.runs[0].AlgorithmKey == "Lawnmower" || pair.b.runs[0].AlgorithmKey == "Lawnmower";
                 if (involvesLawnmower)
                 {
                     Assert.IsTrue(pair.Significant);
-                    Assert.AreEqual(MovementPattern.Lawnmower, pair.better.runs[0].pattern);
+                    Assert.AreEqual("Lawnmower", pair.better.runs[0].AlgorithmKey);
                     Assert.AreEqual("large", pair.test.Magnitude);
                 }
             }
 
             var t90 = report.conditions[0].For(ReportMetrics.TimeTo90);
-            Assert.AreEqual(MovementPattern.Lawnmower, t90.ranking[0].runs[0].pattern, "runs that never reach 90% rank last");
+            Assert.AreEqual("Lawnmower", t90.ranking[0].runs[0].AlgorithmKey, "runs that never reach 90% rank last");
             Assert.AreEqual(10, t90.ranking[1][ReportMetrics.TimeTo90].censored);
         }
 
@@ -225,7 +226,7 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(3, report.conditions.Count, "floor plan and sensing both define a condition");
             Assert.IsNotNull(report.cross);
             Assert.AreEqual(3, report.cross.conditions.Count);
-            int lawnmower = report.cross.algorithmNames.IndexOf(MovementAlgorithms.LabelOf(MovementPattern.Lawnmower));
+            int lawnmower = report.cross.algorithmNames.IndexOf("Lawnmower");
             Assert.AreEqual(1.0, report.cross.meanRanks[lawnmower], 1e-9);
             Assert.AreEqual(3, report.cross.wins[lawnmower]);
             Assert.AreEqual("Friedman", report.cross.friedman.test);
@@ -237,8 +238,8 @@ namespace RobotVacuum.Tests
             var runs = new List<RunReport>();
             for (int i = 0; i < 6; i++)
             {
-                runs.Add(Run(MovementPattern.Lawnmower, 100 + i, 90f + i));
-                runs.Add(Run(MovementPattern.RandomBounce, 200 + i, 50f + i));
+                runs.Add(Run("Lawnmower", 100 + i, 90f + i));
+                runs.Add(Run("RandomBounce", 200 + i, 50f + i));
             }
 
             var pair = ComparativeReport.Build(runs, new ReportOptions { assisted = false }).conditions[0].For(ReportMetrics.Coverage).pairs[0];
@@ -253,7 +254,7 @@ namespace RobotVacuum.Tests
             var report = ComparativeReport.Build(Batch(lawnmowerOnSeed7: 20f), new ReportOptions { assisted = true });
 
             Assert.IsNotNull(report.assisted);
-            var flagged = report.assisted.anomalies.Find(a => a.run.seed == 7 && a.run.pattern == MovementPattern.Lawnmower && a.metric == "Coverage");
+            var flagged = report.assisted.anomalies.Find(a => a.run.seed == 7 && a.run.AlgorithmKey == "Lawnmower" && a.metric == "Coverage");
             Assert.IsNotNull(flagged, "the 20% Lawnmower trial stands out from its 92–96% siblings");
             Assert.Less(flagged.score, -AssistedAnalysis.AnomalyThreshold);
 
@@ -268,14 +269,14 @@ namespace RobotVacuum.Tests
         public void Failures_AreCountedByKind_AndShownBesideTheResults()
         {
             var runs = Batch();
-            var lawnmower = runs.FindAll(r => r.pattern == MovementPattern.Lawnmower);
+            var lawnmower = runs.FindAll(r => r.AlgorithmKey == "Lawnmower");
             lawnmower[0].failure = "NextGoal threw IndexOutOfRangeException";
             lawnmower[0].failureKind = "Crash";
             lawnmower[1].failure = "NextGoal did not return within 2 s";
             lawnmower[1].failureKind = "Hang";
 
             var report = ComparativeReport.Build(runs, new ReportOptions { assisted = false });
-            var group = report.conditions[0].algorithms.Find(g => g.runs[0].pattern == MovementPattern.Lawnmower);
+            var group = report.conditions[0].algorithms.Find(g => g.runs[0].AlgorithmKey == "Lawnmower");
 
             Assert.AreEqual(2, group.Failed);
             CollectionAssert.AreEqual(new[] { "Crash", "Hang" }, group.FailureKinds().Keys);

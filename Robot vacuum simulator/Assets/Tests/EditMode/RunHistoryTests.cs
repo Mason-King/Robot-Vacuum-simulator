@@ -3,6 +3,7 @@ using System.IO;
 using NUnit.Framework;
 using RobotVacuum.LevelEditor;
 using RobotVacuum.Sim;
+using RobotVacuum.Sim.Control;
 
 namespace RobotVacuum.Tests
 {
@@ -21,11 +22,11 @@ namespace RobotVacuum.Tests
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
         }
 
-        static RunReport Run(string level, MovementPattern pattern, float coverage, float seconds, string finishedAt = null) => new RunReport
+        static RunReport Run(string level, float coverage, float seconds, string finishedAt = null, string algorithmId = null) => new RunReport
         {
             levelName = level,
             levelPath = level + ".json",
-            pattern = pattern,
+            algorithmId = algorithmId,
             coveragePercent = coverage,
             durationSeconds = seconds,
             finishedAt = finishedAt,
@@ -41,7 +42,7 @@ namespace RobotVacuum.Tests
         [Test]
         public void Add_StampsTheRun_AndRoundTripsIt()
         {
-            var report = Run("Flat", MovementPattern.Spiral, 42.5f, 90f);
+            var report = Run("Flat", 42.5f, 90f);
             report.AddSample(0f);
             report.AddSample(10f);
 
@@ -51,7 +52,8 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(1, loaded.Count);
             Assert.IsFalse(string.IsNullOrEmpty(loaded[0].id));
             Assert.AreNotEqual(DateTime.MinValue, loaded[0].FinishedAt);
-            Assert.AreEqual(MovementPattern.Spiral, loaded[0].pattern);
+            Assert.AreEqual("RandomBounce", loaded[0].AlgorithmKey, "no id recorded = Random");
+            Assert.AreEqual("Random", loaded[0].AlgorithmName);
             Assert.AreEqual(42.5f, loaded[0].coveragePercent, 1e-4f);
             Assert.AreEqual(new[] { 0f, 10f }, loaded[0].coverageSamples.ToArray());
             Assert.AreEqual(0.65f, loaded[0].vacuum.driveSpeed, 1e-5f);
@@ -60,9 +62,9 @@ namespace RobotVacuum.Tests
         [Test]
         public void LoadAll_IsNewestFirst()
         {
-            RunHistory.Add(Run("Old", MovementPattern.RandomBounce, 10f, 60f, "2026-01-01T10:00:00"), path);
-            RunHistory.Add(Run("New", MovementPattern.RandomBounce, 10f, 60f, "2026-03-01T10:00:00"), path);
-            RunHistory.Add(Run("Middle", MovementPattern.RandomBounce, 10f, 60f, "2026-02-01T10:00:00"), path);
+            RunHistory.Add(Run("Old", 10f, 60f, "2026-01-01T10:00:00"), path);
+            RunHistory.Add(Run("New", 10f, 60f, "2026-03-01T10:00:00"), path);
+            RunHistory.Add(Run("Middle", 10f, 60f, "2026-02-01T10:00:00"), path);
 
             var loaded = RunHistory.LoadAll(path);
 
@@ -72,8 +74,8 @@ namespace RobotVacuum.Tests
         [Test]
         public void Delete_RemovesOnlyThatRun_AndClearRemovesAll()
         {
-            var keep = Run("Keep", MovementPattern.Spiral, 1f, 1f);
-            var drop = Run("Drop", MovementPattern.Spiral, 1f, 1f);
+            var keep = Run("Keep", 1f, 1f);
+            var drop = Run("Drop", 1f, 1f);
             RunHistory.Add(keep, path);
             RunHistory.Add(drop, path);
 
@@ -110,7 +112,7 @@ namespace RobotVacuum.Tests
         [Test]
         public void DerivedFigures_FollowTheRecordedValues()
         {
-            var report = Run("Flat", MovementPattern.Spiral, 50f, 120f);
+            var report = Run("Flat", 50f, 120f);
             report.floorArea = 30f;
             report.blockedArea = 10f;
             report.batteryUsed = 75f;
@@ -119,34 +121,28 @@ namespace RobotVacuum.Tests
             Assert.AreEqual(10f, report.CleanedArea, 1e-4f);
             Assert.AreEqual(25f, report.CoveragePerMinute, 1e-4f);
             Assert.AreEqual(25f, report.BatteryUsedPercent, 1e-4f);
-            Assert.AreEqual("Spiral", report.PatternLabel);
-
-            report.mixedPatterns = true;
-            Assert.AreEqual("Mixed", report.PatternLabel);
+            Assert.AreEqual("Random", report.AlgorithmName);
         }
 
         [Test]
-        public void ComparePatterns_AveragesPerPattern_BestFirst_AndSkipsMixedRuns()
+        public void CompareAlgorithms_AveragesPerAlgorithm_BestFirst()
         {
-            var mixed = Run("Flat", MovementPattern.Spiral, 99f, 60f);
-            mixed.mixedPatterns = true;
             var runs = new[]
             {
-                Run("Flat", MovementPattern.RandomBounce, 40f, 60f),
-                Run("Flat", MovementPattern.RandomBounce, 60f, 120f),
-                Run("Flat", MovementPattern.Lawnmower, 80f, 60f),
-                Run("House", MovementPattern.Spiral, 90f, 60f),
-                mixed,
+                Run("Flat", 40f, 60f),
+                Run("Flat", 60f, 120f),
+                Run("Flat", 80f, 60f, algorithmId: "BoustrophedonSweep"),
+                Run("House", 90f, 60f, algorithmId: "Mouse"),
             };
 
-            var all = AnalysisView.ComparePatterns(runs);
+            var all = AnalysisView.CompareAlgorithms(runs);
             Assert.AreEqual(3, all.Count);
-            Assert.AreEqual(MovementPattern.Spiral, all[0].pattern);
+            Assert.AreEqual("Mouse", all[0].algorithmId);
 
-            var flat = AnalysisView.ComparePatterns(runs, "Flat.json", "Flat");
+            var flat = AnalysisView.CompareAlgorithms(runs, "Flat.json", "Flat");
             Assert.AreEqual(2, flat.Count);
-            Assert.AreEqual(MovementPattern.Lawnmower, flat[0].pattern);
-            Assert.AreEqual(MovementPattern.RandomBounce, flat[1].pattern);
+            Assert.AreEqual("BoustrophedonSweep", flat[0].algorithmId);
+            Assert.AreEqual("RandomBounce", flat[1].algorithmId);
             Assert.AreEqual(2, flat[1].runs);
             Assert.AreEqual(50f, flat[1].averageCoverage, 1e-4f);
             Assert.AreEqual(90f, flat[1].averageSeconds, 1e-4f);
@@ -161,7 +157,7 @@ namespace RobotVacuum.Tests
         {
             var data = SimConfig.Data.Parse(null);
 
-            Assert.AreEqual(MovementPattern.RandomBounce, data.pattern);
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, data.runSettings.algorithmId);
             Assert.AreEqual(0.65f, data.vacuum.driveSpeed, 1e-5f);
             Assert.AreEqual(300f, data.vacuum.batteryCapacity, 1e-5f);
         }
@@ -169,24 +165,26 @@ namespace RobotVacuum.Tests
         [Test]
         public void Parse_RoundTripsSavedSettings()
         {
-            var saved = new SimConfig.Data { pattern = MovementPattern.Lawnmower };
+            var saved = new SimConfig.Data();
+            saved.runSettings.algorithmId = "BoustrophedonSweep";
             saved.vacuum.driveSpeed = 1.1f;
             saved.vacuum.useFeet = true;
 
             var data = SimConfig.Data.Parse(saved.ToJson());
 
-            Assert.AreEqual(MovementPattern.Lawnmower, data.pattern);
+            Assert.AreEqual("BoustrophedonSweep", data.runSettings.algorithmId);
             Assert.AreEqual(1.1f, data.vacuum.driveSpeed, 1e-5f);
             Assert.IsTrue(data.vacuum.useFeet);
         }
 
         [TestCase("{ broken")]
         [TestCase("{\"pattern\":99}")]
+        [TestCase("{\"runSettings\":{\"algorithmId\":\"Legacy.Spiral\"}}")]
         public void Parse_BadInput_FallsBackToDefaults(string json)
         {
             var data = SimConfig.Data.Parse(json);
 
-            Assert.AreEqual(MovementPattern.RandomBounce, data.pattern);
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, data.runSettings.algorithmId);
             Assert.IsNotNull(data.vacuum);
         }
     }

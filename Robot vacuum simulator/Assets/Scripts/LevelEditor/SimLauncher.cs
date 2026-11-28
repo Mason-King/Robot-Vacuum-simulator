@@ -27,13 +27,6 @@ namespace RobotVacuum.LevelEditor
         static string focusedRunId;
         static BatchSpec pendingBatch;
 
-        /// <summary>The movement algorithm, shared with every screen through <see cref="SimConfig"/>.</summary>
-        public static MovementPattern MovementPattern
-        {
-            get => SimConfig.Pattern;
-            set => SimConfig.Pattern = value;
-        }
-
         /// <summary>Where the running simulation was started from.</summary>
         public static SimOrigin Origin { get; private set; }
 

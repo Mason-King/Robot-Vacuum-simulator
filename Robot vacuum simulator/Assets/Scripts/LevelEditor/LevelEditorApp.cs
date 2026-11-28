@@ -1314,9 +1314,9 @@ namespace RobotVacuum.LevelEditor
             Robot = robotObject.AddComponent<VacuumRobot>();
             Robot.ShapeKind = SimConfig.Vacuum.shape;
             Battery = robotObject.GetComponent<Battery>();
-            Robot.Pattern = SimLauncher.MovementPattern;
+            Robot.AlgorithmId = SimConfig.RunSettings.algorithmId;
             // The run's configured seed (a fresh one when "new random seed every run" is on), not the default.
-            Robot.Seed = SimConfig.ToRunSettings(SimLauncher.MovementPattern).Resolved().seed;
+            Robot.Seed = SimConfig.ToRunSettings().Resolved().seed;
 
             // Coverage tracking and its heatmap, as in the simulation scene.
             Cleaning = robotObject.AddComponent<VacuumCleaningController>();

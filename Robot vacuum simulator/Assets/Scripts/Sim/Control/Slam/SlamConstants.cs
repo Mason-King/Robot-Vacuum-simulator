@@ -96,30 +96,11 @@ namespace RobotVacuum.Sim.Control
         /// <summary>A scan with fewer hits than this isn't matched (the odometry guess is kept).</summary>
         public const int MinHits = 10;
 
-        // ---- Hit-field matching (fix 1; kept, switched OFF by Eric, 2026-11-05) ----
-        // Experiment_HitField (8 seeds × 300 s, 360-scan submaps, loop closure on), σ 3 cm vs cell centres:
-        //   matcher bias at fixed true poses: exact map 1.71 → 0.21 cm, as-built map 0.96 → 0.55 cm;
-        //   live: test apartment worst 7.9 → 6.7 cm, p99 6.7 → 6.0; angled apartment worst 7.4 → 6.6, p99 6.3 → 5.7.
-        //   FAILED its stop rule: the room-driven rotation it was aimed at did not move (+0.26° → +0.27°).
-        //   σ 5 cm was worse on every measure.
-
-        /// <summary>
-        /// Score scan points against where hits actually landed in each cell (a likelihood field over the hits), not
-        /// against probabilities interpolated between cell centres. Occupancy still decides which cells count.
-        /// </summary>
-        public const bool MatchAgainstHits = false;
-
-        /// <summary>Width (σ) of each cell's hit kernel, metres.</summary>
-        public const float HitFieldSigmaMeters = 0.03f;
-
-        /// <summary>A cell's weight grows with its hit count up to this many hits.</summary>
-        public const int HitFieldCountCap = 10;
-
         // ---- Start of a SLAM run ----
 
         /// <summary>A SLAM run starts with a full spin in place at this rate, mapping from the one pose known exactly (the dock).</summary>
         public const float StartSpinDegreesPerSecond = 120f;
-        public const float StartSpinDegrees = 360f;
+        public const float StartSpinDegrees = 0f;
     }
 
     /// <summary>The pose graph solver's fixed values (design doc, section 18).</summary>

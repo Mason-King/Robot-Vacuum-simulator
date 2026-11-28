@@ -23,9 +23,14 @@ namespace RobotVacuum.Sim
     // that are already clean, which is what the Coverage and OverCoverage
     // heatmaps measure. Cells under blocking furniture are skipped entirely.
     //
-    // PLACEHOLDER, clearly flagged: the full cleaning-effectiveness formula
-    // (SDD 3.14 -- dwell time x velocity x surface type) doesn't exist yet;
-    // velocity does not enter this yet.
+    // Cleaning effectiveness (requirement 3.14): speed enters through dwell.
+    // Time over a point is brush length / speed, so a faster pass leaves less
+    // cleanliness. Surface type compounds it through cleaningEffort: carpet
+    // needs more dwell than tile to reach the same target. The dirt level is
+    // uniform by design; target_max_clean is "fully clean". The controller
+    // knows the target and this formula, senses the floor's vacuum
+    // resistance, and sets its sweep speed to reach the target
+    // (CoverageMath.SweepSpeed).
     // ============================================================================
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(CircleCollider2D))]
@@ -287,13 +292,18 @@ namespace RobotVacuum.Sim
         // Coverage of each room on its own, in percent, indexed like
         // level.Rooms. A room the vacuum never reached reads 0.
         // ------------------------------------------------------------------
-        public float[] RoomCoveragePercent()
+        public float[] RoomCoveragePercent() => RoomCoveragePercent(out _);
+
+        // Same, plus each room's count of cleanable cells, so callers can
+        // weight rooms together (e.g. by floor type) without a second pass
+        // over the grid. Called once, when the run is saved; never per tick.
+        public float[] RoomCoveragePercent(out int[] counts)
         {
             var result = new float[level != null ? level.Rooms.Count : 0];
+            counts = new int[result.Length];
             if (Grid == null || result.Length == 0) return result;
 
             var sums = new double[result.Length];
-            var counts = new int[result.Length];
             for (int row = 0; row < Grid.Rows; row++)
             {
                 for (int col = 0; col < Grid.Cols; col++)

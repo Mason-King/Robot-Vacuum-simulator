@@ -71,6 +71,10 @@ namespace RobotVacuum.Sim.Sensors
 
             frame.hasLidarScan = true;
             frame.lidarRange = range;
+            Scans++;
+            selfCollider = null; // learned again each scan (see CastRay)
+            System.Array.Clear(others, 0, otherCount);
+            otherCount = 0;
 
             var filter = ContactFilter2D.noFilter;
             filter.useTriggers = false;
@@ -112,17 +116,58 @@ namespace RobotVacuum.Sim.Sensors
         float CastRay(in SensorContext context, float bearing, ContactFilter2D filter)
         {
             Vector2 direction = context.WorldDirection(bearing);
+            bool timed = LagLog.Enabled;
+            long started = timed ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             int count = Physics2D.Raycast(context.truePosition, direction, filter, hits, range);
+            if (timed) RaycastMs += (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            Rays++;
+            HitsReturned += count;
 
+            // The nearest hit that isn't the robot. A hit no nearer than the best so far is skipped before asking
+            // Unity about its collider (each of those questions is a call into the engine), so the answer is the same
+            // as checking every hit, and since Unity returns hits nearest first, everything after the first wall is
+            // skipped. The ray starts inside the robot's own collider, so nearly every ray's first hit is the robot:
+            // once a scan has seen which collider that is, it is recognised without asking for its rigidbody again.
             float nearest = range;
             for (int i = 0; i < count; i++)
             {
                 var hit = hits[i];
-                if (hit.collider == null) continue;
-                if (context.self != null && hit.collider.attachedRigidbody == context.self) continue;
-                if (hit.distance < nearest) nearest = hit.distance;
+                if (hit.distance >= nearest) continue;
+                var collider = hit.collider;
+                if (collider == null) continue;
+                if (selfCollider is object && ReferenceEquals(collider, selfCollider)) continue;
+                if (!IsOther(collider))
+                {
+                    if (context.self != null && collider.attachedRigidbody == context.self)
+                    {
+                        selfCollider = collider;
+                        continue;
+                    }
+                    if (otherCount < others.Length) others[otherCount++] = collider;
+                }
+                nearest = hit.distance;
             }
             return nearest;
         }
+
+        Collider2D selfCollider; // the robot's collider, as this scan has met it
+
+        // Colliders this scan has already found not to be the robot (walls, furniture, a cat): the same few are hit
+        // by most of the 360 rays, so each is checked once a scan instead of once a ray. Cleared every scan.
+        readonly Collider2D[] others = new Collider2D[32];
+        int otherCount;
+
+        bool IsOther(Collider2D collider)
+        {
+            for (int i = 0; i < otherCount; i++)
+                if (ReferenceEquals(others[i], collider)) return true;
+            return false;
+        }
+
+        /// <summary>Diagnostics (the lag log): scans, rays cast, hits Unity returned, and real ms inside Physics2D.Raycast.</summary>
+        public int Scans { get; private set; }
+        public long Rays { get; private set; }
+        public long HitsReturned { get; private set; }
+        public double RaycastMs { get; private set; }
     }
 }

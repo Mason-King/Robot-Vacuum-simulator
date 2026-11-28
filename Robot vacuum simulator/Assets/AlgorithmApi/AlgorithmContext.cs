@@ -41,6 +41,22 @@ namespace RobotVacuum.AlgorithmApi
         /// <summary>Where <see cref="Log"/> goes (the Console, when the run logs algorithm decisions). May be null.</summary>
         public readonly Action<string> log;
 
+        /// <summary>The simulation's clock, simulated seconds. May be null (then <see cref="SimSeconds"/> reads 0).</summary>
+        public readonly Func<float> clock;
+
+        /// <summary>Simulated seconds since the run started.</summary>
+        public float SimSeconds => clock != null ? clock() : 0f;
+
+        /// <summary>The robot's drive and turn speed settings, read live (they can change mid-run). May be null.</summary>
+        public readonly Func<float> driveSpeed;
+        public readonly Func<float> turnSpeed;
+
+        /// <summary>The drive speed setting now, m/s; 0 when not given.</summary>
+        public float DriveSpeedMetersPerSecond => driveSpeed != null ? driveSpeed() : 0f;
+
+        /// <summary>The turn speed setting now, degrees per second; 0 when not given.</summary>
+        public float TurnSpeedDegreesPerSecond => turnSpeed != null ? turnSpeed() : 0f;
+
         /// <summary>The brush's radius (the brush covers the robot's footprint).</summary>
         public float BrushRadius => cleaningWidth * 0.5f;
 
@@ -55,8 +71,12 @@ namespace RobotVacuum.AlgorithmApi
 
         public AlgorithmContext(IRandom random, float robotRadius, float cleaningWidth, float cellSizeMeters,
             bool slam, float lidarRangeMeters, float targetCleanliness, float vacuumPower, DriveRequests drive,
-            IMapAnalysis analysis = null, Action<string> log = null)
+            IMapAnalysis analysis = null, Action<string> log = null, Func<float> clock = null,
+            Func<float> driveSpeed = null, Func<float> turnSpeed = null)
         {
+            this.clock = clock;
+            this.driveSpeed = driveSpeed;
+            this.turnSpeed = turnSpeed;
             this.analysis = analysis;
             this.log = log;
             this.random = random;

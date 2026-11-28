@@ -61,6 +61,9 @@ namespace RobotVacuum.Sim.Control
         public bool fromCache;
         public double milliseconds;
 
+        /// <summary>SHA-256 of its files (names and contents), hex: a fingerprint of the exact code loaded. Empty if it had no files.</summary>
+        public string hash = "";
+
         /// <summary>The names of the algorithms it added to the catalog.</summary>
         public readonly List<string> algorithms = new List<string>();
         public readonly List<string> errors = new List<string>();
@@ -184,6 +187,7 @@ namespace RobotVacuum.Sim.Control
 
             var bytes = files.Select(File.ReadAllBytes).ToList();
             string hash = Hash(kind, files.Select(f => Relative(folder, f)).ToList(), bytes);
+            unit.hash = hash;
 
             if (cache.TryGetValue(hash, out var loaded))
             {
@@ -288,18 +292,31 @@ namespace RobotVacuum.Sim.Control
                 // Probed under the run guard, so a constructor or property that loops forever skips this algorithm instead of freezing the load.
                 string name;
                 bool supportsSlam;
-                using (var sandbox = new AlgorithmGuard(label))
+                using (var host = new AlgorithmHost())
                 {
-                    if (!sandbox.TryRun("Creating it and reading Name / SupportsSlam", () =>
-                        {
-                            var probe = (ICleaningAlgorithm)constructor.Invoke(null);
-                            return (probe.Name?.Trim(), probe.SupportsSlam);
-                        }, AlgorithmGuard.ProbeBudgetSeconds, out var probed))
+                    var probed = host.Probe(() =>
                     {
-                        unit.errors.Add($"{label}: {sandbox.FaultMessage}");
+                        ICleaningAlgorithm probe;
+                        try
+                        {
+                            probe = (ICleaningAlgorithm)constructor.Invoke(null);
+                        }
+                        catch (TargetInvocationException wrapped) when (wrapped.InnerException != null)
+                        {
+                            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(wrapped.InnerException).Throw();
+                            throw;
+                        }
+                        return (probe.Name?.Trim(), probe.SupportsSlam);
+                    });
+                    if (!probed.Ok)
+                    {
+                        var fault = probed.Fault;
+                        unit.errors.Add(fault.Kind == AlgorithmFaultKind.Exception
+                            ? $"{label}: creating it failed: {fault.ExceptionType}: {fault.Message}"
+                            : $"{label}: creating it and reading Name / SupportsSlam: {fault.Message}");
                         continue;
                     }
-                    (name, supportsSlam) = probed;
+                    (name, supportsSlam) = probed.Value;
                 }
 
                 if (string.IsNullOrEmpty(name))
@@ -319,7 +336,7 @@ namespace RobotVacuum.Sim.Control
                 }
 
                 var algorithmType = type;
-                found.Add(new AlgorithmEntry(label, name, supportsSlam, unitName, null,
+                found.Add(new AlgorithmEntry(label, name, supportsSlam, unitName,
                     () => (ICleaningAlgorithm)Activator.CreateInstance(algorithmType)));
                 unit.algorithms.Add(name + (supportsSlam ? " (SLAM)" : ""));
             }

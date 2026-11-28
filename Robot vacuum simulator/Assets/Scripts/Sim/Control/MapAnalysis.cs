@@ -30,14 +30,45 @@ namespace RobotVacuum.Sim.Control
 
         public int Version { get; private set; }
 
+        public bool SkipRooms { get; set; }
+        bool roomsStale; // rooms were skipped since they were last found
+
         public bool Update(Vec2 robot)
         {
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
             bool changed = snapshot.Take(map);
             if (changed) Version++;
+            long taken = System.Diagnostics.Stopwatch.GetTimestamp();
             reach.Build(snapshot, map, robot);
-            rooms.Build(snapshot, map, reach, changed);
+            long reached = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (SkipRooms) roomsStale = true;
+            else
+            {
+                rooms.Build(snapshot, map, reach, changed || roomsStale);
+                roomsStale = false;
+            }
+            long done = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            Updates++;
+            if (changed) ChangedUpdates++;
+            SnapshotMs += Ms(started, taken);
+            ReachMs += Ms(taken, reached);
+            RoomsMs += Ms(reached, done);
             return changed;
         }
+
+        // ---- Cost read-outs (the lag log; reporting only, never read by the simulation) ---------------------
+
+        /// <summary>Update calls, and how many found the walls or explored cells changed (redoing the distance transform and doorway search).</summary>
+        public int Updates { get; private set; }
+        public int ChangedUpdates { get; private set; }
+
+        /// <summary>Real ms in Update's three parts: copying the map (and, when changed, its distance transform), the reach flood, the rooms.</summary>
+        public double SnapshotMs { get; private set; }
+        public double ReachMs { get; private set; }
+        public double RoomsMs { get; private set; }
+
+        static double Ms(long from, long to) => (to - from) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         public bool IsEmpty => snapshot.IsEmpty;
         public int MinRow => snapshot.MinRow;
@@ -61,8 +92,9 @@ namespace RobotVacuum.Sim.Control
         public float ReachDistance(int row, int col) => reach.Distance(row, col);
         public bool Reachable(int row, int col) => reach.Reachable(row, col);
 
-        public int RoomCount => rooms.Count;
-        public int RoomOf(int row, int col) => rooms.LabelOf(snapshot, row, col);
-        public IReadOnlyList<(Vec2 a, Vec2 b)> Doorways => rooms.Doorways;
+        public int RoomCount => SkipRooms ? 0 : rooms.Count;
+        public int RoomOf(int row, int col) => SkipRooms ? -1 : rooms.LabelOf(snapshot, row, col);
+        public IReadOnlyList<(Vec2 a, Vec2 b)> Doorways => SkipRooms ? NoDoorways : rooms.Doorways;
+        static readonly (Vec2 a, Vec2 b)[] NoDoorways = new (Vec2 a, Vec2 b)[0];
     }
 }

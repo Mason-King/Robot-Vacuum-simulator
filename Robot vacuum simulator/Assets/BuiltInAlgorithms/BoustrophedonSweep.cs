@@ -28,6 +28,9 @@ namespace RobotVacuum.Algorithms
     ///      has swept: driving across the room on the way somewhere does NOT count.
     ///   3. PATCHES: what the lanes missed (dirty, and not under the brush at all this pass), as connected clusters,
     ///      nearest first.
+    /// FREE-STANDING OBSTACLES (a chair, a small table, the cat in the open: see FreeStanding) don't cut lanes or get
+    /// edge runs: a lane runs straight through, with a waypoint on the floor just before the obstacle and just after it,
+    /// so the driver goes round it and the robot is straight back on the lane.
     /// SLAM: when no room has work in this pass but the map has a frontier, explore the nearest.
     /// </summary>
     public sealed class BoustrophedonSweep : ICleaningAlgorithm
@@ -113,6 +116,7 @@ namespace RobotVacuum.Algorithms
 
         AlgorithmContext context;
         IMapAnalysis analysis;
+        FreeStanding freeStanding; // obstacles lanes run through (see FreeStanding)
         readonly List<Step> plan = new List<Step>();
         int planIndex;
         int edgeFailures;   // edge points in a row that couldn't be reached
@@ -123,7 +127,9 @@ namespace RobotVacuum.Algorithms
 
         float spacing;
         int pass;                                                                                   // 0 = the first pass
-        readonly Dictionary<long, float> passStart = new Dictionary<long, float>();                // dwell when the pass began
+        // Each cell's dwell when the pass began, over the map's extent then (cells outside it had none).
+        float[] passStart = new float[0];
+        int passStartMinRow, passStartMinCol, passStartRows, passStartCols;
         readonly Dictionary<long, List<(float s0, float s1)>> swept = new Dictionary<long, List<(float, float)>>(); // this pass
 
         // Per decision.
@@ -152,6 +158,9 @@ namespace RobotVacuum.Algorithms
         {
             public int lane;
             public float s0, s1;
+            // Free-standing obstacles the run passes through: the floor sample just before each and just after it
+            // (in increasing s). Null when there are none.
+            public List<(float before, float after)> crossings;
         }
 
         // For tests and the overlay.
@@ -166,9 +175,10 @@ namespace RobotVacuum.Algorithms
         {
             this.context = context;
             analysis = context.analysis ?? throw new InvalidOperationException("Boustrophedon Sweep needs the controller's map analysis (AlgorithmContext.analysis).");
+            freeStanding = new FreeStanding(analysis);
             spacing = context.cleaningWidth * SpacingFraction;
             pass = 0;
-            passStart.Clear();
+            passStartRows = passStartCols = 0;
             swept.Clear();
             plan.Clear();
             planIndex = 0;
@@ -230,10 +240,35 @@ namespace RobotVacuum.Algorithms
 
         // ---- Choosing ----------------------------------------------------------------------------------
 
+        /// <summary>A decision slower than this is logged with where its time went (diagnostics).</summary>
+        public const double SlowDecisionMs = 20.0;
+
+        // Diagnostics: real ms in each part of the current decision.
+        double msAnalysis, msRooms, msNewPass, msLeftovers;
+        long decisionStarted;
+
+        static double MsSince(long started) =>
+            (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
         bool Choose(IBeliefMap map, Pose2 pose)
         {
+            decisionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            msAnalysis = msRooms = msNewPass = msLeftovers = 0.0;
+            bool planned = ChooseTimed(map, pose);
+            double total = MsSince(decisionStarted);
+            if (total > SlowDecisionMs)
+                context.Log($"slow decision: {total:F1} ms = map analysis {msAnalysis:F1}, rooms {msRooms:F1}, new pass {msNewPass:F1}, " +
+                            $"leftovers {msLeftovers:F1}, other {Math.Max(0.0, total - msAnalysis - msRooms - msNewPass - msLeftovers):F1}");
+            return planned;
+        }
+
+        bool ChooseTimed(IBeliefMap map, Pose2 pose)
+        {
             Vec2 here = pose.position;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
             analysis.Update(here);
+            BuildRoomCells();
+            msAnalysis += MsSince(started);
             if (analysis.IsEmpty) return Finish();
 
             laneAnchor = map.AnchorWorld;
@@ -246,19 +281,29 @@ namespace RobotVacuum.Algorithms
             {
                 // The room we are in first, while it has work in this pass; then the others, nearest first. A room whose
                 // work can't be planned (edge stubs, everything skipped) doesn't stop the others being tried.
-                foreach (int room in RoomsInOrder(map, here))
+                long roomsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
                 {
-                    if (!HasPassWork(room)) continue;
-                    if (PlanEdge(map, room)) return Begin("edge", room);
-                    if (!PatchesOnly(room) && PlanSweep(map, room)) return Begin("lanes", room);
-                    if (PlanPatch(map, room, here)) return Begin("patch", room);
+                    foreach (int room in RoomsInOrder(map, here))
+                    {
+                        if (!HasPassWork(room)) continue;
+                        if (PlanEdge(map, room)) return Begin("edge", room);
+                        if (!PatchesOnly(room) && PlanSweep(map, room)) return Begin("lanes", room);
+                        if (PlanPatch(map, room, here)) return Begin("patch", room);
+                    }
+
+                    // Nothing left in this pass where it applies. SLAM: explore before starting another pass.
+                    if (context.slam && PlanFrontier(map, here)) return Begin("exploring", -1);
+                }
+                finally
+                {
+                    msRooms += MsSince(roomsStarted);
                 }
 
-                // Nothing left in this pass where it applies. SLAM: explore before starting another pass.
-                if (context.slam && PlanFrontier(map, here)) return Begin("exploring", -1);
-
                 if (!AnyDirty() || pass + 1 >= MaxPasses) break;
+                long passStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 StartPass();
+                msNewPass += MsSince(passStarted);
             }
             return Finish();
         }
@@ -281,7 +326,10 @@ namespace RobotVacuum.Algorithms
         {
             activity = "done";
             string passes = pass == 0 ? "1 pass" : (pass + 1) + " passes";
-            context.Log($"done after {passes}. {Leftovers()}");
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            string leftovers = Leftovers();
+            msLeftovers += MsSince(started);
+            context.Log($"done after {passes}. {leftovers}");
             context.drive.Finish();
             return false;
         }
@@ -301,13 +349,14 @@ namespace RobotVacuum.Algorithms
         void StartPass()
         {
             pass++;
-            passStart.Clear();
-            for (int row = analysis.MinRow; row < analysis.MinRow + analysis.Rows; row++)
-                for (int col = analysis.MinCol; col < analysis.MinCol + analysis.Cols; col++)
-                {
-                    float dwell = analysis.Dwell(row, col);
-                    if (dwell > 0f) passStart[CellKey(row, col)] = dwell;
-                }
+            passStartMinRow = analysis.MinRow;
+            passStartMinCol = analysis.MinCol;
+            passStartRows = analysis.Rows;
+            passStartCols = analysis.Cols;
+            if (passStart.Length < passStartRows * passStartCols) passStart = new float[passStartRows * passStartCols];
+            for (int r = 0; r < passStartRows; r++)
+                for (int c = 0; c < passStartCols; c++)
+                    passStart[r * passStartCols + c] = analysis.Dwell(passStartMinRow + r, passStartMinCol + c);
             swept.Clear();
             edged.Clear();
             patchVisits.Clear();
@@ -360,6 +409,7 @@ namespace RobotVacuum.Algorithms
         /// <summary>For the log: what is still below the target, by room, and in the strips by the walls.</summary>
         string Leftovers()
         {
+            BuildRoomSums();
             int count = analysis.RoomCount;
             var below = new int[count];
             var cells = new int[count];
@@ -392,14 +442,41 @@ namespace RobotVacuum.Algorithms
                    $"wall strips {stripBelow} of {strip} ({stripBelow * area:F2} m²).";
         }
 
-        /// <summary>A cell within the brush's reach of a room cell (the strip by a wall the body can't stand on).</summary>
+        /// <summary>
+        /// A cell within the brush's reach of a room cell (the strip by a wall the body can't stand on): any room cell in
+        /// the square of ±ceil(brush radius / cell) cells around it. Counted from a prefix sum of the room cells
+        /// (<see cref="BuildRoomSums"/>) instead of asking each of the square's cells; the same cells answer yes.
+        /// </summary>
         bool NextToRoom(int row, int col)
         {
             int cells = (int)Math.Ceiling(context.BrushRadius / analysis.CellSize);
-            for (int dr = -cells; dr <= cells; dr++)
-                for (int dc = -cells; dc <= cells; dc++)
-                    if (analysis.RoomOf(row + dr, col + dc) >= 0) return true;
-            return false;
+            int r0 = Math.Max(row - cells - analysis.MinRow, 0), r1 = Math.Min(row + cells - analysis.MinRow, analysis.Rows - 1);
+            int c0 = Math.Max(col - cells - analysis.MinCol, 0), c1 = Math.Min(col + cells - analysis.MinCol, analysis.Cols - 1);
+            if (r0 > r1 || c0 > c1) return false;
+            int stride = analysis.Cols + 1;
+            int inside = roomSums[(r1 + 1) * stride + c1 + 1] - roomSums[r0 * stride + c1 + 1]
+                       - roomSums[(r1 + 1) * stride + c0] + roomSums[r0 * stride + c0];
+            return inside > 0;
+        }
+
+        // Room cells counted over the rectangle from the map's corner: roomSums[(r + 1) × (Cols + 1) + c + 1] is the
+        // number of room cells with row offset ≤ r and column offset ≤ c. (Rooms only exist inside the map's extent.)
+        int[] roomSums = new int[0];
+
+        void BuildRoomSums()
+        {
+            int rows = analysis.Rows, cols = analysis.Cols, stride = cols + 1;
+            if (roomSums.Length < (rows + 1) * stride) roomSums = new int[(rows + 1) * stride];
+            Array.Clear(roomSums, 0, (rows + 1) * stride);
+            for (int r = 0; r < rows; r++)
+            {
+                int line = 0;
+                for (int c = 0; c < cols; c++)
+                {
+                    if (analysis.RoomOf(analysis.MinRow + r, analysis.MinCol + c) >= 0) line++;
+                    roomSums[(r + 1) * stride + c + 1] = roomSums[r * stride + c + 1] + line;
+                }
+            }
         }
 
         // ---- What is left to do -----------------------------------------------------------------------------
@@ -410,7 +487,8 @@ namespace RobotVacuum.Algorithms
         /// <summary>Not under the brush at all since this pass began (its dwell hasn't grown).</summary>
         bool UntouchedThisPass(int row, int col)
         {
-            float before = passStart.TryGetValue(CellKey(row, col), out float d) ? d : 0f;
+            int r = row - passStartMinRow, c = col - passStartMinCol;
+            float before = r >= 0 && c >= 0 && r < passStartRows && c < passStartCols ? passStart[r * passStartCols + c] : 0f;
             return analysis.Dwell(row, col) <= before + 1e-4f;
         }
 
@@ -468,6 +546,7 @@ namespace RobotVacuum.Algorithms
                 if (float.IsInfinity(right) || float.IsInfinity(left) || float.IsInfinity(up) || float.IsInfinity(down)) return;
                 float gx = right - left, gy = up - down;
                 if (gx * gx + gy * gy < 1e-8f) return;
+                if (NearFreeStanding(row, col, gx, gy, room)) return; // a chair's or the cat's outline says nothing about the walls
                 double phi = Math.Atan2(gy, gx);
                 sumCos += Math.Cos(4 * phi);
                 sumSin += Math.Sin(4 * phi);
@@ -479,6 +558,19 @@ namespace RobotVacuum.Algorithms
             var wall = Extent(room, a) >= Extent(room, b) ? a : b;
             roomWalls[room] = wall;
             return wall;
+        }
+
+        /// <summary>Following the distance gradient down (toward the nearest obstacle) for a few cells: is that obstacle free-standing?</summary>
+        bool NearFreeStanding(int row, int col, float gx, float gy, int room)
+        {
+            float length = (float)Math.Sqrt(gx * gx + gy * gy);
+            float dx = -gx / length, dy = -gy / length;
+            for (int i = 1; i <= 6; i++)
+            {
+                int r = row + (int)Math.Round(dy * i), c = col + (int)Math.Round(dx * i);
+                if (!analysis.BodyFits(r, c)) return freeStanding.Passable(r, c, room);
+            }
+            return false;
         }
 
         float Extent(int room, Vec2 axis)
@@ -550,12 +642,51 @@ namespace RobotVacuum.Algorithms
             for (int lane = firstLane; lane <= lastLane; lane++)
             {
                 bool inRun = false;
-                float runStart = 0f, lastTodo = 0f;
+                float runStart = 0f, lastTodo = 0f, lastKept = 0f, lastFloor = 0f;
+                bool inObstacle = false;
+                float obstacleBefore = 0f;
+                List<(float, float)> crossings = null;
+
+                void EndRun()
+                {
+                    if (lastTodo - runStart >= MinRunMeters)
+                    {
+                        // Only the obstacles passed before the run's last dirty sample are on it.
+                        crossings?.RemoveAll(x => x.Item2 > lastTodo);
+                        runs.Add(new Run { lane = lane, s0 = runStart, s1 = lastTodo, crossings = crossings != null && crossings.Count > 0 ? crossings : null });
+                    }
+                    inRun = false;
+                    inObstacle = false;
+                    crossings = null;
+                }
+
                 for (float s = sMin; s <= sMax + step * 0.5f; s += step)
                 {
-                    bool inRoom = TryCell(PointOn(lane, s), out int row, out int col) && analysis.RoomOf(row, col) == room;
+                    bool onMap = TryCell(PointOn(lane, s), out int row, out int col);
+                    bool inRoom = onMap && analysis.RoomOf(row, col) == room;
+                    // A free-standing obstacle in this room: the lane carries straight on through it (the robot goes round).
+                    bool through = onMap && !inRoom && freeStanding.Passable(row, col, room);
                     bool sweptHere = IsSwept(lane, s);
                     bool todo = inRoom && !sweptHere && Dirty(row, col);
+
+                    if (through)
+                    {
+                        if (inRun && !inObstacle)
+                        {
+                            inObstacle = true;
+                            obstacleBefore = lastFloor;
+                        }
+                        if (inRun) lastKept = s;
+                        continue;
+                    }
+                    if (inObstacle && inRoom)
+                    {
+                        // Out the other side: drive to just before it, round it, and on from just after it.
+                        (crossings ??= new List<(float, float)>()).Add((obstacleBefore, s));
+                        inObstacle = false;
+                    }
+                    if (inRoom) lastFloor = s;
+
                     if (todo)
                     {
                         if (!inRun)
@@ -564,16 +695,16 @@ namespace RobotVacuum.Algorithms
                             runStart = s;
                         }
                         lastTodo = s;
+                        lastKept = s;
                     }
-                    else if (inRun && !(inRoom && !sweptHere && s - lastTodo <= BridgeMeters))
+                    else if (inRun && !(inRoom && !sweptHere && s - lastKept <= BridgeMeters))
                     {
                         // Not floor of this room, already swept, or clean for too long: the run ends at its last dirty sample.
                         // (A short clean stretch, like the spot where the robot turned on the dock, is carried over.)
-                        if (lastTodo - runStart >= MinRunMeters) runs.Add(new Run { lane = lane, s0 = runStart, s1 = lastTodo });
-                        inRun = false;
+                        EndRun();
                     }
                 }
-                if (inRun && lastTodo - runStart >= MinRunMeters) runs.Add(new Run { lane = lane, s0 = runStart, s1 = lastTodo });
+                if (inRun) EndRun();
             }
             return runs;
         }
@@ -589,16 +720,33 @@ namespace RobotVacuum.Algorithms
         /// </summary>
         List<(int row, int col)> EdgeCells(int room)
         {
-            var cells = new List<(int, int)>();
-            ForRoomCells(room, (row, col) =>
+            // Whether a cell is an edge with a dirty strip depends only on the map, which doesn't change during a
+            // decision; only `edged` grows (each edge run or stub marks its cells). So the candidates are found once per
+            // room per decision, in room-cell order, and filtered here: the same list, in the same order, as checking
+            // every cell each time (PlanEdge can ask up to 50 times in one decision, marking off a stub each time).
+            if (!edgeCandidates.TryGetValue(room, out var candidates))
             {
-                if (edged.Contains(CellKey(row, col))) return;
-                bool edge = !analysis.BodyFits(row + 1, col) || !analysis.BodyFits(row - 1, col) ||
-                            !analysis.BodyFits(row, col + 1) || !analysis.BodyFits(row, col - 1);
-                if (edge && StripDirty(row, col)) cells.Add((row, col));
-            });
+                candidates = new List<(int, int)>();
+                ForRoomCells(room, (row, col) =>
+                {
+                    // A free-standing obstacle (a chair, the cat in the open) gets no edge run of its own: lanes pass
+                    // through it and the robot goes round it.
+                    bool edge = Wall(row + 1, col, room) || Wall(row - 1, col, room) ||
+                                Wall(row, col + 1, room) || Wall(row, col - 1, room);
+                    if (edge && StripDirty(row, col)) candidates.Add((row, col));
+                });
+                edgeCandidates[room] = candidates;
+            }
+            var cells = new List<(int, int)>(candidates.Count);
+            foreach (var cell in candidates)
+                if (!edged.Contains(CellKey(cell.Item1, cell.Item2))) cells.Add(cell);
             return cells;
         }
+
+        bool Wall(int row, int col, int room) => !analysis.BodyFits(row, col) && !freeStanding.Passable(row, col, room);
+
+        // Per decision: each room's edge cells with a dirty strip, before `edged` is taken out (see EdgeCells).
+        readonly Dictionary<int, List<(int row, int col)>> edgeCandidates = new Dictionary<int, List<(int, int)>>();
 
         /// <summary>
         /// Is any of the strip the body can't stand on (explored, not blocked, the body doesn't fit) dirty, within the
@@ -999,6 +1147,7 @@ namespace RobotVacuum.Algorithms
                     for (int i = 1; i < arc.Count && fits; i++) fits = map.BodyFitsLeg(arc[i - 1], arc[i]);
                     if (fits)
                     {
+                        AddCrossings(current, sNow, turnS, sign);
                         var leg = Clean(a, true, RunKey(current));
                         leg.sweptKey = SweptKey(current.lane);
                         leg.sFrom = recordFrom;
@@ -1014,6 +1163,7 @@ namespace RobotVacuum.Algorithms
                 }
 
                 // The end of this cell: sweep to the lane's end and stop.
+                AddCrossings(current, sNow, exitS, sign);
                 var last = Clean(PointOn(current.lane, exitS), false, RunKey(current));
                 last.sweptKey = SweptKey(current.lane);
                 last.sFrom = recordFrom;
@@ -1022,6 +1172,26 @@ namespace RobotVacuum.Algorithms
                 break;
             }
             return true;
+        }
+
+        /// <summary>
+        /// The free-standing obstacles on the run between <paramref name="from"/> and <paramref name="to"/> (driving in
+        /// direction <paramref name="sign"/>): a pass-through waypoint on the floor just before each and just after it,
+        /// so the driver goes round it and the robot is back on the lane straight after.
+        /// </summary>
+        void AddCrossings(Run run, float from, float to, int sign)
+        {
+            if (run.crossings == null) return;
+            float lo = Math.Min(from, to), hi = Math.Max(from, to);
+            int count = run.crossings.Count;
+            for (int k = 0; k < count; k++)
+            {
+                var (before, after) = run.crossings[sign > 0 ? k : count - 1 - k];
+                if (before <= lo || after >= hi) continue;
+                float first = sign > 0 ? before : after, second = sign > 0 ? after : before;
+                plan.Add(Clean(PointOn(run.lane, first), true, RunKey(run)));
+                plan.Add(Clean(PointOn(run.lane, second), true, RunKey(run)));
+            }
         }
 
         float PathTo(Vec2 point) => TryCell(point, out int row, out int col) ? analysis.ReachDistance(row, col) : float.PositiveInfinity;
@@ -1175,22 +1345,45 @@ namespace RobotVacuum.Algorithms
             return analysis.Contains(row, col);
         }
 
-        /// <summary>Every cell that belongs to a room, with its room.</summary>
-        void ForCells(Action<int, int, int> visit)
+        // Every room cell, and each room's cells, row by row (the order a scan of the map visits them), listed once
+        // per decision right after analysis.Update: the rooms don't change until the next Update, which only
+        // Choose calls. The scans below then visit exactly the cells, in exactly the order, a full scan of the map
+        // would, without walking the cells outside every room or asking each cell its room again.
+        readonly List<(int row, int col, int label)> roomCells = new List<(int, int, int)>();
+        readonly List<List<(int row, int col)>> cellsByRoom = new List<List<(int, int)>>();
+
+        void BuildRoomCells()
         {
+            edgeCandidates.Clear(); // the map has been analysed again
+            roomCells.Clear();
+            for (int i = 0; i < cellsByRoom.Count; i++) cellsByRoom[i].Clear();
             for (int row = analysis.MinRow; row < analysis.MinRow + analysis.Rows; row++)
                 for (int col = analysis.MinCol; col < analysis.MinCol + analysis.Cols; col++)
                 {
                     int label = analysis.RoomOf(row, col);
-                    if (label >= 0) visit(row, col, label);
+                    if (label < 0) continue;
+                    roomCells.Add((row, col, label));
+                    while (cellsByRoom.Count <= label) cellsByRoom.Add(new List<(int, int)>());
+                    cellsByRoom[label].Add((row, col));
                 }
         }
 
-        void ForRoomCells(int room, Action<int, int> visit) =>
-            ForCells((row, col, label) =>
+        /// <summary>Every cell that belongs to a room, with its room.</summary>
+        void ForCells(Action<int, int, int> visit)
+        {
+            for (int i = 0; i < roomCells.Count; i++)
             {
-                if (label == room) visit(row, col);
-            });
+                var cell = roomCells[i];
+                visit(cell.row, cell.col, cell.label);
+            }
+        }
+
+        void ForRoomCells(int room, Action<int, int> visit)
+        {
+            if (room < 0 || room >= cellsByRoom.Count) return;
+            var cells = cellsByRoom[room];
+            for (int i = 0; i < cells.Count; i++) visit(cells[i].row, cells[i].col);
+        }
 
         void EndWithStop()
         {

@@ -92,6 +92,14 @@ namespace RobotVacuum.Sim
             result.coveragePercent = data.CoveragePercent();
             result.fullyCleanedPercent = data.FullyCleanedPercent();
 
+            var over = data.OverCleaning();
+            result.meanCleanRatio = over.meanCleanRatio;
+            result.medianCleanRatio = over.medianCleanRatio;
+            result.p90CleanRatio = over.p90CleanRatio;
+            result.overCleanedPercent = over.overCleanedPercent;
+            result.overCleaningSquareMeters = over.overCleaningSquareMeters;
+            result.overCleaningPercentOfTotal = over.overCleaningPercentOfTotal;
+
             if (!SaveImages) return;
 
             result.cleanlinessImagePath = WriteImage(data, runFolder, HeatmapMode.FloorCleanliness);
