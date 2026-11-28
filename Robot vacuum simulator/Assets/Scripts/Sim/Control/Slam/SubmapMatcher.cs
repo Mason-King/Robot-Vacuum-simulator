@@ -94,9 +94,6 @@ namespace RobotVacuum.Sim.Control
             return p;
         }
 
-        /// <summary>Drops a submap's precomputed copies (not normally needed: finished submaps never change).</summary>
-        public void Forget(ProbabilityGrid grid) => cache.Remove(grid);
-
         /// <summary>
         /// Searches for <paramref name="points"/> (robot-relative) in <paramref name="grid"/> around
         /// <paramref name="guess"/> (in the grid's frame). Returns true with the refined pose if a match scores at least

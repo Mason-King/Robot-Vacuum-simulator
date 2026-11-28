@@ -12,7 +12,7 @@ namespace RobotVacuum.Sim
     {
         public const float MaxPlaybackSpeed = 100f;
 
-        /// <summary>Real time a frame may spend on physics before the budget cuts the steps per frame.</summary>
+        /// <summary>Real time a frame may spend on physics steps (all FixedUpdates and the physics after them); the governor sizes each frame's step count to fit it.</summary>
         public const float FrameBudgetSeconds = 0.05f;
 
         /// <summary>The speed last requested through <see cref="Apply"/>.</summary>
@@ -31,10 +31,22 @@ namespace RobotVacuum.Sim
         {
             float speed = ClampPlaybackSpeed(multiplier);
             Requested = speed;
-            Time.timeScale = speed;
             Ceiling = Mathf.Max(Time.fixedDeltaTime, baseMaximumDeltaTime * Mathf.Max(1f, speed));
-            Time.maximumDeltaTime = Ceiling;
             SpeedGovernor.Ensure();
+
+            // Above 1× with the governor running (play mode), start from its current allowance rather than the full
+            // ceiling, and from the time scale it can sustain (see SpeedGovernor): a speed change must not let the next
+            // frame catch up thousands of steps. Without it (edit mode, tests) the time scale is the speed and the cap
+            // the ceiling, as before.
+            bool governed = speed > 1f && SpeedGovernor.Running;
+            float scale = governed ? SpeedGovernor.SustainableScale(speed) : speed;
+            Time.timeScale = scale;
+
+            // Time.maximumDeltaTime is REAL time (Unity multiplies it by the time scale), so simulated time is divided by
+            // the time scale.
+            float simulated = governed ? Mathf.Min(Ceiling, SpeedGovernor.AllowedSeconds) : Ceiling;
+            Time.maximumDeltaTime = simulated / Mathf.Max(1f, scale);
+            if (governed) SpeedGovernor.NoteScale(Time.timeScale, Time.maximumDeltaTime); // read back: what Unity holds
         }
     }
 }

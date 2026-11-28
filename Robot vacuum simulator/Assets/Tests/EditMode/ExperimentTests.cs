@@ -8,33 +8,11 @@ using UnityEngine;
 
 namespace RobotVacuum.Tests
 {
-    public class MovementAlgorithmTests
-    {
-        [Test]
-        public void BuiltInAlgorithms_AreRegisteredInEnumOrder()
-        {
-            Assert.GreaterOrEqual(MovementAlgorithms.Count, 4, "at least four algorithms (1.6.1)");
-            Assert.AreEqual("Random", MovementAlgorithms.LabelOf(MovementPattern.RandomBounce));
-            Assert.AreEqual("Lawnmower", MovementAlgorithms.LabelOf(MovementPattern.Lawnmower));
-            Assert.IsInstanceOf<WallFollowBrain>(LegacyPatternBrain.Create(MovementPattern.WallFollow, new RandomProvider(1u)));
-        }
-
-        [Test]
-        public void UnknownAlgorithm_IsNotDefined_AndFallsBackSafely()
-        {
-            var unknown = (MovementPattern)999;
-
-            Assert.IsFalse(MovementAlgorithms.IsDefined(unknown));
-            StringAssert.Contains("999", MovementAlgorithms.LabelOf(unknown));
-            Assert.IsNull(LegacyPatternBrain.Create(unknown, new RandomProvider(1u)), "not a legacy pattern");
-        }
-    }
-
     public class BatchStatsTests
     {
-        static RunReport Run(MovementPattern pattern, float coverage, float seconds, int seed = 1) => new RunReport
+        static RunReport Run(float coverage, float seconds, int seed = 1, string algorithmId = null) => new RunReport
         {
-            pattern = pattern,
+            algorithmId = algorithmId,
             coveragePercent = coverage,
             durationSeconds = seconds,
             seed = seed,
@@ -75,16 +53,17 @@ namespace RobotVacuum.Tests
         {
             var runs = new[]
             {
-                Run(MovementPattern.RandomBounce, 40f, 60f, 1),
-                Run(MovementPattern.RandomBounce, 60f, 60f, 2),
-                Run(MovementPattern.Lawnmower, 90f, 60f, 1),
-                Run(MovementPattern.Lawnmower, 80f, 60f, 2),
+                Run(40f, 60f, 1),
+                Run(60f, 60f, 2),
+                Run(90f, 60f, 1, "BoustrophedonSweep"),
+                Run(80f, 60f, 2, "BoustrophedonSweep"),
             };
 
             var groups = BatchStats.Summarise(runs);
 
             Assert.AreEqual(2, groups.Count);
-            Assert.AreEqual(MovementPattern.Lawnmower, groups[0].pattern);
+            Assert.AreEqual("BoustrophedonSweep", groups[0].algorithmId);
+            Assert.AreEqual("RandomBounce", groups[1].algorithmId, "a run with no id is grouped under its pattern's algorithm");
             Assert.AreEqual(85.0, groups[0].coverage.mean, 1e-6);
             Assert.AreEqual(50.0, groups[1].coverage.mean, 1e-6);
             Assert.AreEqual(new[] { 1, 2 }, groups[0].runs.ConvertAll(r => r.seed).ToArray(), "trials sorted by seed");
@@ -93,10 +72,10 @@ namespace RobotVacuum.Tests
         [Test]
         public void AverageCurve_HoldsEachRunsFinalValueAfterItEnds()
         {
-            var shortRun = Run(MovementPattern.Spiral, 50f, 10f);
+            var shortRun = Run(50f, 10f);
             shortRun.sampleInterval = 10f;
             shortRun.coverageSamples = new List<float> { 0f, 50f };
-            var longRun = Run(MovementPattern.Spiral, 100f, 20f);
+            var longRun = Run(100f, 20f);
             longRun.sampleInterval = 10f;
             longRun.coverageSamples = new List<float> { 0f, 50f, 100f };
 
@@ -123,10 +102,10 @@ namespace RobotVacuum.Tests
         [Test]
         public void AverageMap_AveragesFloorBlocks_AndSkipsNoFloor()
         {
-            var a = Run(MovementPattern.Spiral, 0f, 1f);
+            var a = Run(0f, 1f);
             a.coverageMap = System.Convert.ToBase64String(new byte[] { 250, 0, 255 });
             a.mapWidth = 3; a.mapHeight = 1;
-            var b = Run(MovementPattern.Spiral, 0f, 1f);
+            var b = Run(0f, 1f);
             b.coverageMap = System.Convert.ToBase64String(new byte[] { 0, 0, 255 });
             b.mapWidth = 3; b.mapHeight = 1;
 
@@ -307,11 +286,12 @@ namespace RobotVacuum.Tests
         [Test]
         public void Parse_ClampsExperimentSettings_ToTheirBounds()
         {
-            var data = SimConfig.Data.Parse("{\"vacuum\":{\"driveSpeed\":0.5},\"cellSize\":9,\"telemetryInterval\":0.0001,\"maxRunMinutes\":-3}");
+            var data = SimConfig.Data.Parse("{\"vacuum\":{\"driveSpeed\":0.5},\"cellSize\":9,\"telemetryInterval\":0.0001,\"runLimitSeconds\":-3}");
 
             Assert.AreEqual(SimConfig.MaxCellSize, data.cellSize, 1e-6f);
             Assert.AreEqual(SimConfig.MinTelemetryInterval, data.telemetryInterval, 1e-6f);
-            Assert.AreEqual(30f, data.maxRunMinutes, 1e-6f, "a nonsense limit falls back to the default");
+            Assert.AreEqual(SimConfig.DefaultRunLimitSeconds, data.runLimitSeconds, 1e-6f, "a nonsense limit falls back to the default");
+            Assert.IsFalse(data.runLimitEnabled, "single runs have no time limit unless it is switched on");
             Assert.IsNotNull(data.floorEfforts);
         }
     }

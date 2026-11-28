@@ -78,6 +78,13 @@ namespace RobotVacuum.AlgorithmApi
 
         // ---- Rooms ----
 
+        /// <summary>
+        /// Set true by an algorithm that never reads rooms: <see cref="Update"/> then skips finding them (about a third of
+        /// an update's cost), <see cref="RoomCount"/> is 0, <see cref="RoomOf"/> is -1 and <see cref="Doorways"/> is empty.
+        /// Setting it back to false finds them again at the next update.
+        /// </summary>
+        bool SkipRooms { get; set; }
+
         /// <summary>The number of rooms found. Room numbers are 0 .. RoomCount - 1 and may change from one update to the next.</summary>
         int RoomCount { get; }
 

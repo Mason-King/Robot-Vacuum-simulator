@@ -168,6 +168,9 @@ namespace RobotVacuumSim.EnvironmentModel
         public float CellSizeMeters => cellSizeMeters;
         public Vector2 AnchorWorld => anchorWorld;
 
+        /// <summary>The runaway guard in cells: <see cref="TryWorldToGridIndex"/> refuses an index further than this from the anchor.</summary>
+        public int MaxIndex => maxIndex;
+
         bool IsAllocated(int row, int col) =>
             row >= minRow && row < minRow + rows && col >= minCol && col < minCol + cols;
 

@@ -35,11 +35,22 @@ namespace RobotVacuum.Sim.Control
         readonly int reachCells; // how far (cells) a blocked cell's influence on clearance reaches
         readonly float half;     // half a cell
         readonly float cap;      // clearance values are capped here: anything above the clearance is just "free"
+        readonly int span;       // 2 × reachCells + 1
+        readonly float[] offsets; // OffsetDistance(dr, dc) at [(dr + reachCells) × span + (dc + reachCells)]
 
         // Clearance field over a rectangle of cells.
         float[] field;
         int fieldMinRow, fieldMinCol, fieldRows, fieldCols;
         int fieldVersion = int.MinValue;
+        int fieldWallVersion;          // the view's WallVersion the field (and fieldWall) reflect
+        byte[] fieldWall;              // the view's IsBlocked for each field cell, as of fieldWallVersion
+        int[] affected;                // == affectedStamp when a cell is to be recomputed in an incremental update
+        int affectedStamp;
+        readonly List<long> wallChanges = new List<long>();
+        readonly List<int> affectedCells = new List<int>();
+
+        /// <summary>More wall changes than this since the last update (a big SLAM redraw): rebuild the field in full instead.</summary>
+        public const int MaxIncrementalWallChanges = 2000;
 
         // A* scratch, sized to the field.
         float[] cost;
@@ -61,6 +72,13 @@ namespace RobotVacuum.Sim.Control
             half = cellSize * 0.5f;
             reachCells = Mathf.CeilToInt((clearance + half) / cellSize) + 1;
             cap = clearance + cellSize;
+
+            // OffsetDistance for every offset within reach, worked out once (each is the same float every time).
+            span = 2 * reachCells + 1;
+            offsets = new float[span * span];
+            for (int dr = -reachCells; dr <= reachCells; dr++)
+                for (int dc = -reachCells; dc <= reachCells; dc++)
+                    offsets[(dr + reachCells) * span + (dc + reachCells)] = OffsetDistance(dr, dc);
         }
 
         /// <summary>The distance the body is kept from anything believed impassable (radius + margin), metres.</summary>
@@ -68,6 +86,41 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>How many A* searches have been run (reporting and tests).</summary>
         public int Searches { get; private set; }
+
+        // ---- Cost read-outs (the lag log; reporting only, never read by the simulation) ---------------------
+
+        /// <summary>Who is asking for paths, for the read-outs below. The brain sets it around its calls; Driver otherwise.</summary>
+        public enum PlanCaller { Driver, Algorithm, Battery, Count }
+
+        public PlanCaller Caller { get; set; }
+
+        readonly int[] pathCalls = new int[(int)PlanCaller.Count];
+        readonly double[] pathMs = new double[(int)PlanCaller.Count];
+
+        /// <summary>FindPath calls and real ms, by caller (the ms include any field rebuild and search inside them).</summary>
+        public int PathCalls(PlanCaller caller) => pathCalls[(int)caller];
+        public double PathMs(PlanCaller caller) => pathMs[(int)caller];
+
+        /// <summary>FindPath calls that ran the A* search (the rest were one straight leg in plain view, or failed early).</summary>
+        public int GridSearches { get; private set; }
+
+        /// <summary>Clearance-field full rebuilds (inside FindPath) and their real ms.</summary>
+        public int FieldRebuilds { get; private set; }
+        public double FieldMs { get; private set; }
+
+        /// <summary>Clearance-field incremental updates (inside FindPath) and their real ms.</summary>
+        public int FieldUpdates { get; private set; }
+        public double FieldUpdateMs { get; private set; }
+
+        /// <summary>SegmentClear calls (the driver's leg checks) and their real ms.</summary>
+        public int SegmentChecks { get; private set; }
+        public double SegmentMs { get; private set; }
+
+        /// <summary>Cell clearances worked out directly because the cached field was stale or too small (each scans the cells around it).</summary>
+        public long DirectClearances { get; private set; }
+
+        static double MsSince(long started) =>
+            (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         /// <summary>
         /// Plans from <paramref name="from"/> to <paramref name="to"/>. On success, <paramref name="into"/> (cleared
@@ -85,6 +138,8 @@ namespace RobotVacuum.Sim.Control
             finally
             {
                 AddTime(started);
+                pathCalls[(int)Caller]++;
+                pathMs[(int)Caller] += MsSince(started);
             }
         }
 
@@ -109,6 +164,7 @@ namespace RobotVacuum.Sim.Control
             }
 
             search++;
+            GridSearches++;
             int startIndex = Index(start.row, start.col);
             int goalIndex = Index(goal.row, goal.col);
             MarkBasin(startIndex);
@@ -146,6 +202,8 @@ namespace RobotVacuum.Sim.Control
             finally
             {
                 AddTime(started);
+                SegmentChecks++;
+                SegmentMs += MsSince(started);
             }
         }
 
@@ -337,6 +395,17 @@ namespace RobotVacuum.Sim.Control
                           maxRow < fieldMinRow + fieldRows && maxCol < fieldMinCol + fieldCols;
             if (covers && fieldVersion == view.TopologyVersion) return;
 
+            // Same window as the field already has: update only the cells near cells whose wall status changed.
+            // This gives exactly the values a full rebuild would (see UpdateFieldIncrementally).
+            bool sameWindow = field != null && minRow == fieldMinRow && minCol == fieldMinCol &&
+                              maxRow - minRow + 1 == fieldRows && maxCol - minCol + 1 == fieldCols;
+            if (sameWindow && UpdateFieldIncrementally())
+            {
+                fieldVersion = view.TopologyVersion;
+                return;
+            }
+
+            long rebuildStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             fieldMinRow = minRow;
             fieldMinCol = minCol;
             fieldRows = maxRow - minRow + 1;
@@ -351,25 +420,32 @@ namespace RobotVacuum.Sim.Control
                 seen = new int[total];
                 closed = new int[total];
                 basin = new int[total];
+                fieldWall = new byte[total];
+                affected = new int[total];
+                affectedStamp = 0;
                 search = 0;
             }
             for (int i = 0; i < total; i++) field[i] = cap;
+            fieldWallVersion = view.WallVersion;
 
             // Every blocked cell lowers the clearance of the cells around it.
             for (int r = 0; r < fieldRows; r++)
             {
                 for (int c = 0; c < fieldCols; c++)
                 {
-                    if (!view.IsBlocked(r + fieldMinRow, c + fieldMinCol)) continue;
+                    bool wall = view.IsBlocked(r + fieldMinRow, c + fieldMinCol);
+                    fieldWall[r * fieldCols + c] = wall ? (byte)1 : (byte)0;
+                    if (!wall) continue;
                     for (int dr = -reachCells; dr <= reachCells; dr++)
                     {
                         int rr = r + dr;
                         if (rr < 0 || rr >= fieldRows) continue;
+                        int offsetRow = (dr + reachCells) * span + reachCells;
                         for (int dc = -reachCells; dc <= reachCells; dc++)
                         {
                             int cc = c + dc;
                             if (cc < 0 || cc >= fieldCols) continue;
-                            float d = OffsetDistance(dr, dc);
+                            float d = offsets[offsetRow + dc];
                             int index = rr * fieldCols + cc;
                             if (d < field[index]) field[index] = d;
                         }
@@ -377,16 +453,90 @@ namespace RobotVacuum.Sim.Control
                 }
             }
             fieldVersion = view.TopologyVersion;
+            FieldRebuilds++;
+            FieldMs += MsSince(rebuildStarted);
+        }
+
+        /// <summary>
+        /// Brings the field up to date from the view's wall-change log, without a full rebuild. Each changed cell's
+        /// wall status is refreshed in <see cref="fieldWall"/>; then every field cell within reach of a changed cell is
+        /// recomputed as the minimum over the wall cells around it in the same window. A full rebuild computes each
+        /// cell as exactly that minimum over the same window, so the values are identical. False (rebuild in full
+        /// instead) if the log no longer reaches back or too much changed.
+        /// </summary>
+        bool UpdateFieldIncrementally()
+        {
+            if (!view.WallChangesSince(fieldWallVersion, wallChanges)) return false;
+            if (wallChanges.Count > MaxIncrementalWallChanges) return false;
+
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            affectedStamp++;
+            if (affectedStamp == int.MaxValue)
+            {
+                System.Array.Clear(affected, 0, affected.Length);
+                affectedStamp = 1;
+            }
+            affectedCells.Clear();
+
+            for (int i = 0; i < wallChanges.Count; i++)
+            {
+                int row = (int)(wallChanges[i] >> 32), col = (int)wallChanges[i];
+                int r = row - fieldMinRow, c = col - fieldMinCol;
+                if (r >= 0 && c >= 0 && r < fieldRows && c < fieldCols)
+                    fieldWall[r * fieldCols + c] = view.IsBlocked(row, col) ? (byte)1 : (byte)0;
+
+                // Every field cell within reach of the change may have a new value.
+                for (int rr = Math.Max(0, r - reachCells); rr <= Math.Min(fieldRows - 1, r + reachCells); rr++)
+                {
+                    for (int cc = Math.Max(0, c - reachCells); cc <= Math.Min(fieldCols - 1, c + reachCells); cc++)
+                    {
+                        int index = rr * fieldCols + cc;
+                        if (affected[index] == affectedStamp) continue;
+                        affected[index] = affectedStamp;
+                        affectedCells.Add(index);
+                    }
+                }
+            }
+
+            // Each affected cell: the minimum, over the wall cells within reach, of their offset distance (looked up,
+            // not recomputed). A minimum doesn't depend on the order it is taken in, and nothing is below 0, so the
+            // search can stop at a 0; the value is the one the full rebuild gives.
+            for (int i = 0; i < affectedCells.Count; i++)
+            {
+                int index = affectedCells[i];
+                int r = index / fieldCols, c = index - r * fieldCols;
+                int rowFrom = Math.Max(0, r - reachCells), rowTo = Math.Min(fieldRows - 1, r + reachCells);
+                int colFrom = Math.Max(0, c - reachCells), colTo = Math.Min(fieldCols - 1, c + reachCells);
+                float best = cap;
+                for (int rr = rowFrom; rr <= rowTo && best > 0f; rr++)
+                {
+                    int wallRow = rr * fieldCols;
+                    int offsetRow = (rr - r + reachCells) * span + reachCells - c; // + cc gives the offset of (rr - r, cc - c)
+                    for (int cc = colFrom; cc <= colTo; cc++)
+                    {
+                        if (fieldWall[wallRow + cc] == 0) continue;
+                        float d = offsets[offsetRow + cc];
+                        if (d < best) best = d;
+                    }
+                }
+                field[index] = best;
+            }
+
+            fieldWallVersion = view.WallVersion;
+            FieldUpdates++;
+            FieldUpdateMs += MsSince(started);
+            return true;
         }
 
         float DirectClearance(int row, int col)
         {
+            DirectClearances++;
             float best = cap;
             for (int dr = -reachCells; dr <= reachCells; dr++)
                 for (int dc = -reachCells; dc <= reachCells; dc++)
                 {
                     if (!view.IsBlocked(row + dr, col + dc)) continue;
-                    float d = OffsetDistance(dr, dc);
+                    float d = offsets[(dr + reachCells) * span + (dc + reachCells)];
                     if (d < best) best = d;
                 }
             return best;

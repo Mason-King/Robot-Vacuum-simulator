@@ -432,14 +432,6 @@ namespace RobotVacuum.Tests
             Assert.IsFalse(Bumped(VacuumShapeKind.Round), "the disc's front is 10 cm away, beyond the look-ahead");
             Assert.IsTrue(Bumped(VacuumShapeKind.Rectangular), "the box's front is 7 cm away");
         }
-
-        [Test]
-        public void ProbeDistance_IsMeasuredFromTheBodysEdge()
-        {
-            Wall(new Vector2(0f, 1.05f), new Vector2(2f, 0.1f));
-            var robot = Robot(VacuumShapeKind.Rectangular, Vector2.zero, 0f);
-            Assert.AreEqual(1f - VacuumShape.RectangleLength * 0.5f, robot.ProbeDistance(Vector2.up, 3f), 1e-3f);
-        }
     }
 
     /// <summary>The shape setting, from the Configuration screen and job files to the run.</summary>

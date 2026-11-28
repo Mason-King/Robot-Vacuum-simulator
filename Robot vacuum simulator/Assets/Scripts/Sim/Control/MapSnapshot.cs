@@ -39,6 +39,11 @@ namespace RobotVacuum.Sim.Control
 
         public bool IsEmpty => Rows == 0 || Cols == 0;
 
+        // ---- Cost read-outs (the lag log; reporting only) ----
+        /// <summary>Real ms copying the map, and in the distance transform, over all Takes.</summary>
+        public double CopyMs { get; private set; }
+        public double TransformMs { get; private set; }
+
         /// <summary>
         /// Copies the map. Returns true when the extent, the blocked cells or the explored cells differ from the last
         /// copy (and the distance transform was redone); false when only dwell, cleanliness or resistance may differ.
@@ -61,19 +66,28 @@ namespace RobotVacuum.Sim.Control
             Rows = map.Rows;
             Cols = map.Cols;
 
+            long copyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             int n = Rows * Cols;
             Ensure(ref explored, n);
             Ensure(ref dwell, n);
             Ensure(ref cleanliness, n);
             Ensure(ref resistance, n);
             Ensure(ref distance, n);
-            map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Explored, explored);
-            map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Dwell, dwell);
-            map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Cleanliness, cleanliness);
-            map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.VacuumResistance, resistance);
-
             if (blocked.Length < n) blocked = new bool[n];
-            for (int i = 0; i < n; i++) blocked[i] = map.IsBlocked(MinRow + i / Cols, MinCol + i % Cols);
+
+            if (map is BeliefMapAdapter adapter)
+            {
+                // The simulator's own map: one pass over the cells, the same values as the reads below.
+                adapter.View.CopyCells(MinRow, MinCol, Rows, Cols, explored, dwell, cleanliness, resistance, blocked);
+            }
+            else
+            {
+                map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Explored, explored);
+                map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Dwell, dwell);
+                map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.Cleanliness, cleanliness);
+                map.ReadRegion(MinRow, MinCol, Rows, Cols, 1, BeliefField.VacuumResistance, resistance);
+                for (int i = 0; i < n; i++) blocked[i] = map.IsBlocked(MinRow + i / Cols, MinCol + i % Cols);
+            }
 
             bool changed = MinRow != lastMinRow || MinCol != lastMinCol || Rows != lastRows || Cols != lastCols;
             if (wasBlocked.Length < n)
@@ -93,8 +107,14 @@ namespace RobotVacuum.Sim.Control
             lastMinCol = MinCol;
             lastRows = Rows;
             lastCols = Cols;
+            long copied = System.Diagnostics.Stopwatch.GetTimestamp();
+            CopyMs += (copied - copyStarted) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
-            if (changed) DistanceTransform();
+            if (changed)
+            {
+                DistanceTransform();
+                TransformMs += (System.Diagnostics.Stopwatch.GetTimestamp() - copied) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            }
             return changed;
         }
 

@@ -245,17 +245,16 @@ namespace FolderTest
         // ---- The catalog --------------------------------------------------------------------------------
 
         [Test]
-        public void Catalog_RandomBounceIsTheFirstBuiltIn_AndPatternsMapToIds()
+        public void Catalog_RandomBounceIsTheFirstBuiltIn_AndTheDefault()
         {
             Assert.AreEqual(AlgorithmCatalog.RandomBounceId, AlgorithmCatalog.BuiltIns[0].Id);
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, AlgorithmCatalog.DefaultId);
             Assert.IsInstanceOf<RandomBounceAlgorithm>(AlgorithmCatalog.Find(AlgorithmCatalog.RandomBounceId).Create());
+            Assert.AreEqual("Random", AlgorithmCatalog.NameOf(AlgorithmCatalog.RandomBounceId));
 
-            foreach (MovementPattern pattern in Enum.GetValues(typeof(MovementPattern)))
-            {
-                string id = AlgorithmCatalog.IdOf(pattern);
-                Assert.AreEqual(pattern, AlgorithmCatalog.PatternOf(id));
-                Assert.AreEqual(MovementBrain.Labels[(int)pattern], AlgorithmCatalog.NameOf(id));
-            }
+            Assert.AreEqual(AlgorithmCatalog.DefaultId, AlgorithmCatalog.OrDefault(null));
+            Assert.AreEqual(AlgorithmCatalog.DefaultId, AlgorithmCatalog.OrDefault(""));
+            Assert.AreEqual("Mouse", AlgorithmCatalog.OrDefault("Mouse"));
         }
 
         [Test]
@@ -312,13 +311,13 @@ namespace FolderTest
         }
 
         [Test]
-        public void RunSettings_RecordTheAlgorithmById_AndKeepBuiltInsInStepWithThePattern()
+        public void RunSettings_RecordTheAlgorithmById_EmptyMeansRandom()
         {
-            var fromPattern = new RunSettings { randomSeed = false, pattern = MovementPattern.Spiral }.Resolved();
-            Assert.AreEqual("Legacy.Spiral", fromPattern.algorithmId);
+            var unset = new RunSettings { randomSeed = false }.Resolved();
+            Assert.AreEqual(AlgorithmCatalog.RandomBounceId, unset.algorithmId);
 
-            var fromId = new RunSettings { randomSeed = false, algorithmId = "Legacy.WallFollow" }.Resolved();
-            Assert.AreEqual(MovementPattern.WallFollow, fromId.pattern);
+            var sweep = new RunSettings { randomSeed = false, algorithmId = "BoustrophedonSweep" }.Resolved();
+            Assert.AreEqual("BoustrophedonSweep", sweep.algorithmId);
 
             var plugin = new RunSettings { randomSeed = false, algorithmId = "Someone.Else" }.Resolved();
             Assert.AreEqual("Someone.Else", plugin.algorithmId, "a plugin id is kept as given");

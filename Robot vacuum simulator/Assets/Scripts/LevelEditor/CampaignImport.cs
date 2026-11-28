@@ -232,9 +232,6 @@ namespace RobotVacuum.LevelEditor
                 report.seed = outcome.seed;
                 report.algorithmId = outcome.algorithm;
                 report.algorithmName = !string.IsNullOrEmpty(outcome.algorithmName) ? outcome.algorithmName : AlgorithmCatalog.NameOf(outcome.algorithm);
-                var pattern = AlgorithmCatalog.PatternOf(outcome.algorithm);
-                if (pattern.HasValue) report.pattern = pattern.Value;
-                report.mixedPatterns = false;
                 report.headless = true;
                 report.source = source;
                 report.campaignName = string.IsNullOrEmpty(file.campaignName) ? file.campaignId : file.campaignName;

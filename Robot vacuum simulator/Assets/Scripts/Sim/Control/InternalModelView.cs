@@ -92,12 +92,42 @@ namespace RobotVacuum.Sim.Control
         /// </summary>
         public bool IsBlocked(int row, int col) => IsWall(grid.GetCell(row, col).traversabilityBelief, row, col);
 
+        /// <summary>
+        /// Controller only (the boxed-in check): the cell keeps flipping between blocked and clear, so it is a thin
+        /// static obstacle the lidar half sees (chair legs), not something that moved in. See <see cref="InternalModelWriter.Flickers"/>.
+        /// </summary>
+        public bool Flickers(int row, int col) => writer.Flickers(row, col);
+
         bool IsWall(float traversability, int row, int col) =>
             traversability <= 0f ||
             (traversability < 1f && traversability < ControllerConstants.WallEaseFraction * writer.EaseAt(row, col));
 
         public bool IsBlockedAt(Vector2 world) =>
             grid.TryWorldToGridIndex(world, out int row, out int col) && IsBlocked(row, col);
+
+        /// <summary>
+        /// One pass over a rectangle, for <see cref="MapSnapshot"/>: each cell's explored flag (1/0), dwell,
+        /// cleanliness, vacuum resistance and <see cref="IsBlocked"/>, row by row from (minRow, minCol). Exactly the
+        /// values <see cref="ReadRegion"/> (block size 1) and <see cref="IsBlocked"/> give, read once per cell instead of
+        /// five times.
+        /// </summary>
+        public void CopyCells(int minRow, int minCol, int rows, int cols,
+            float[] exploredOut, float[] dwellOut, float[] cleanlinessOut, float[] resistanceOut, bool[] blockedOut)
+        {
+            int i = 0;
+            for (int r = minRow; r < minRow + rows; r++)
+            {
+                for (int c = minCol; c < minCol + cols; c++, i++)
+                {
+                    var cell = grid.GetCell(r, c);
+                    exploredOut[i] = IsExplored(r, c) ? 1f : 0f;
+                    dwellOut[i] = cell.dwellBelief;
+                    cleanlinessOut[i] = cell.cleanlinessBelief;
+                    resistanceOut[i] = cell.vacuumResistanceBelief;
+                    blockedOut[i] = IsWall(cell.traversabilityBelief, r, c);
+                }
+            }
+        }
 
         // ---- Batch reads -------------------------------------------------------
 
@@ -169,6 +199,12 @@ namespace RobotVacuum.Sim.Control
 
         /// <summary>Goes up whenever a cell flips between impassable and passable (what a planner's cache depends on).</summary>
         public int TopologyVersion => writer.TopologyVersion;
+
+        /// <summary>Goes up whenever a cell starts or stops counting as <see cref="IsBlocked"/> (including shaded walls).</summary>
+        public int WallVersion => writer.WallVersion;
+
+        /// <summary>The cells that started or stopped counting as blocked since <paramref name="version"/>; false if too far back (see <see cref="InternalModelWriter.WallChangesSince"/>).</summary>
+        public bool WallChangesSince(int version, List<long> into) => writer.WallChangesSince(version, into);
 
         /// <summary>
         /// Fills <paramref name="into"/> (cleared first) with the cells whose traversability or vacuum resistance

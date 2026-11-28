@@ -22,7 +22,11 @@ namespace RobotVacuum.Sim.Control
     /// off-limits only because the walls leave no route to them (the view's reachability finds them unconnected);
     /// if a real route exists (an open door to outside, a room edge without a wall) they are reachable on purpose.
     ///
-    /// The cat is never preloaded: it moves, and would make the preload wrong almost at once.
+    /// The cat is never preloaded: it moves, and would make the preload wrong almost at once. Furniture added or
+    /// removed mid-run is treated the same way: the robot learns of it only by sensing.
+    ///
+    /// Every cell is also recorded in the writer's settled-floor map (floor, or preload-blocked), and floor beside a
+    /// preload-blocked cell becomes a settled face (see InternalModelWriter.BeginSettledFloor).
     /// </summary>
     public static class NormalPreload
     {
@@ -49,6 +53,7 @@ namespace RobotVacuum.Sim.Control
             if (!grid.TryWorldToGridIndex(worldMin, out int minRow, out int minCol)) return 0;
             if (!grid.TryWorldToGridIndex(worldMax, out int maxRow, out int maxCol)) return 0;
             writer.Reserve(minRow, minCol, maxRow, maxCol);
+            writer.BeginSettledFloor(minRow, minCol, maxRow, maxCol);
 
             // Blocking furniture, with corners and bounds worked out once (Obstacle.Contains rebuilds its corners per call).
             var blockers = new List<(List<Vector2> corners, Rect bounds)>();
@@ -70,6 +75,7 @@ namespace RobotVacuum.Sim.Control
                     {
                         writer.SetTraversability(row, col, 0f);
                         writer.MarkPermanent(row, col);
+                        writer.MarkPreloaded(row, col, InternalModelWriter.PreloadBlocked);
                         blocked++;
                         continue;
                     }
@@ -77,6 +83,7 @@ namespace RobotVacuum.Sim.Control
                     if (IsInsideClosedDoorway(level, point) || IsInsideAny(blockers, point))
                     {
                         writer.SetTraversability(row, col, 0f);
+                        writer.MarkPreloaded(row, col, InternalModelWriter.PreloadBlocked);
                         blocked++;
                         continue;
                     }
@@ -90,8 +97,11 @@ namespace RobotVacuum.Sim.Control
 
                     writer.Preload(row, col, ease, resistance);
                     writer.SetEase(row, col, ease);
+                    writer.MarkPreloaded(row, col, InternalModelWriter.SettledFloor);
                 }
             }
+
+            writer.FinishSettledFloor();
 
             // The preload is the starting map, not a change: an algorithm reads the whole map once at the start.
             writer.DiscardPendingChanges();

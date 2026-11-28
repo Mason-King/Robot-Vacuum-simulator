@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using NUnit.Framework;
+using RobotVacuum.Level;
+using RobotVacuum.LevelEditor;
 using RobotVacuum.Sim.Control;
 using RobotVacuum.Sim.Sensors;
 using RobotVacuumSim.EnvironmentModel;
@@ -120,29 +123,6 @@ namespace RobotVacuum.Tests
         }
 
         [Test]
-        public void TheHitFieldGradient_MatchesFiniteDifferences()
-        {
-            var world = SlamWorld.Apartment();
-            var dock = new Vector2(-2f, -1f);
-            var grid = DockSubmap(world, new RandomProvider(3), dock);
-            var matcher = new ScanMatcher();
-            matcher.Match(grid, new List<Vector2> { Vector2.up }, new RobotPose(dock, 0f), 0f, 0f); // binds the grid
-
-            int checkedPoints = 0;
-            foreach (var p in new[] { new Vector2(-2.97f, -1.4f), new Vector2(-1.88f, 0.73f), new Vector2(0.43f, -1.02f), new Vector2(-2.5f, -1.98f) })
-            {
-                double e = matcher.HitResidual(p.x, p.y, out double dx, out double dy);
-                const double h = 1e-5;
-                double fx = (matcher.HitResidual(p.x + h, p.y, out _, out _) - matcher.HitResidual(p.x - h, p.y, out _, out _)) / (2 * h);
-                double fy = (matcher.HitResidual(p.x, p.y + h, out _, out _) - matcher.HitResidual(p.x, p.y - h, out _, out _)) / (2 * h);
-                Assert.AreEqual(fx, dx, 1e-3 + 1e-3 * Math.Abs(fx), $"d/dx at {p}");
-                Assert.AreEqual(fy, dy, 1e-3 + 1e-3 * Math.Abs(fy), $"d/dy at {p}");
-                if (e < 0.99) checkedPoints++;
-            }
-            Assert.That(checkedPoints, Is.GreaterThan(0), "at least one probe should be near hits");
-        }
-
-        [Test]
         public void TheInterpolatedGradient_MatchesFiniteDifferences()
         {
             var world = SlamWorld.Apartment();
@@ -195,6 +175,52 @@ namespace RobotVacuum.Tests
             Assert.LessOrEqual(after / trials, 0.012, "position, mean over the trials");
             Assert.LessOrEqual(headingAfter / trials, 0.5, "heading, mean over the trials");
             Assert.Less(after, before);
+        }
+
+        [Test]
+        public void TheFastFit_IsTheReferenceFit_BitForBit()
+        {
+            // The speed pass reuses each accepted trial's gradient and reads the map's 4 × 4 cells straight from the
+            // array. Against the original fit: the same pose, iterations and mean probability, every time. Guesses up to
+            // 10 cm and 5° off make the fit reject steps too, and some scans reach past the submap's edge.
+            var world = SlamWorld.Apartment();
+            var random = new RandomProvider(21);
+            var dock = new Vector2(-2f, -1f);
+            var grid = DockSubmap(world, random, dock);
+            var fast = new ScanMatcher();
+            var reference = new ScanMatcher();
+            var rng = new System.Random(21);
+
+            for (int t = 0; t < 40; t++)
+            {
+                var truth = new RobotPose(dock + new Vector2((float)(rng.NextDouble() * 0.6 - 0.3), (float)(rng.NextDouble() * 0.6 - 0.3)),
+                    (float)(rng.NextDouble() * 360 - 180));
+                float off = t < 20 ? 0.02f : 0.10f, turn = t < 20 ? 0.7f : 5f;
+                var guess = new RobotPose(truth.position + new Vector2((float)(rng.NextDouble() * 2 * off - off), (float)(rng.NextDouble() * 2 * off - off)),
+                    truth.heading + (float)(rng.NextDouble() * 2 * turn - turn));
+                var points = Points(world.Scan(truth, random), 1 + t % 3);
+                float occupied = t % 2 == 0 ? S.OccupiedSpaceWeight : 3f;
+
+                var a = fast.Match(grid, points, guess, occupied, S.TranslationWeight, S.RotationWeight);
+                var b = reference.MatchReference(grid, points, guess, occupied, S.TranslationWeight, S.RotationWeight);
+                Assert.AreEqual(b.position.x, a.position.x, 0f, $"trial {t}: x");
+                Assert.AreEqual(b.position.y, a.position.y, 0f, $"trial {t}: y");
+                Assert.AreEqual(b.heading, a.heading, 0f, $"trial {t}: heading");
+                Assert.AreEqual(reference.LastIterations, fast.LastIterations, $"trial {t}: iterations");
+                Assert.AreEqual(reference.LastMeanProbability, fast.LastMeanProbability, 0f, $"trial {t}: mean probability");
+            }
+
+            // The interpolation alone, over and past the whole submap (the edge falls back to the reference path).
+            float cell = grid.CellSizeMeters;
+            for (float y = grid.AnchorWorld.y + (grid.minRow - 3) * cell; y < grid.AnchorWorld.y + (grid.minRow + grid.rows + 3) * cell; y += 0.73f * cell)
+                for (float x = grid.AnchorWorld.x + (grid.minCol - 3) * cell; x < grid.AnchorWorld.x + (grid.minCol + grid.cols + 3) * cell; x += 0.81f * cell)
+                {
+                    double p = fast.Interpolate(x, y, out double dx, out double dy);
+                    double q = fast.InterpolateReference(x, y, out double rx, out double ry);
+                    Assert.AreEqual(q, p, 0.0, $"value at ({x}, {y})");
+                    Assert.AreEqual(rx, dx, 0.0, $"d/dx at ({x}, {y})");
+                    Assert.AreEqual(ry, dy, 0.0, $"d/dy at ({x}, {y})");
+                }
         }
 
         [Test]
@@ -251,6 +277,57 @@ namespace RobotVacuum.Tests
 
             slam.Track(world.Scan(pose, null), pose, 6f);
             Assert.AreEqual(2, slam.ScansInserted, "and one after 5 s still");
+        }
+
+        [Test]
+        public void ReplayingAScanIntoTheNewerSubmap_IsExactlyInsertingIt()
+        {
+            // The speed pass traces each scan once and replays its cells into the second active submap. Run the same
+            // noisy scans through a LocalSlam doing that and one inserting into each submap separately: every pose,
+            // every changed-cell list (in order) and every grid, bit for bit, must match.
+            var world = SlamWorld.Apartment();
+            var centre = new Vector2(-2f, -0.5f);
+            var random = new RandomProvider(11);
+            var replayed = new LocalSlam(centre, 0.05f, PoseCorrectionQuality.Balanced, 1f);
+            var separate = new LocalSlam(centre, 0.05f, PoseCorrectionQuality.Balanced, 1f);
+            var start = new RobotPose(centre + new Vector2(0.6f, 0f), 90f);
+            LocalSlam.ScansPerSubmapOverride = 30; // several submap hand-overs
+            try
+            {
+                replayed.Begin(start);
+                separate.Begin(start);
+                for (int k = 0; k < 200; k++)
+                {
+                    float angle = 6f * k;
+                    var truth = new RobotPose(centre + RobotPose.DirectionOf(angle - 90f) * 0.6f, angle);
+                    var frame = world.Scan(truth, random);
+
+                    LocalSlam.ReplayInserts = true;
+                    var a = replayed.Track(frame, truth, 0.1f * k);
+                    LocalSlam.ReplayInserts = false;
+                    var b = separate.Track(frame, truth, 0.1f * k);
+
+                    Assert.AreEqual(b.position.x, a.position.x, 0f, $"scan {k}: x");
+                    Assert.AreEqual(b.position.y, a.position.y, 0f, $"scan {k}: y");
+                    Assert.AreEqual(b.heading, a.heading, 0f, $"scan {k}: heading");
+                    CollectionAssert.AreEqual(separate.ChangedCells.ToArray(), replayed.ChangedCells.ToArray(), $"scan {k}: changed cells");
+                }
+
+                Assert.AreEqual(separate.Submaps.Count, replayed.Submaps.Count);
+                Assert.Greater(replayed.Submaps.Count, 4, "the run crossed several submaps");
+                for (int s = 0; s < replayed.Submaps.Count; s++)
+                {
+                    var x = replayed.Submaps[s].grid;
+                    var y = separate.Submaps[s].grid;
+                    Assert.AreEqual((y.minRow, y.minCol, y.rows, y.cols, y.ScanCount), (x.minRow, x.minCol, x.rows, x.cols, x.ScanCount), $"submap {s}: extent");
+                    CollectionAssert.AreEqual(y.probability, x.probability, $"submap {s}: probabilities");
+                }
+            }
+            finally
+            {
+                LocalSlam.ScansPerSubmapOverride = 0;
+                LocalSlam.ReplayInserts = true;
+            }
         }
 
         [Test]
@@ -324,6 +401,253 @@ namespace RobotVacuum.Tests
             }
         }
 
+        /// <summary>The Enclosed Test world is the live level: spawn, wall faces seen from it, and open doorways.</summary>
+        [Test]
+        public void EnclosedTest_WorldMatchesTheLevel()
+        {
+            var world = SlamWorld.EnclosedTest();
+            Vector2 spawn = world.Dock;
+            Assert.AreEqual(5.2497f, spawn.x, 1e-3f);
+            Assert.AreEqual(-1.6583f, spawn.y, 1e-3f);
+            Assert.IsTrue(world.Inside(spawn) && world.IsFree(spawn, 0.2f), "spawn is in the corridor, clear of walls");
+            // Wall faces from the spawn, worked out independently from the level file (12 cm walls centred on each edge).
+            Assert.AreEqual(0.6453f, world.Cast(spawn, Vector2.right), 0.005f, "east end wall");
+            Assert.AreEqual(0.3483f, world.Cast(spawn, Vector2.up), 0.005f, "corridor's inner wall");
+            Assert.AreEqual(0.2629f, world.Cast(spawn, Vector2.down), 0.005f, "outer wall");
+            foreach (var doorway in new[] { new Vector2(3.0506f, -1.1875f), new Vector2(-1.3716f, -1.0415f), new Vector2(-2.1062f, 0.1524f), new Vector2(2.2860f, 1.1521f) })
+                Assert.IsTrue(world.IsFree(doorway, 0.2f), $"doorway at {doorway} is open");
+            Assert.IsFalse(world.Inside(new Vector2(5.5f, 2.5f)), "outside every room");
+        }
+
+        /// <summary>One run scored against the agreed target (Nov 5): within 5 cm and 2° for 99% of the time, never beyond 8 cm or 3°.</summary>
+        struct TargetScore
+        {
+            public float within, worstCm, worstDeg, p99Cm, rmsCm, rmsDeg;
+            public bool Met => within >= 0.99f && worstCm <= 8f && worstDeg <= 3f;
+            public override string ToString() =>
+                $"{(Met ? "MEETS" : "misses")} target: {within * 100f:F1}% within 5 cm & 2°, worst {worstCm:F1} cm / {worstDeg:F2}°, p99 {p99Cm:F1} cm, rms {rmsCm:F1} cm / {rmsDeg:F2}°";
+        }
+
+        static TargetScore Score(SlamHarness harness, float seconds)
+        {
+            int steps = 0, within = 0;
+            var before = harness.OnStep;
+            harness.OnStep = (b, t, time) =>
+            {
+                before?.Invoke(b, t, time);
+                steps++;
+                if (Vector2.Distance(b.position, t.position) <= 0.05f && Mathf.Abs(Mathf.DeltaAngle(b.heading, t.heading)) <= 2f) within++;
+            };
+            harness.Run(seconds);
+            harness.OnStep = before;
+            var d = harness.Drift;
+            return new TargetScore
+            {
+                within = steps > 0 ? within / (float)steps : 0f,
+                worstCm = d.MaxMeters * 100f, worstDeg = d.MaxDegrees,
+                p99Cm = d.PositionPercentile(0.99f) * 100f, rmsCm = d.RmsMeters * 100f, rmsDeg = d.RmsDegrees,
+            };
+        }
+
+        /// <summary>
+        /// Diagnostics, not a check: eight seeds × 300 s on the Enclosed Test level, live settings, loop closure on. Per
+        /// seed: the survey line, the 60 s checkpoints, the whole-map scale and rotation fit, and the score against the
+        /// target. Run it on its own.
+        /// </summary>
+        [Explicit, Test, Timeout(3_600_000)]
+        public void Survey_Enclosed() => SurveyAgainstTarget("Enclosed Test", SlamWorld.EnclosedTest, verbose: true);
+
+        /// <summary>
+        /// Diagnostics, not a check: the target score on both levels, eight seeds each, one line per seed. This is the
+        /// yardstick for every candidate fix. Run it on its own.
+        /// </summary>
+        [Explicit, Test, Timeout(3_600_000)]
+        public void Survey_TargetBothLevels()
+        {
+            SurveyAgainstTarget("Apartment", SlamWorld.Apartment, verbose: false);
+            SurveyAgainstTarget("Enclosed Test", SlamWorld.EnclosedTest, verbose: false);
+        }
+
+        static void SurveyAgainstTarget(string label, Func<SlamWorld> world, bool verbose, Action<SlamHarness> set = null)
+        {
+            const int seeds = 8;
+            int met = 0;
+            double within = 0, worst = 0, p99 = 0, rms = 0, scale = 0, rotation = 0, leftover = 0, msPerSimSecond = 0;
+            for (int seed = 1; seed <= seeds; seed++)
+            {
+                var harness = new SlamHarness(seed, world());
+                set?.Invoke(harness);
+                var score = Score(harness, 300f);
+                var fit = harness.AlignedWithScale();
+                if (verbose)
+                {
+                    Print(seed, harness);
+                    TestContext.WriteLine("    " + string.Join("; ", harness.Checkpoints));
+                }
+                TestContext.WriteLine($"{label} seed {seed}: {score} | map fit: scale {(fit.scale - 1) * 100:+0.00;-0.00}%, rotation {fit.rotationDegrees:+0.00;-0.00}°, " +
+                                      $"left after shift/rotation/scale removed rms {fit.rms * 100:F1} cm");
+                if (score.Met) met++;
+                within += score.within / seeds;
+                worst += score.worstCm / seeds;
+                p99 += score.p99Cm / seeds;
+                rms += score.rmsCm / seeds;
+                scale += (fit.scale - 1) * 100 / seeds;
+                rotation += fit.rotationDegrees / seeds;
+                leftover += fit.rms * 100 / seeds;
+                msPerSimSecond += harness.RealSeconds * 1000.0 / 300.0 / seeds;
+            }
+            TestContext.WriteLine($"{label}: {met}/{seeds} seeds meet the target | means: {within * 100:F1}% within, worst {worst:F1} cm, p99 {p99:F1} cm, rms {rms:F1} cm | " +
+                                  $"map scale {scale:+0.00;-0.00}%, rotation {rotation:+0.00;-0.00}°, left over rms {leftover:F1} cm | {msPerSimSecond:F1} ms per sim second (whole harness)");
+        }
+
+        /// <summary>
+        /// Diagnostics, not a check: where does the whole-map shrink live, when is it set, and can odometry see it early?
+        /// Apartment and Enclosed Test, 8 seeds × 300 s each, live settings. Per seed: (1) WHERE: the scale of the whole
+        /// run's track (global, after loop closure), of local SLAM's own track, and of local SLAM's track inside each
+        /// submap's window (the matches while that submap was the newest). If the windows carry the shrink, it is drawn
+        /// inside the submaps and moving submaps in the pose graph can't remove it. (2) WHEN: the global track's scale and
+        /// rotation fitted on everything up to 10, 20, 30, 40, 60, 120 and 300 s. (3) ODOMETRY: the robot's own estimate of
+        /// tracking's scale error, from chords of consecutive ≥ 2 m stretches of odometry path (tracked chord ÷ odometry
+        /// chord − 1, summed), with odometry's honest ± (1.5 cm per √m of path), next to the true values. Measurement only.
+        /// </summary>
+        [Explicit, Test, Timeout(3_600_000)]
+        public void Diagnose_EnclosedScale()
+        {
+            DiagnoseScaleOrigin("Apartment", SlamWorld.Apartment);
+            DiagnoseScaleOrigin("Enclosed Test", SlamWorld.EnclosedTest);
+        }
+
+        /// <summary>Best fit believed ≈ scale · R(rotation) · true + shift. Spread = rms distance of the true points from their centroid.</summary>
+        static (double scale, double rotation, double spread, int n) FitScale(IList<(Vector2 b, Vector2 t)> points)
+        {
+            int n = points.Count;
+            if (n < 3) return (1, 0, 0, n);
+            double mbx = 0, mby = 0, mtx = 0, mty = 0;
+            foreach (var (b, t) in points) { mbx += b.x; mby += b.y; mtx += t.x; mty += t.y; }
+            mbx /= n; mby /= n; mtx /= n; mty /= n;
+            double dot = 0, cross = 0, tt = 0;
+            foreach (var (b, t) in points)
+            {
+                double dtx = t.x - mtx, dty = t.y - mty, dbx = b.x - mbx, dby = b.y - mby;
+                dot += dtx * dbx + dty * dby;
+                cross += dtx * dby - dty * dbx;
+                tt += dtx * dtx + dty * dty;
+            }
+            if (tt < 1e-12) return (1, 0, 0, n);
+            return (System.Math.Sqrt(dot * dot + cross * cross) / tt, System.Math.Atan2(cross, dot) * 180 / System.Math.PI, System.Math.Sqrt(tt / n), n);
+        }
+
+        static void DiagnoseScaleOrigin(string label, Func<SlamWorld> world)
+        {
+            const int seeds = 8;
+            const double stretchMeters = 2.0, odometrySigmaPerRootMeter = 0.015;
+            float[] cutoffs = { 10f, 20f, 30f, 40f, 60f, 120f, 300f };
+            int k = cutoffs.Length;
+            double meanGlobal = 0, meanLocal = 0, meanWindows = 0;
+            var meanSoFarScale = new double[k];
+            var meanSoFarRotation = new double[k];
+            var meanEstimate = new double[k];
+            var meanTracked = new double[k];
+            var meanOdometry = new double[k];
+            var meanMiss = new double[k];
+            var meanPlusMinus = new double[k];
+            var detected = new int[k];
+
+            for (int seed = 1; seed <= seeds; seed++)
+            {
+                var harness = new SlamHarness(seed, world());
+                var matches = new List<(float t, RobotPose local, RobotPose truth, RobotPose odo, int submap, double odoPath)>();
+                var globalTrack = new List<(float t, Vector2 b, Vector2 truth)>();
+                double odoPath = 0;
+                RobotPose? lastOdo = null;
+                harness.OnMatch = (local, truth, t) =>
+                {
+                    var odo = harness.DeadReckoned;
+                    if (lastOdo.HasValue) odoPath += Vector2.Distance(lastOdo.Value.position, odo.position);
+                    lastOdo = odo;
+                    matches.Add((t, local, truth, odo, harness.Slam.Submaps.Count - 1, odoPath));
+                };
+                int steps = 0;
+                harness.OnStep = (b, truth, t) =>
+                {
+                    if (steps++ % 10 == 0) globalTrack.Add((t, b.position, truth.position));
+                };
+                harness.Run(300f);
+
+                // (1) WHERE
+                var globalFit = FitScale(globalTrack.Select(x => (x.b, x.truth)).ToList());
+                var localFit = FitScale(matches.Select(x => (x.local.position, x.truth.position)).ToList());
+                var windows = new List<string>();
+                double weighted = 0, weights = 0;
+                foreach (var group in matches.GroupBy(x => x.submap).OrderBy(g => g.Key))
+                {
+                    var fit = FitScale(group.Select(x => (x.local.position, x.truth.position)).ToList());
+                    if (fit.n < 20) continue;
+                    double w = fit.spread * fit.spread * fit.n;
+                    weighted += (fit.scale - 1) * w;
+                    weights += w;
+                    windows.Add($"submap {group.Key}: {(fit.scale - 1) * 100:+0.00;-0.00}% / {fit.rotation:+0.00;-0.00}° " +
+                                $"({group.First().t:F0}–{group.Last().t:F0} s, rms radius {fit.spread:F1} m)");
+                }
+                double windowScale = weights > 0 ? weighted / weights : 0;
+                meanGlobal += (globalFit.scale - 1) / seeds;
+                meanLocal += (localFit.scale - 1) / seeds;
+                meanWindows += windowScale / seeds;
+                TestContext.WriteLine($"{label} seed {seed}: WHERE whole run global {(globalFit.scale - 1) * 100:+0.00;-0.00}% / {globalFit.rotation:+0.00;-0.00}°, " +
+                                      $"local SLAM frame {(localFit.scale - 1) * 100:+0.00;-0.00}% / {localFit.rotation:+0.00;-0.00}°, " +
+                                      $"inside submap windows (weighted) {windowScale * 100:+0.00;-0.00}%");
+                TestContext.WriteLine("    " + string.Join("; ", windows));
+
+                // (2) WHEN and (3) ODOMETRY
+                var when = new List<string>();
+                var seen = new List<string>();
+                for (int c = 0; c < k; c++)
+                {
+                    float cutoff = cutoffs[c];
+                    var soFar = FitScale(globalTrack.Where(x => x.t <= cutoff).Select(x => (x.b, x.truth)).ToList());
+                    meanSoFarScale[c] += (soFar.scale - 1) / seeds;
+                    meanSoFarRotation[c] += soFar.rotation / seeds;
+                    when.Add($"{cutoff:F0} s {(soFar.scale - 1) * 100:+0.00;-0.00}% / {soFar.rotation:+0.00;-0.00}°");
+
+                    double tracked = 0, odometry = 0, real = 0, path = 0;
+                    int i = 0;
+                    while (i < matches.Count && matches[i].t <= cutoff)
+                    {
+                        int j = i;
+                        while (j < matches.Count && matches[j].odoPath - matches[i].odoPath < stretchMeters) j++;
+                        if (j >= matches.Count || matches[j].t > cutoff) break;
+                        tracked += Vector2.Distance(matches[i].local.position, matches[j].local.position);
+                        odometry += Vector2.Distance(matches[i].odo.position, matches[j].odo.position);
+                        real += Vector2.Distance(matches[i].truth.position, matches[j].truth.position);
+                        path += matches[j].odoPath - matches[i].odoPath;
+                        i = j;
+                    }
+                    if (real <= 0 || odometry <= 0) { seen.Add($"{cutoff:F0} s: no stretch yet"); continue; }
+                    double estimate = tracked / odometry - 1, trackedTrue = tracked / real - 1, odometryTrue = odometry / real - 1;
+                    double plusMinus = odometrySigmaPerRootMeter * System.Math.Sqrt(path) / odometry;
+                    meanEstimate[c] += estimate / seeds;
+                    meanTracked[c] += trackedTrue / seeds;
+                    meanOdometry[c] += odometryTrue / seeds;
+                    meanMiss[c] += System.Math.Abs(estimate - trackedTrue) / seeds;
+                    meanPlusMinus[c] += plusMinus / seeds;
+                    if (System.Math.Abs(estimate) > 2 * plusMinus && System.Math.Sign(estimate) == System.Math.Sign(trackedTrue)) detected[c]++;
+                    seen.Add($"{cutoff:F0} s: robot's estimate {estimate * 100:+0.00;-0.00}% ±{plusMinus * 100:F2} " +
+                             $"(true: tracked {trackedTrue * 100:+0.00;-0.00}%, odometry {odometryTrue * 100:+0.00;-0.00}%; {path:F1} m)");
+                }
+                TestContext.WriteLine("    WHEN (global track so far): " + string.Join(", ", when));
+                TestContext.WriteLine("    ODOMETRY: " + string.Join("; ", seen));
+            }
+
+            TestContext.WriteLine($"{label} MEANS: WHERE global {meanGlobal * 100:+0.00;-0.00}%, local SLAM frame {meanLocal * 100:+0.00;-0.00}%, " +
+                                  $"inside submap windows {meanWindows * 100:+0.00;-0.00}%");
+            TestContext.WriteLine($"{label} MEANS: WHEN " + string.Join(", ", Enumerable.Range(0, k).Select(c =>
+                $"{cutoffs[c]:F0} s {meanSoFarScale[c] * 100:+0.00;-0.00}% / {meanSoFarRotation[c]:+0.00;-0.00}°")));
+            for (int c = 0; c < k; c++)
+                TestContext.WriteLine($"{label} MEANS: ODOMETRY by {cutoffs[c]:F0} s: estimate {meanEstimate[c] * 100:+0.00;-0.00}% ±{meanPlusMinus[c] * 100:F2}, " +
+                                      $"true tracked {meanTracked[c] * 100:+0.00;-0.00}%, odometry itself {meanOdometry[c] * 100:+0.00;-0.00}%, " +
+                                      $"estimate off by {meanMiss[c] * 100:F2}% on average; seen beyond 2± with the right sign on {detected[c]}/{seeds} seeds");
+        }
+
         /// <summary>
         /// Diagnostics, not a check: is local SLAM's drift biased? Seeds 1–6 × 300 s under variants that each remove one
         /// suspect, printing the signed end error averaged over the seeds. About 4 minutes. Run it on its own.
@@ -362,57 +686,6 @@ namespace RobotVacuum.Tests
                 }
                 TestContext.WriteLine($"{name}: mean end error ({ex / seeds:+0.0;-0.0}, {ey / seeds:+0.0;-0.0}) cm, heading {eh / seeds:+0.00;-0.00}° " +
                                       $"(per seed: {string.Join(" ", headings)}); mean worst {worst / seeds * 100:F1} cm");
-            }
-        }
-
-        /// <summary>
-        /// Diagnostics, not a check: how thick are the walls in the robot's map, and what does each free-space / wall
-        /// rule cost in drift? Seeds 1–6 × 300 s on the apartment with diagonal walls. About 5 minutes. Run it on its own.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_WallThickness()
-        {
-            var variants = new (string name, float sigmas, float fromRange, float occupied)[]
-            {
-                ("current: 2σ margin", -1f, 0f, 0f),
-                ("1σ margin", 1f, 0f, 0f),
-                ("no margin", 0f, 0f, 0f),
-                ("2σ margin beyond 1.5 m only", -1f, 1.5f, 0f),
-                ("2σ margin, wall at 0.75 (6 hits)", -1f, 0f, 0.75f),
-                ("1σ margin, wall at 0.75", 1f, 0f, 0.75f),
-            };
-            try
-            {
-                foreach (var (name, sigmas, fromRange, occupied) in variants)
-                {
-                    LocalSlam.MarginSigmasOverride = sigmas;
-                    LocalSlam.MarginFromRangeMeters = fromRange;
-                    LocalSlam.OccupiedOverride = occupied;
-
-                    const int seeds = 6;
-                    double worst = 0, p99 = 0, heading = 0, falseNear = 0, ghosts = 0, missed = 0, thickness = 0;
-                    for (int seed = 1; seed <= seeds; seed++)
-                    {
-                        var run = new SlamHarness(seed, SlamWorld.AngledApartment()).Run(300f);
-                        var map = run.MapAccuracy();
-                        worst += run.Drift.MaxMeters;
-                        p99 += run.Drift.PositionPercentile(0.99f);
-                        heading += Mathf.Abs(Mathf.DeltaAngle(run.EndTrue.heading, run.EndBelieved.heading));
-                        falseNear += map.falseNear;
-                        ghosts += map.ghosts;
-                        missed += map.missed;
-                        thickness += map.thickness;
-                    }
-                    TestContext.WriteLine($"{name}: worst {worst / seeds * 100:F1} cm, p99 {p99 / seeds * 100:F1} cm, end heading {heading / seeds:F2}° | " +
-                                          $"false wall near walls {falseNear / seeds:F0} cells, ghosts {ghosts / seeds:F0}, walls missed {missed / seeds:F0}, " +
-                                          $"thickness {thickness / seeds:F2}× (means over {seeds} seeds)");
-                }
-            }
-            finally
-            {
-                LocalSlam.MarginSigmasOverride = -1f;
-                LocalSlam.MarginFromRangeMeters = 0f;
-                LocalSlam.OccupiedOverride = 0f;
             }
         }
 
@@ -515,173 +788,6 @@ namespace RobotVacuum.Tests
         }
 
         /// <summary>
-        /// Diagnostics, not a check: the hit/miss balance, the free-space margin and the submap cell size, tried together.
-        /// For each setting: the map bias (walls drawn into the room, cm; the mean over the six wall surfaces and 8
-        /// lattice offsets, as in <see cref="Diagnose_BiasSource"/>), the matching bias against such a map, and a
-        /// 4-seed × 300 s run of the real pipeline (loop closure on): drift, and how the Internal Model's walls compare
-        /// with the truth (not available with finer submap cells, which the Internal Model can't be drawn from yet).
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_HitMissAndCell()
-        {
-            var world = SlamWorld.Apartment();
-            var mapPoses = BiasMapPoses(world);
-            var testPoses = BiasTestPoses(world);
-            var scans = BiasScans(world, testPoses);
-            float m1 = S.FreeSpaceMarginSigmas;
-            var settings = new (float miss, float margin, bool fine)[]
-            {
-                (S.MissProbability, m1, false), (S.MissProbability, 0f, false),
-                (0.47f, m1, false), (0.47f, 0f, false),
-                (0.45f, m1, false), (0.45f, 0f, false),
-                (S.MissProbability, m1, true), (0.45f, m1, true), (0.45f, 0f, true),
-            };
-            const int seeds = 4;
-
-            try
-            {
-                foreach (var (miss, margin, fine) in settings)
-                {
-                    ProbabilityGrid.MissProbabilityOverride = miss;
-                    LocalSlam.MarginSigmasOverride = margin;
-                    LocalSlam.SubmapCellOverride = fine ? 0.025f : 0f;
-                    float cell = fine ? 0.0254f : 0.0508f;
-                    string name = $"hit {S.HitProbability:F2} / miss {miss:F2}, margin {margin:F0}σ, {(fine ? "2.5" : "5")} cm cells" +
-                                  (miss == S.MissProbability && margin == m1 && !fine ? " (now)" : "");
-                    TestContext.WriteLine(name);
-
-                    // Map and matching bias.
-                    double into = 0, into05 = 0;
-                    ProbabilityGrid first = null;
-                    for (int k = 0; k < BiasOffsets; k++)
-                    {
-                        var grid = BiasMap(world, mapPoses, BiasAnchor(k, cell), cell, true, margin, (uint)(100 + k));
-                        if (k == 0) first = grid;
-                        foreach (var wall in BiasWalls)
-                        {
-                            into += WallOffset(world, grid, wall, S.OccupiedProbability) / (BiasOffsets * BiasWalls.Length);
-                            into05 += WallOffset(world, grid, wall, 0.5f) / (BiasOffsets * BiasWalls.Length);
-                        }
-                    }
-                    var summary = new BiasSummary();
-                    for (int p = 0; p < testPoses.Count; p++)
-                    {
-                        var (mean, heading, sd) = MatchBias(first, testPoses[p], scans[p], float.MaxValue);
-                        summary.Add(mean, heading, sd, testPoses.Count);
-                    }
-                    TestContext.WriteLine($"    walls drawn {into:+0.00;-0.00} cm into the room (at 0.5: {into05:+0.00;-0.00}); matching: {summary}");
-
-                    // The real pipeline.
-                    float worst = 0, worstMax = 0, p99 = 0, end = 0, heading2 = 0, aligned = 0;
-                    float falseNear = 0, ghosts = 0, missed = 0, thickness = 0;
-                    for (int seed = 1; seed <= seeds; seed++)
-                    {
-                        var run = new SlamHarness(seed).Run(300f);
-                        worst += run.Drift.MaxMeters / seeds;
-                        worstMax = Mathf.Max(worstMax, run.Drift.MaxMeters);
-                        p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                        end += run.EndPositionError / seeds;
-                        heading2 += run.Drift.MaxDegrees / seeds;
-                        aligned += run.Aligned().max / seeds;
-                        if (!fine)
-                        {
-                            var map = run.MapAccuracy();
-                            falseNear += map.falseNear / (float)seeds;
-                            ghosts += map.ghosts / (float)seeds;
-                            missed += map.missed / (float)seeds;
-                            thickness += map.thickness / seeds;
-                        }
-                    }
-                    TestContext.WriteLine($"    run ({seeds} seeds × 300 s, means): worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1} cm, " +
-                                          $"end {end * 100:F1} cm, worst heading {heading2:F2}°, aligned worst {aligned * 100:F1} cm" +
-                                          (fine ? "" : $"; walls: false near {falseNear:F0}, ghosts {ghosts:F0}, missed {missed:F0}, thickness {thickness:F2}×"));
-                }
-            }
-            finally
-            {
-                ProbabilityGrid.MissProbabilityOverride = 0f;
-                LocalSlam.MarginSigmasOverride = -1f;
-                LocalSlam.SubmapCellOverride = 0f;
-            }
-        }
-
-        /// <summary>
-        /// Diagnostics, not a check: where does the HEADING error come from? Position error tracks heading error × distance
-        /// from the dock (r = 0.74 over the survey's checkpoints). Each setting changes one thing; 4 seeds × 300 s each,
-        /// loop closure on. Heading errors are |believed − true| in °, means over the seeds.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_Heading()
-        {
-            var settings = new (string name, Action<SlamHarness> set, Action global)[]
-            {
-                ("as now", h => { }, null),
-                ("start spin at 60°/s", h => h.SpinSpeed = 60f, null),
-                ("no start spin", h => h.SpinSign = 0f, null),
-                ("odometry: no turn noise", h => h.OdometryTurnNoise = false, null),
-                ("odometry: no noise at all", h => h.OdometryNoise = 0f, null),
-                ("lidar: no bearing noise", h => h.BearingNoise = false, null),
-                ("lidar: no range noise", h => h.RangeNoise = false, null),
-                ("rotation weight 10 (from 40)", h => { }, () => LocalSlam.RotationWeightOverride = 10f),
-                ("rotation weight 160 (from 40)", h => { }, () => LocalSlam.RotationWeightOverride = 160f),
-                ("consecutive links' heading σ 0.1° (from 0.4°)", h => { }, () => GlobalSlam.ConsecutiveSigmaDegreesOverride = 0.1f),
-            };
-            try
-            {
-                foreach (var (name, set, global) in settings)
-                {
-                    LocalSlam.RotationWeightOverride = 0f;
-                    GlobalSlam.ConsecutiveSigmaDegreesOverride = 0f;
-                    global?.Invoke();
-                    HeadingRow(name, set);
-                }
-            }
-            finally
-            {
-                LocalSlam.RotationWeightOverride = 0f;
-                GlobalSlam.ConsecutiveSigmaDegreesOverride = 0f;
-            }
-        }
-
-        /// <summary>
-        /// Diagnostics, not a check: range noise drives the heading error (<see cref="Diagnose_Heading"/>). Candidate
-        /// fixes in local SLAM's tracking, and two changes to the simulated noise that test the explanation. Same
-        /// columns as <see cref="Diagnose_Heading"/>; 4 seeds × 300 s each, loop closure on.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_RangeNoise()
-        {
-            var settings = new (string name, Action<SlamHarness> set, Action global)[]
-            {
-                ("as now", h => { }, null),
-                ("track with returns within 3 m only", h => { }, () => LocalSlam.TrackRangeOverride = 3f),
-                ("track with returns within 4 m only", h => { }, () => LocalSlam.TrackRangeOverride = 4f),
-                ("points weighted by 1/σ(range)", h => { }, () => LocalSlam.PointWeightPower = 1),
-                ("points weighted by 1/σ(range)²", h => { }, () => LocalSlam.PointWeightPower = 2),
-                ("180 scans per submap (from 90)", h => { }, () => LocalSlam.ScansPerSubmapOverride = 180),
-                ("SIM: range noise a flat 1 cm (no % of range)", h => h.FlatRangeNoise = true, null),
-                ("SIM: range noise doubled", h => h.RangeNoiseScale = 2f, null),
-            };
-            try
-            {
-                foreach (var (name, set, global) in settings)
-                {
-                    LocalSlam.TrackRangeOverride = 0f;
-                    LocalSlam.PointWeightPower = 0;
-                    LocalSlam.ScansPerSubmapOverride = 0;
-                    global?.Invoke();
-                    HeadingRow(name, set);
-                }
-            }
-            finally
-            {
-                LocalSlam.TrackRangeOverride = 0f;
-                LocalSlam.PointWeightPower = 0;
-                LocalSlam.ScansPerSubmapOverride = 0;
-            }
-        }
-
-        /// <summary>
         /// Eric's experiment: stand still at the dock first, adding every scan at the known dock pose (no fit, no motion
         /// filter), so the anchor submap is built from many sure readings, then spin, then rove. 8 seeds per setting, each
         /// seed printed (heading after the start, at 60 s and at the end, signed), then the means.
@@ -729,113 +835,6 @@ namespace RobotVacuum.Tests
                 }
                 TestContext.WriteLine($"  means: |heading| after the start {(starts > 0 ? (afterStart / starts).ToString("F2") + "°" : "n/a")}, at 60 s {at60:F2}°, end {end:F2}°, " +
                                       $"worst {worstHeading:F2}° | position worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1} cm, rms {rms * 100:F1} cm");
-            }
-        }
-
-        /// <summary>
-        /// Where does the position error come from? Same driving, same seeds, five ways (8 seeds × 300 s):
-        ///   A. perfect map: the map gets exact scans at the true poses; tracking fits the real noisy scans. The matcher's floor.
-        ///   B. noisy map, no feedback: the map gets the real noisy scans, at the TRUE poses. Noisy walls, but no pose
-        ///      error is ever written into the map.
-        ///   C0. full SLAM, loop closure off.   C. full SLAM as now.   D. as now, loop links' σ × 3 (honest, looser).
-        /// C0 − B is what the feedback loop (pose errors written into the map, then followed) costs; B − A what noisy walls
-        /// cost. "Aligned" removes one best-fit shift and rotation of the whole run: the part lidar can't observe.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_ErrorSources()
-        {
-            var settings = new (string name, bool loop, Action<SlamHarness> set, Action global)[]
-            {
-                ("A. perfect map (exact scans at true poses), loop off", false, h => { h.InsertAtTruth = true; h.InsertExactScans = true; }, null),
-                ("B. noisy map at true poses (no feedback), loop off", false, h => h.InsertAtTruth = true, null),
-                ("C0. full SLAM, loop off", false, h => { }, null),
-                ("C. full SLAM as now (loop on)", true, h => { }, null),
-                ("D. as now, loop links' σ × 3", true, h => { }, () => GlobalSlam.LoopSigmaScale = 3f),
-            };
-            const int seeds = 8;
-            try
-            {
-                foreach (var (name, loop, set, global) in settings)
-                {
-                    GlobalSlam.LoopSigmaScale = 1f;
-                    global?.Invoke();
-                    TestContext.WriteLine(name);
-                    float worst = 0, worstMax = 0, p99 = 0, rms = 0, end = 0, aWorst = 0, aRms = 0, heading = 0;
-                    for (int seed = 1; seed <= seeds; seed++)
-                    {
-                        var harness = new SlamHarness(seed, null, loop);
-                        set(harness);
-                        var run = harness.Run(300f);
-                        var aligned = run.Aligned();
-                        TestContext.WriteLine($"    seed {seed}: worst {run.Drift.MaxMeters * 100:F1} cm, p99 {run.Drift.PositionPercentile(0.99f) * 100:F1}, " +
-                                              $"rms {run.Drift.RmsMeters * 100:F1}, end {run.EndPositionError * 100:F1} | aligned worst {aligned.max * 100:F1}, " +
-                                              $"rms {aligned.rms * 100:F1} (rotation {aligned.rotationDegrees:+0.00;-0.00}°) | heading worst {run.Drift.MaxDegrees:F2}°");
-                        worst += run.Drift.MaxMeters / seeds;
-                        worstMax = Mathf.Max(worstMax, run.Drift.MaxMeters);
-                        p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                        rms += run.Drift.RmsMeters / seeds;
-                        end += run.EndPositionError / seeds;
-                        aWorst += aligned.max / seeds;
-                        aRms += aligned.rms / seeds;
-                        heading += run.Drift.MaxDegrees / seeds;
-                    }
-                    TestContext.WriteLine($"  means: worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1}, rms {rms * 100:F1}, end {end * 100:F1} | " +
-                                          $"aligned worst {aWorst * 100:F1}, rms {aRms * 100:F1} | heading worst {heading:F2}°");
-                }
-            }
-            finally
-            {
-                GlobalSlam.LoopSigmaScale = 1f;
-            }
-        }
-
-        /// <summary>
-        /// SLAM_Option2_Design stage 1, go / no-go: the node-level graph with submaps rebuilt from their scans, against
-        /// SLAM as now, on the same 8 seeds × 300 s. For reference (Diagnose_ErrorSources, same seeds): the map built at
-        /// the TRUE poses gave p99 4.0 cm, rms 1.2; as now p99 8.0, rms 3.9. Node rows also report each node's pose
-        /// against the truth (with the graph, and as local SLAM had it), submaps rebuilt, and global SLAM's time.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_NodeGraph()
-        {
-            var settings = new (string name, Action<SlamHarness> set)[]
-            {
-                ("as now (submap graph)", h => { }),
-                ("node graph + rebuilt submaps", h => h.NodeGraph = true),
-            };
-            const int seeds = 8;
-            foreach (var (name, set) in settings)
-            {
-                TestContext.WriteLine(name);
-                float worst = 0, worstMax = 0, p99 = 0, rms = 0, end = 0, aWorst = 0, heading = 0;
-                double ms = 0;
-                for (int seed = 1; seed <= seeds; seed++)
-                {
-                    var harness = new SlamHarness(seed);
-                    set(harness);
-                    var run = harness.Run(300f);
-                    var aligned = run.Aligned();
-                    string nodes = "";
-                    if (harness.NodeGraph)
-                    {
-                        var e = run.NodeErrors();
-                        nodes = $" | nodes vs truth: graph mean {e.graphMean * 100:F1} cm (worst {e.graphMax * 100:F1}), local SLAM mean {e.localMean * 100:F1} " +
-                                $"(worst {e.localMax * 100:F1}); {run.Global.Rebuilds} submap rebuilds, {run.Global.Optimisations} solves, {run.Global.LoopLinks} loop links";
-                    }
-                    TestContext.WriteLine($"    seed {seed}: worst {run.Drift.MaxMeters * 100:F1} cm, p99 {run.Drift.PositionPercentile(0.99f) * 100:F1}, " +
-                                          $"rms {run.Drift.RmsMeters * 100:F1}, end {run.EndPositionError * 100:F1} | aligned worst {aligned.max * 100:F1} | " +
-                                          $"heading worst {run.Drift.MaxDegrees:F2}° | global SLAM {run.GlobalMs / 1000:F1} s of {run.RealSeconds:F1} s{nodes}");
-                    worst += run.Drift.MaxMeters / seeds;
-                    worstMax = Mathf.Max(worstMax, run.Drift.MaxMeters);
-                    p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                    rms += run.Drift.RmsMeters / seeds;
-                    end += run.EndPositionError / seeds;
-                    aWorst += run.Aligned().max / seeds;
-                    heading += run.Drift.MaxDegrees / seeds;
-                    ms += run.GlobalMs / seeds;
-                }
-                TestContext.WriteLine($"  means: worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1}, rms {rms * 100:F1}, end {end * 100:F1} | " +
-                                      $"aligned worst {aWorst * 100:F1} | heading worst {heading:F2}° | global SLAM {ms / 1000:F1} s per run");
             }
         }
 
@@ -984,235 +983,6 @@ namespace RobotVacuum.Tests
         }
 
         /// <summary>
-        /// Does the error wander with submap generations? Scans per submap 90 (now), 180, 360, and never retired (one map
-        /// tracked against all run). 8 seeds × 300 s, loop closure off, no other change. Stop rule agreed: if p99 does
-        /// not improve by at least 1 cm from 90 to 360, the generation hypothesis is wrong.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_SubmapLifetime()
-        {
-            var settings = new (string name, int scans)[] { ("90 scans per submap (now)", 0), ("180", 180), ("360", 360), ("never retired (one map)", 1_000_000) };
-            const int seeds = 8;
-            try
-            {
-                foreach (var (name, scans) in settings)
-                {
-                    LocalSlam.ScansPerSubmapOverride = scans;
-                    float worst = 0, worstMax = 0, p99 = 0, rms = 0, end = 0, aWorst = 0, aRms = 0, rotation = 0, heading = 0;
-                    int ccw = 0;
-                    string perSeed = "";
-                    for (int seed = 1; seed <= seeds; seed++)
-                    {
-                        var run = new SlamHarness(seed, null, false).Run(300f);
-                        var aligned = run.Aligned();
-                        perSeed += $" {run.Drift.PositionPercentile(0.99f) * 100:F1}";
-                        worst += run.Drift.MaxMeters / seeds;
-                        worstMax = Mathf.Max(worstMax, run.Drift.MaxMeters);
-                        p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                        rms += run.Drift.RmsMeters / seeds;
-                        end += run.EndPositionError / seeds;
-                        aWorst += aligned.max / seeds;
-                        aRms += aligned.rms / seeds;
-                        rotation += aligned.rotationDegrees / seeds;
-                        heading += run.Drift.MaxDegrees / seeds;
-                        if (aligned.rotationDegrees > 0) ccw++;
-                    }
-                    TestContext.WriteLine($"{name}: worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1} (each seed:{perSeed}), rms {rms * 100:F1}, " +
-                                          $"end {end * 100:F1} | aligned worst {aWorst * 100:F1}, rms {aRms * 100:F1} | track rotation mean {rotation:+0.00;-0.00}° " +
-                                          $"({ccw} of {seeds} counter-clockwise) | heading worst {heading:F2}°");
-                }
-            }
-            finally
-            {
-                LocalSlam.ScansPerSubmapOverride = 0;
-            }
-        }
-
-        /// <summary>
-        /// Confirmation before changing the live default: 90 vs 360 scans per submap, loop closure off vs on, in the test
-        /// apartment and the angled apartment (8 seeds × 300 s each). Decision rule agreed: if 360 with loop closure on is
-        /// at least as good as 360 with it off, in both worlds, the live ScansPerSubmap becomes 360.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_SubmapLifetimeConfirm()
-        {
-            var worlds = new (string name, SlamWorld world)[] { ("apartment", SlamWorld.Apartment()), ("angled apartment", SlamWorld.AngledApartment()) };
-            const int seeds = 8;
-            try
-            {
-                foreach (var (worldName, world) in worlds)
-                    foreach (int scans in new[] { 90, 360 })
-                        foreach (bool loop in new[] { false, true })
-                        {
-                            LocalSlam.ScansPerSubmapOverride = scans;
-                            float worst = 0, worstMax = 0, p99 = 0, rms = 0, end = 0, aWorst = 0, aRms = 0, rotation = 0, heading = 0;
-                            int ccw = 0, links = 0;
-                            string perSeed = "";
-                            for (int seed = 1; seed <= seeds; seed++)
-                            {
-                                var run = new SlamHarness(seed, world, loop).Run(300f);
-                                var aligned = run.Aligned();
-                                perSeed += $" {run.Drift.PositionPercentile(0.99f) * 100:F1}";
-                                worst += run.Drift.MaxMeters / seeds;
-                                worstMax = Mathf.Max(worstMax, run.Drift.MaxMeters);
-                                p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                                rms += run.Drift.RmsMeters / seeds;
-                                end += run.EndPositionError / seeds;
-                                aWorst += aligned.max / seeds;
-                                aRms += aligned.rms / seeds;
-                                rotation += aligned.rotationDegrees / seeds;
-                                heading += run.Drift.MaxDegrees / seeds;
-                                if (aligned.rotationDegrees > 0) ccw++;
-                                if (run.Global != null) links += run.Global.LoopLinks;
-                            }
-                            TestContext.WriteLine($"{worldName}, {scans} scans per submap, loop closure {(loop ? "on" : "off")}: " +
-                                                  $"worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1} (each seed:{perSeed}), rms {rms * 100:F1}, end {end * 100:F1} | " +
-                                                  $"aligned worst {aWorst * 100:F1}, rms {aRms * 100:F1} | rotation {rotation:+0.00;-0.00}° ({ccw} of {seeds} ccw) | heading worst {heading:F2}°" +
-                                                  (loop ? $" | loop links {links / seeds} per run" : ""));
-                        }
-            }
-            finally
-            {
-                LocalSlam.ScansPerSubmapOverride = 0;
-            }
-        }
-
-        /// <summary>
-        /// Fix 1 on trial: scan points scored against where hits actually landed (hit field) instead of probabilities
-        /// between cell centres. Stop rule agreed: the room-driven rotation (test apartment, loop closure on, now +0.26°,
-        /// 7 of 8 seeds counter-clockwise) must fall below 0.15° with mixed signs, or the fix is dropped.
-        ///   A. The matcher's own bias at fixed true poses (as Diagnose_BiasSource), exact and as-built maps.
-        ///   B. The live pipeline (360-scan submaps, loop closure on), 8 seeds × 300 s, both apartments.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_HitField()
-        {
-            var settings = new (string name, int hits, float sigma)[] { ("as now (cell centres)", 0, 0f), ("hit field, σ 3 cm", 1, 0.03f), ("hit field, σ 5 cm", 1, 0.05f) };
-            try
-            {
-                // A. Matching bias at fixed true poses.
-                var apartment = SlamWorld.Apartment();
-                var mapPoses = BiasMapPoses(apartment);
-                var testPoses = BiasTestPoses(apartment);
-                var scans = BiasScans(apartment, testPoses);
-                const float cell = 0.0508f;
-                var exact = BiasMap(apartment, mapPoses, BiasAnchor(0, cell), cell, false, 0f, 100);
-                var built = BiasMap(apartment, mapPoses, BiasAnchor(0, cell), cell, true, S.FreeSpaceMarginSigmas, 100);
-                TestContext.WriteLine($"A. MATCHING BIAS at {testPoses.Count} fixed true poses ({BiasScansPerPose} noisy scans each)");
-                foreach (var (name, hits, sigma) in settings)
-                {
-                    ScanMatcher.HitFieldOverride = hits;
-                    ScanMatcher.HitFieldSigmaOverride = sigma;
-                    foreach (var (mapName, map) in new[] { ("exact map", exact), ("as-built map", built) })
-                    {
-                        var summary = new BiasSummary();
-                        for (int p = 0; p < testPoses.Count; p++)
-                        {
-                            var (mean, heading, sd) = MatchBias(map, testPoses[p], scans[p], float.MaxValue);
-                            summary.Add(mean, heading, sd, testPoses.Count);
-                        }
-                        TestContext.WriteLine($"    {name}, {mapName}: {summary}");
-                    }
-                }
-
-                // B. The live pipeline.
-                TestContext.WriteLine("B. LIVE PIPELINE (360-scan submaps, loop closure on), 8 seeds × 300 s");
-                const int seeds = 8;
-                foreach (var (worldName, world) in new[] { ("apartment", SlamWorld.Apartment()), ("angled apartment", SlamWorld.AngledApartment()) })
-                {
-                    foreach (var (name, hits, sigma) in settings)
-                    {
-                        ScanMatcher.HitFieldOverride = hits;
-                        ScanMatcher.HitFieldSigmaOverride = sigma;
-                        float worst = 0, worstMax = 0, p99 = 0, rms = 0, end = 0, aWorst = 0, aRms = 0, rotation = 0, heading = 0;
-                        int ccw = 0;
-                        string rotations = "";
-                        for (int seed = 1; seed <= seeds; seed++)
-                        {
-                            var run = new SlamHarness(seed, world).Run(300f);
-                            var aligned = run.Aligned();
-                            rotations += $" {aligned.rotationDegrees:+0.00;-0.00}";
-                            worst += run.Drift.MaxMeters / seeds;
-                            worstMax = Mathf.Max(worstMax, run.Drift.MaxMeters);
-                            p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                            rms += run.Drift.RmsMeters / seeds;
-                            end += run.EndPositionError / seeds;
-                            aWorst += aligned.max / seeds;
-                            aRms += aligned.rms / seeds;
-                            rotation += aligned.rotationDegrees / seeds;
-                            heading += run.Drift.MaxDegrees / seeds;
-                            if (aligned.rotationDegrees > 0) ccw++;
-                        }
-                        TestContext.WriteLine($"    {worldName}, {name}: worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1}, rms {rms * 100:F1}, " +
-                                              $"end {end * 100:F1} | aligned worst {aWorst * 100:F1}, rms {aRms * 100:F1} | rotation mean {rotation:+0.00;-0.00}° " +
-                                              $"({ccw} of {seeds} ccw; each:{rotations}) | heading worst {heading:F2}°");
-                    }
-                }
-            }
-            finally
-            {
-                ScanMatcher.HitFieldOverride = -1;
-                ScanMatcher.HitFieldSigmaOverride = 0f;
-            }
-        }
-
-        /// <summary>
-        /// Where does the remaining rotation come from? At the end of each run, the angle at which each long wall surface
-        /// sits in the robot's map (from where hits landed, to well under a cell: <see cref="SlamHarness.WallFromHits"/>),
-        /// against the track's best-fit rotation (8 seeds × 300 s, live settings, loop
-        /// closure on, then off). If every wall shares the track's rotation, the whole map turned rigidly (heading drift
-        /// while mapping). If walls differ from each other, the map-building step bends individual walls.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_WallDirections()
-        {
-            var walls = new (string name, Vector2 start, Vector2 dir, float surface, float spanMin, float spanMax)[]
-            {
-                ("left outer", new Vector2(-2.5f, 0f), Vector2.left, -3.0f, -1.8f, 1.8f),
-                ("right outer", new Vector2(2.5f, 0f), Vector2.right, 3.0f, -1.8f, 1.8f),
-                ("top outer", new Vector2(0f, 1.5f), Vector2.up, 2.0f, -2.8f, 2.8f),
-                ("bottom outer", new Vector2(0f, -1.5f), Vector2.down, -2.0f, -2.8f, 2.8f),
-                ("middle, left face", new Vector2(0f, 0f), Vector2.right, 0.45f, -1.8f, 0.4f),
-                ("middle, right face", new Vector2(1.0f, 0f), Vector2.left, 0.55f, -1.8f, 0.4f),
-            };
-            const int seeds = 8;
-            foreach (bool loop in new[] { true, false })
-            {
-                TestContext.WriteLine(loop ? "LOOP CLOSURE ON (live)" : "LOOP CLOSURE OFF");
-                var angleSum = new double[walls.Length];
-                var offsetSum = new double[walls.Length];
-                var counted = new int[walls.Length];
-                double trackSum = 0;
-                for (int seed = 1; seed <= seeds; seed++)
-                {
-                    var run = new SlamHarness(seed, null, loop).Run(300f);
-                    var aligned = run.Aligned();
-                    trackSum += aligned.rotationDegrees / seeds;
-                    string line = $"    seed {seed}: track rotation {aligned.rotationDegrees:+0.00;-0.00}° | walls:";
-                    for (int w = 0; w < walls.Length; w++)
-                    {
-                        bool alongX = Mathf.Abs(walls[w].dir.x) > 0.5f;
-                        var (angle, offset, samples) = run.WallFromHits(alongX, walls[w].surface, walls[w].spanMin, walls[w].spanMax,
-                            skipMiddleJoin: !alongX && walls[w].dir.y < 0f,
-                            window: walls[w].name.StartsWith("middle") ? 0.045f : 0.15f); // the middle wall's faces are only 10 cm apart
-                        line += $" {walls[w].name} {angle:+0.00;-0.00}° ({offset:+0.0;-0.0} cm)";
-                        if (!float.IsNaN(angle))
-                        {
-                            angleSum[w] += angle;
-                            offsetSum[w] += offset;
-                            counted[w]++;
-                        }
-                    }
-                    TestContext.WriteLine(line);
-                }
-                string means = $"  means: track rotation {trackSum:+0.00;-0.00}° | walls:";
-                for (int w = 0; w < walls.Length; w++)
-                    means += counted[w] > 0 ? $" {walls[w].name} {angleSum[w] / counted[w]:+0.00;-0.00}° ({offsetSum[w] / counted[w]:+0.0;-0.0} cm)" : $" {walls[w].name} n/a";
-                TestContext.WriteLine(means);
-            }
-        }
-
-        /// <summary>
         /// Where is the right room's ~4 cm offset created? The pose error (believed − true) averaged by where the robot
         /// really is — left room (x &lt; 0.3), doorway (0.3–0.7, above the middle wall), right room (x &gt; 0.7) — and the
         /// change in error across each doorway crossing (last step before the doorway → first step after it). Live settings,
@@ -1291,217 +1061,200 @@ namespace RobotVacuum.Tests
         }
 
         /// <summary>
-        /// Is the robot's map shrunk? Best fit of the believed track to the true one allowing a scale (and separate x / y
-        /// scales), live settings with loop closure on, 8 seeds × 300 s, five ways: as now; hit field on; no free-space
-        /// margin; simulated range noise a flat 1 cm; no range noise. Measurement only.
+        /// Keyframe stage 0, D1 (claude/SLAM_Certain_Anchor_Design.md): would keyframes help, and does a 10 s pause at
+        /// the dock before the start spin? A keyframe is many scans averaged at one stop, so its range noise is ÷√N;
+        /// it is added at the TRACKED pose (the robot doesn't know where it really is). Rows: as now; 10 s pause;
+        /// exact scans inserted (the limit); range noise ÷ √10 inserted (1 s of averaging; bearing noise left full,
+        /// so this is pessimistic); and the pause with each. Tracking always fits the ordinary noisy scan. The same
+        /// report as Diagnose_Scale. GO if inserted-scan noise moves scale and rotation toward a map built at true
+        /// poses (−0.15%, +0.04°); NO-GO if they stay near −0.57% / +0.23°. Measurement only.
         /// </summary>
         [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_Scale()
+        public void Diagnose_KeyframeLimit()
         {
-            var settings = new (string name, Action<SlamHarness> set, Action global)[]
-            {
-                ("as now", h => { }, null),
-                ("hit field on (σ 3 cm)", h => { }, () => { ScanMatcher.HitFieldOverride = 1; ScanMatcher.HitFieldSigmaOverride = 0.03f; }),
-                ("no free-space margin", h => { }, () => LocalSlam.MarginSigmasOverride = 0f),
-                ("SIM: range noise a flat 1 cm", h => h.FlatRangeNoise = true, null),
-                ("SIM: no range noise", h => h.RangeNoise = false, null),
-            };
             const int seeds = 8;
-            try
+            float averaged = 1f / Mathf.Sqrt(10f);
+            var rows = new (string name, float hold, float insertNoise)[]
             {
-                foreach (var (name, set, global) in settings)
+                ("as now", 0f, -1f),
+                ("10 s pause at the dock, then the spin", 10f, -1f),
+                ("exact scans inserted at the tracked pose (keyframe limit)", 0f, 0f),
+                ("range noise ÷ √10 inserted at the tracked pose (1 s keyframes)", 0f, averaged),
+                ("10 s pause + exact scans inserted", 10f, 0f),
+                ("10 s pause + range noise ÷ √10 inserted", 10f, averaged),
+            };
+            foreach (var row in rows)
+            {
+                double scale = 0, sx = 0, sy = 0, rotation = 0, plainRotation = 0, max = 0, rms = 0, worst = 0, p99 = 0, rawRms = 0, spinHeading = 0;
+                string perSeed = "", perSeedRotation = "";
+                for (int seed = 1; seed <= seeds; seed++)
                 {
-                    ScanMatcher.HitFieldOverride = -1;
-                    ScanMatcher.HitFieldSigmaOverride = 0f;
-                    LocalSlam.MarginSigmasOverride = -1f;
-                    global?.Invoke();
-                    double scale = 0, sx = 0, sy = 0, rotation = 0, max = 0, rms = 0, worst = 0, p99 = 0;
-                    string perSeed = "";
-                    for (int seed = 1; seed <= seeds; seed++)
-                    {
-                        var harness = new SlamHarness(seed);
-                        set(harness);
-                        var run = harness.Run(300f);
-                        var fit = run.AlignedWithScale();
-                        perSeed += $" {(fit.scale - 1) * 100:+0.00;-0.00}";
-                        scale += fit.scale / seeds;
-                        sx += fit.scaleX / seeds;
-                        sy += fit.scaleY / seeds;
-                        rotation += fit.rotationDegrees / seeds;
-                        max += fit.max / seeds;
-                        rms += fit.rms / seeds;
-                        worst += run.Drift.MaxMeters / seeds;
-                        p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                    }
-                    TestContext.WriteLine($"{name}: scale {(scale - 1) * 100:+0.00;-0.00}% (each seed, %:{perSeed}) | x {(sx - 1) * 100:+0.00;-0.00}%, y {(sy - 1) * 100:+0.00;-0.00}% | " +
-                                          $"rotation with scale allowed {rotation:+0.00;-0.00}° | after shift, rotation and scale removed: worst {max * 100:F1} cm, rms {rms * 100:F1} | " +
-                                          $"raw worst {worst * 100:F1} cm, p99 {p99 * 100:F1}");
+                    var run = new SlamHarness(seed) { HoldSeconds = row.hold, InsertRangeNoiseScale = row.insertNoise }.Run(300f);
+                    var fit = run.AlignedWithScale();
+                    var plain = run.Aligned();
+                    perSeed += $" {(fit.scale - 1) * 100:+0.00;-0.00}";
+                    perSeedRotation += $" {fit.rotationDegrees:+0.00;-0.00}";
+                    scale += fit.scale / seeds;
+                    sx += fit.scaleX / seeds;
+                    sy += fit.scaleY / seeds;
+                    rotation += fit.rotationDegrees / seeds;
+                    plainRotation += plain.rotationDegrees / seeds;
+                    max += fit.max / seeds;
+                    rms += fit.rms / seeds;
+                    worst += run.Drift.MaxMeters / seeds;
+                    p99 += run.Drift.PositionPercentile(0.99f) / seeds;
+                    rawRms += run.Drift.RmsMeters / seeds;
+                    spinHeading += Mathf.Abs(run.HeadingAfterSpin) / seeds;
                 }
-            }
-            finally
-            {
-                ScanMatcher.HitFieldOverride = -1;
-                ScanMatcher.HitFieldSigmaOverride = 0f;
-                LocalSlam.MarginSigmasOverride = -1f;
+                TestContext.WriteLine($"{row.name}: scale {(scale - 1) * 100:+0.00;-0.00}% (each seed, %:{perSeed}) | x {(sx - 1) * 100:+0.00;-0.00}%, y {(sy - 1) * 100:+0.00;-0.00}% | " +
+                                      $"rotation with scale allowed {rotation:+0.00;-0.00}° (each seed:{perSeedRotation}); without scale {plainRotation:+0.00;-0.00}° | " +
+                                      $"heading error after the spin {spinHeading:F3}° (mean size) | after shift, rotation and scale removed: worst {max * 100:F1} cm, rms {rms * 100:F1} | " +
+                                      $"raw worst {worst * 100:F1} cm, p99 {p99 * 100:F1}, rms {rawRms * 100:F1}");
             }
         }
 
         /// <summary>
-        /// Where does the ~1.1% shrink come from, and does weighting returns by their noise remove it? 8 seeds × 300 s each,
-        /// scale reported on every row: as now; perfect map (exact scans at the true poses; tracking fits the real noisy
-        /// scans; loop off); noisy map at the true poses (loop off); points weighted by 1/σ(range) and 1/σ(range)²;
-        /// tracking with returns within 3 m only.
+        /// Keyframe stage 0, D5: D4 left a +0.45° lean from a 10 s pause at the dock that lives in the HITS (not the
+        /// grid size, not the margin; misses add ~0.3°), nearly the same on every seed. Which part of the simulated
+        /// lidar's noise makes it? Each pair is no pause / 10 s pause, both WITHOUT the start spin: all noise; no lidar
+        /// noise at all; no bearing noise; no range noise; no dropouts. If the lean survives with no noise, it is
+        /// geometry or code (possibly the lidar simulation); if it vanishes with one source off, that source. The SLAM
+        /// itself is unchanged (its free-space margin still assumes noise). 8 seeds × 300 s, live settings, loop on;
+        /// the Diagnose_DockStart report. Measurement only.
         /// </summary>
         [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_ScaleSource()
+        public void Diagnose_PauseNoiseSource()
         {
-            var settings = new (string name, bool loop, Action<SlamHarness> set, Action global)[]
-            {
-                ("as now", true, h => { }, null),
-                ("perfect map at true poses (matcher alone), loop off", false, h => { h.InsertAtTruth = true; h.InsertExactScans = true; }, null),
-                ("noisy map at true poses (no feedback), loop off", false, h => h.InsertAtTruth = true, null),
-                ("points weighted by 1/σ(range)", true, h => { }, () => LocalSlam.PointWeightPower = 1),
-                ("points weighted by 1/σ(range)²", true, h => { }, () => LocalSlam.PointWeightPower = 2),
-                ("tracking with returns within 3 m only", true, h => { }, () => LocalSlam.TrackRangeOverride = 3f),
-            };
             const int seeds = 8;
-            try
+            var sources = new (string name, Action<SlamHarness> set)[]
             {
-                foreach (var (name, loop, set, global) in settings)
+                ("all noise", h => { }),
+                ("NO lidar noise", h => h.LidarNoise = false),
+                ("no bearing noise", h => h.BearingNoise = false),
+                ("no range noise", h => h.RangeNoise = false),
+                ("no dropouts", h => h.Dropouts = false),
+            };
+            foreach (var source in sources)
+            foreach (float hold in new[] { 0f, 10f })
+            {
+                double scale = 0, sx = 0, sy = 0, rotation = 0, max = 0, rms = 0, worst = 0, p99 = 0, rawRms = 0, heading60 = 0;
+                string perSeedRotation = "";
+                for (int seed = 1; seed <= seeds; seed++)
                 {
-                    LocalSlam.PointWeightPower = 0;
-                    LocalSlam.TrackRangeOverride = 0f;
-                    global?.Invoke();
-                    double scale = 0, sx = 0, sy = 0, rotation = 0, max = 0, rms = 0, worst = 0, p99 = 0;
-                    string perSeed = "";
-                    for (int seed = 1; seed <= seeds; seed++)
-                    {
-                        var harness = new SlamHarness(seed, null, loop);
-                        set(harness);
-                        var run = harness.Run(300f);
-                        var fit = run.AlignedWithScale();
-                        perSeed += $" {(fit.scale - 1) * 100:+0.00;-0.00}";
-                        scale += fit.scale / seeds;
-                        sx += fit.scaleX / seeds;
-                        sy += fit.scaleY / seeds;
-                        rotation += fit.rotationDegrees / seeds;
-                        max += fit.max / seeds;
-                        rms += fit.rms / seeds;
-                        worst += run.Drift.MaxMeters / seeds;
-                        p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                    }
-                    TestContext.WriteLine($"{name}: scale {(scale - 1) * 100:+0.00;-0.00}% (each seed, %:{perSeed}) | x {(sx - 1) * 100:+0.00;-0.00}%, y {(sy - 1) * 100:+0.00;-0.00}% | " +
-                                          $"rotation with scale allowed {rotation:+0.00;-0.00}° | after shift, rotation and scale removed: worst {max * 100:F1} cm, rms {rms * 100:F1} | " +
-                                          $"raw worst {worst * 100:F1} cm, p99 {p99 * 100:F1}");
+                    var harness = new SlamHarness(seed) { SpinSign = 0f, HoldSeconds = hold };
+                    source.set(harness);
+                    var run = harness.Run(300f);
+                    var fit = run.AlignedWithScale();
+                    perSeedRotation += $" {fit.rotationDegrees:+0.00;-0.00}";
+                    scale += fit.scale / seeds;
+                    sx += fit.scaleX / seeds;
+                    sy += fit.scaleY / seeds;
+                    rotation += fit.rotationDegrees / seeds;
+                    max += fit.max / seeds;
+                    rms += fit.rms / seeds;
+                    worst += run.Drift.MaxMeters / seeds;
+                    p99 += run.Drift.PositionPercentile(0.99f) / seeds;
+                    rawRms += run.Drift.RmsMeters / seeds;
+                    heading60 += Mathf.Abs(run.HeadingAt60) / seeds;
                 }
-            }
-            finally
-            {
-                LocalSlam.PointWeightPower = 0;
-                LocalSlam.TrackRangeOverride = 0f;
+                TestContext.WriteLine($"{source.name}, {(hold > 0 ? "10 s pause" : "no pause")}: scale {(scale - 1) * 100:+0.00;-0.00}% (x {(sx - 1) * 100:+0.00;-0.00}%, y {(sy - 1) * 100:+0.00;-0.00}%) | " +
+                                      $"rotation with scale allowed {rotation:+0.00;-0.00}° (each seed:{perSeedRotation}) | heading error at 60 s {heading60:F3}° (mean size) | " +
+                                      $"after shift, rotation and scale removed: worst {max * 100:F1} cm, rms {rms * 100:F1} | raw worst {worst * 100:F1} cm, p99 {p99 * 100:F1}, rms {rawRms * 100:F1}");
             }
         }
 
         /// <summary>
-        /// Can odometry pin the map's scale? Odometry's distance error is random, not systematic, so trusting its step more
-        /// should stop the feedback loop's ~1.1% shrink. Translation weight (trust in odometry's step) 10 (now), 30, 100,
-        /// 300; map insertion range 5 m instead of 3; and both. Live settings, 8 seeds × 300 s. Stop rule agreed: scale
-        /// within ±0.3% AND p99 lower, or the setting is dropped.
+        /// Keyframe stage 0, D2: is odometry (wheels + gyro) a trust signal from inside the robot that the map can't
+        /// fool? Pairs of scan matches about 2 m of true travel apart, within 10 s, turning ≤ 30° in between (8 seeds ×
+        /// 300 s, live settings). For each pair, the motion as tracked (local SLAM), as odometry measured it, and as it
+        /// really was, each in the robot's own frame at the first match. Reports each one's scale error (distance
+        /// error ÷ true distance) and heading-change error, mean and spread; whether tracking and odometry DISAGREE
+        /// more than odometry's own spread, and how big tracking's true error is when they do and when they don't.
+        /// GO if tracking's scale/heading bias stands clear of odometry's spread (odometry can see it), and flagged
+        /// pairs carry clearly larger tracking error. Measurement only.
         /// </summary>
         [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_OdometryTrust()
+        public void Diagnose_OdometryAgreement()
         {
-            var settings = new (string name, float translation, float insert)[]
-            {
-                ("as now (translation weight 10, insert 3 m)", 0f, 0f),
-                ("translation weight 30", 30f, 0f),
-                ("translation weight 100", 100f, 0f),
-                ("translation weight 300", 300f, 0f),
-                ("insert range 5 m", 0f, 5f),
-                ("translation weight 100 + insert range 5 m", 100f, 5f),
-            };
             const int seeds = 8;
-            try
+            const double pairMeters = 2.0, maxSeconds = 10.0, maxTurn = 30.0;
+            var pairs = new List<(double trackScale, double odoScale, double trackTurn, double odoTurn, double disagree, double disagreeTurn, double trackError, double trackTurnError)>();
+            for (int seed = 1; seed <= seeds; seed++)
             {
-                foreach (var (name, translation, insert) in settings)
+                var harness = new SlamHarness(seed);
+                var log = new List<(float t, RobotPose local, RobotPose truth, RobotPose odo, double path, double turn)>();
+                double path = 0, turn = 0;
+                RobotPose? previous = null;
+                harness.OnMatch = (local, truth, t) =>
                 {
-                    LocalSlam.TranslationWeightOverride = translation;
-                    LocalSlam.InsertRangeOverride = insert;
-                    double scale = 0, sx = 0, sy = 0, rotation = 0, max = 0, rms = 0, worst = 0, worstMax = 0, p99 = 0, rawRms = 0, heading = 0;
-                    string perSeed = "";
-                    for (int seed = 1; seed <= seeds; seed++)
+                    if (previous.HasValue)
                     {
-                        var run = new SlamHarness(seed).Run(300f);
-                        var fit = run.AlignedWithScale();
-                        perSeed += $" {(fit.scale - 1) * 100:+0.00;-0.00}";
-                        scale += fit.scale / seeds;
-                        sx += fit.scaleX / seeds;
-                        sy += fit.scaleY / seeds;
-                        rotation += fit.rotationDegrees / seeds;
-                        max += fit.max / seeds;
-                        rms += fit.rms / seeds;
-                        worst += run.Drift.MaxMeters / seeds;
-                        worstMax = Math.Max(worstMax, run.Drift.MaxMeters);
-                        p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                        rawRms += run.Drift.RmsMeters / seeds;
-                        heading += run.Drift.MaxDegrees / seeds;
+                        path += Vector2.Distance(previous.Value.position, truth.position);
+                        turn += Mathf.Abs(Mathf.DeltaAngle(previous.Value.heading, truth.heading));
                     }
-                    TestContext.WriteLine($"{name}: scale {(scale - 1) * 100:+0.00;-0.00}% (each seed, %:{perSeed}) | x {(sx - 1) * 100:+0.00;-0.00}%, y {(sy - 1) * 100:+0.00;-0.00}% | " +
-                                          $"rotation {rotation:+0.00;-0.00}° | raw worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1}, rms {rawRms * 100:F1} | " +
-                                          $"after shift, rotation and scale removed: worst {max * 100:F1}, rms {rms * 100:F1} | heading worst {heading:F2}°");
-                }
-            }
-            finally
-            {
-                LocalSlam.TranslationWeightOverride = 0f;
-                LocalSlam.InsertRangeOverride = 0f;
-            }
-        }
+                    previous = truth;
+                    log.Add((t, local, truth, harness.DeadReckoned, path, turn));
+                };
+                harness.Run(300f);
 
-        /// <summary>
-        /// How far out should returns be written into the map? Insert range 3 (now), 4, 5, 6, 8 m, in both apartments, live
-        /// settings, 8 seeds × 300 s. Decision rule agreed: adopt the range with the lowest p99 that is at least 1 cm better
-        /// than 3 m in both worlds, provided wall thickness does not get noticeably worse. Scale reported, not a gate.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Experiment_InsertRange()
-        {
-            const int seeds = 8;
-            try
-            {
-                foreach (var (worldName, world) in new[] { ("apartment", SlamWorld.Apartment()), ("angled apartment", SlamWorld.AngledApartment()) })
+                int j = 0;
+                for (int i = 0; i < log.Count; i += 10)
                 {
-                    foreach (float range in new[] { 3f, 4f, 5f, 6f, 8f })
-                    {
-                        LocalSlam.InsertRangeOverride = range;
-                        double scale = 0, worst = 0, worstMax = 0, p99 = 0, rms = 0, heading = 0, falseNear = 0, ghosts = 0, missed = 0, thickness = 0;
-                        string perSeed = "";
-                        for (int seed = 1; seed <= seeds; seed++)
-                        {
-                            var run = new SlamHarness(seed, world).Run(300f);
-                            var fit = run.AlignedWithScale();
-                            var map = run.MapAccuracy();
-                            perSeed += $" {run.Drift.PositionPercentile(0.99f) * 100:F1}";
-                            scale += fit.scale / seeds;
-                            worst += run.Drift.MaxMeters / seeds;
-                            worstMax = Math.Max(worstMax, run.Drift.MaxMeters);
-                            p99 += run.Drift.PositionPercentile(0.99f) / seeds;
-                            rms += run.Drift.RmsMeters / seeds;
-                            heading += run.Drift.MaxDegrees / seeds;
-                            falseNear += map.falseNear / (double)seeds;
-                            ghosts += map.ghosts / (double)seeds;
-                            missed += map.missed / (double)seeds;
-                            thickness += map.thickness / seeds;
-                        }
-                        TestContext.WriteLine($"{worldName}, insert range {range:F0} m: raw worst {worst * 100:F1} cm (worst seed {worstMax * 100:F1}), p99 {p99 * 100:F1} " +
-                                              $"(each seed:{perSeed}), rms {rms * 100:F1} | scale {(scale - 1) * 100:+0.00;-0.00}% | heading worst {heading:F2}° | " +
-                                              $"walls: false near {falseNear:F0}, ghosts {ghosts:F0}, missed {missed:F0}, thickness {thickness:F2}×");
-                    }
+                    if (log[i].t < S.StartSpinDegrees / S.StartSpinDegreesPerSecond + 0.5f) continue; // after the start spin
+                    if (j < i) j = i;
+                    while (j < log.Count && log[j].path - log[i].path < pairMeters) j++;
+                    if (j >= log.Count) break;
+                    if (log[j].t - log[i].t > maxSeconds || log[j].turn - log[i].turn > maxTurn) continue;
+                    var truthMove = GraphPose.Relative(GraphPose.From(log[i].truth), GraphPose.From(log[j].truth));
+                    var trackMove = GraphPose.Relative(GraphPose.From(log[i].local), GraphPose.From(log[j].local));
+                    var odoMove = GraphPose.Relative(GraphPose.From(log[i].odo), GraphPose.From(log[j].odo));
+                    double trueDistance = System.Math.Sqrt(truthMove.x * truthMove.x + truthMove.y * truthMove.y);
+                    if (trueDistance < 0.5) continue;
+                    double trackDistance = System.Math.Sqrt(trackMove.x * trackMove.x + trackMove.y * trackMove.y);
+                    double odoDistance = System.Math.Sqrt(odoMove.x * odoMove.x + odoMove.y * odoMove.y);
+                    double dx = trackMove.x - odoMove.x, dy = trackMove.y - odoMove.y;
+                    double ex = trackMove.x - truthMove.x, ey = trackMove.y - truthMove.y;
+                    pairs.Add(((trackDistance - trueDistance) / trueDistance, (odoDistance - trueDistance) / trueDistance,
+                        GraphPose.WrapDegrees(trackMove.heading - truthMove.heading), GraphPose.WrapDegrees(odoMove.heading - truthMove.heading),
+                        System.Math.Sqrt(dx * dx + dy * dy), GraphPose.WrapDegrees(trackMove.heading - odoMove.heading),
+                        System.Math.Sqrt(ex * ex + ey * ey), GraphPose.WrapDegrees(trackMove.heading - truthMove.heading)));
                 }
             }
-            finally
+
+            double Mean(Func<(double trackScale, double odoScale, double trackTurn, double odoTurn, double disagree, double disagreeTurn, double trackError, double trackTurnError), double> f,
+                IEnumerable<(double trackScale, double odoScale, double trackTurn, double odoTurn, double disagree, double disagreeTurn, double trackError, double trackTurnError)> g) => g.Average(f);
+            double Spread(Func<(double trackScale, double odoScale, double trackTurn, double odoTurn, double disagree, double disagreeTurn, double trackError, double trackTurnError), double> f,
+                IEnumerable<(double trackScale, double odoScale, double trackTurn, double odoTurn, double disagree, double disagreeTurn, double trackError, double trackTurnError)> g)
             {
-                LocalSlam.InsertRangeOverride = 0f;
+                var list = g.Select(f).ToList();
+                double m = list.Average();
+                return System.Math.Sqrt(list.Average(v => (v - m) * (v - m)));
+            }
+
+            if (pairs.Count == 0) { TestContext.WriteLine("no pairs"); return; }
+            TestContext.WriteLine($"{pairs.Count} pairs (~{pairMeters} m of true travel, ≤ {maxSeconds} s, ≤ {maxTurn}° turning)");
+            TestContext.WriteLine($"  scale error: tracked mean {Mean(x => x.trackScale, pairs) * 100:+0.000;-0.000}% (spread {Spread(x => x.trackScale, pairs) * 100:F3}%), " +
+                                  $"odometry mean {Mean(x => x.odoScale, pairs) * 100:+0.000;-0.000}% (spread {Spread(x => x.odoScale, pairs) * 100:F3}%)");
+            TestContext.WriteLine($"  heading-change error: tracked mean {Mean(x => x.trackTurn, pairs):+0.0000;-0.0000}° (spread {Spread(x => x.trackTurn, pairs):F4}°), " +
+                                  $"odometry mean {Mean(x => x.odoTurn, pairs):+0.0000;-0.0000}° (spread {Spread(x => x.odoTurn, pairs):F4}°)");
+            int n = pairs.Count;
+            double seScale = Spread(x => x.odoScale, pairs) / System.Math.Sqrt(n), seTurn = Spread(x => x.odoTurn, pairs) / System.Math.Sqrt(n);
+            TestContext.WriteLine($"  averaged over all pairs, odometry's own uncertainty is ±{seScale * 100:F3}% in scale and ±{seTurn:F4}° in heading change " +
+                                  $"(spread ÷ √pairs): a tracked bias larger than that is visible to odometry");
+
+            // Per pair: does disagreement with odometry pick out pairs where tracking really went wrong?
+            double odoSpreadMeters = Spread(x => x.odoScale, pairs) * pairMeters;
+            double odoSpreadTurn = Spread(x => x.odoTurn, pairs);
+            foreach (double k in new[] { 1.0, 2.0 })
+            {
+                var flagged = pairs.Where(x => x.disagree > k * odoSpreadMeters || System.Math.Abs(x.disagreeTurn) > k * odoSpreadTurn).ToList();
+                var quiet = pairs.Where(x => !(x.disagree > k * odoSpreadMeters || System.Math.Abs(x.disagreeTurn) > k * odoSpreadTurn)).ToList();
+                string Describe(List<(double trackScale, double odoScale, double trackTurn, double odoTurn, double disagree, double disagreeTurn, double trackError, double trackTurnError)> g) =>
+                    g.Count == 0 ? "none" :
+                    $"{g.Count} ({g.Count * 100.0 / n:F0}%): tracking's true error rms {System.Math.Sqrt(g.Average(x => x.trackError * x.trackError)) * 100:F2} cm, " +
+                    $"heading-change rms {System.Math.Sqrt(g.Average(x => x.trackTurnError * x.trackTurnError)):F3}°, scale mean {g.Average(x => x.trackScale) * 100:+0.000;-0.000}%";
+                TestContext.WriteLine($"  disagreeing by more than {k:F0}× odometry's spread: {Describe(flagged)}");
+                TestContext.WriteLine($"  agreeing:                                    {Describe(quiet)}");
             }
         }
 
@@ -1694,50 +1447,6 @@ namespace RobotVacuum.Tests
         {
             double u1 = 1.0 - rng.NextDouble(), u2 = rng.NextDouble();
             return (float)(sigma * System.Math.Sqrt(-2.0 * System.Math.Log(u1)) * System.Math.Cos(2.0 * System.Math.PI * u2));
-        }
-
-        /// <summary>
-        /// Diagnostics, not a check: how good are loop closure's matches? For every search (seeds 1–4 × 300 s): how far
-        /// the guess and the match were from where the scan really sits in that submap, grouped by how many submaps
-        /// back it was; and the submaps' final global poses against the truth, with and without the graph.
-        /// </summary>
-        [Explicit, Test, Timeout(3_600_000)]
-        public void Diagnose_LoopClosure()
-        {
-            for (int seed = 1; seed <= 4; seed++)
-            {
-                var run = new SlamHarness(seed) { Diagnose = true }.Run(300f);
-                Print(seed, run);
-
-                foreach (var (label, lo, hi) in new[] { ("1–2 submaps back", 1, 2), ("3–5 back", 3, 5), ("6+ back", 6, 1000) })
-                {
-                    var group = run.Searches.Where(x => x.gap >= lo && x.gap <= hi).ToList();
-                    if (group.Count == 0) continue;
-                    var ok = group.Where(x => x.accepted).ToList();
-                    string Mean(Func<(int gap, float guessCm, float foundCm, float guessDeg, float foundDeg, bool accepted, float score), float> f, List<(int, float, float, float, float, bool, float)> l) =>
-                        l.Count > 0 ? l.Average(f).ToString("F2") : "-";
-                    TestContext.WriteLine($"    {label}: {group.Count} searches, {ok.Count} accepted (score {Mean(x => x.score, group)}); " +
-                                          $"guess off {Mean(x => x.guessCm, ok)} cm / {Mean(x => x.guessDeg, ok)}°, match off {Mean(x => x.foundCm, ok)} cm / {Mean(x => x.foundDeg, ok)}°; " +
-                                          $"worst match {(ok.Count > 0 ? ok.Max(x => x.foundCm) : 0):F1} cm");
-                }
-
-                double graphMean = 0, graphMax = 0, localMean = 0, localMax = 0;
-                int n = run.Slam.Submaps.Count;
-                for (int i = 0; i < n; i++)
-                {
-                    var truthPose = run.TrueSubmapPose(i);
-                    var g = run.Global.SubmapGlobalPoses[i];
-                    var l = run.Slam.Submaps[i].LocalPose;
-                    double eg = System.Math.Sqrt((g.x - truthPose.x) * (g.x - truthPose.x) + (g.y - truthPose.y) * (g.y - truthPose.y));
-                    double el = System.Math.Sqrt((l.x - truthPose.x) * (l.x - truthPose.x) + (l.y - truthPose.y) * (l.y - truthPose.y));
-                    graphMean += eg / n;
-                    localMean += el / n;
-                    graphMax = System.Math.Max(graphMax, eg);
-                    localMax = System.Math.Max(localMax, el);
-                }
-                TestContext.WriteLine($"    submap poses vs the truth: with the graph mean {graphMean * 100:F1} cm (worst {graphMax * 100:F1}); " +
-                                      $"local SLAM alone mean {localMean * 100:F1} cm (worst {localMax * 100:F1})");
-            }
         }
 
         static void Print(int seed, SlamHarness run)
@@ -2050,6 +1759,13 @@ namespace RobotVacuum.Tests
         /// <summary>Rotated walls: centre, half size, angle (degrees, counter-clockwise).</summary>
         public readonly (Vector2 centre, Vector2 half, float angle)[] slanted;
 
+        // Where the harness starts and where it may send the robot. The defaults are the apartment's (kept as doubles so
+        // the goal sequence, and so every earlier result, is unchanged).
+        public Vector2 Dock = new Vector2(-2f, -1f);
+        public double GoalMinX = -2.8, GoalWidth = 5.6, GoalMinY = -1.8, GoalHeight = 3.6;
+        public float GoalMargin = 0.3f, PathMargin = 0.2f;
+        public Func<Vector2, bool> Inside; // null = anywhere free counts as inside the home
+
         public SlamWorld(Rect[] solids) : this(solids, new (Vector2, Vector2, float)[0]) { }
 
         public SlamWorld(Rect[] solids, (Vector2 centre, Vector2 half, float angle)[] slanted)
@@ -2110,6 +1826,92 @@ namespace RobotVacuum.Tests
         {
             Rect.MinMaxRect(-30f, 0.5f, 30f, 0.6f), Rect.MinMaxRect(-30f, -0.6f, 30f, -0.5f),
         });
+
+        /// <summary>Folder of level files the harness can load (Assets/Tests/EditMode/Levels).</summary>
+        public static string LevelFolder => Path.Combine(Application.dataPath, "Tests", "EditMode", "Levels");
+
+        /// <summary>Eric's "Enclosed Test" level (Levels/EnclosedTest.json): narrow corridor start, four rooms, four doorways.</summary>
+        public static SlamWorld EnclosedTest() => FromLevelFile("EnclosedTest.json");
+
+        /// <summary>Eric's "My Room 01" level (Levels/MyRoom01.json): one open 9 m room with side rooms, no corridor.</summary>
+        public static SlamWorld MyRoom01() => FromLevelFile("MyRoom01.json");
+
+        public static SlamWorld FromLevelFile(string fileName)
+        {
+            string path = Path.Combine(LevelFolder, fileName);
+            Assert.IsTrue(File.Exists(path), $"level file missing: {path}");
+            return FromLevelJson(File.ReadAllText(path));
+        }
+
+        /// <summary>
+        /// A world built the way the live sim builds its colliders (LevelRenderer): every wall run from
+        /// LevelGeometry.CollectWallSegments (doorways already cut) as a box of the level's wall thickness centred on the
+        /// edge, furniture that blocks the vacuum as a solid box, pass-under furniture as its four corner legs, cats left
+        /// out. The dock is the level's robot spawn; goals are drawn inside the rooms' outlines.
+        /// </summary>
+        public static SlamWorld FromLevelJson(string json)
+        {
+            var snapshot = LevelSnapshot.Parse(json);
+            Assert.IsNotNull(snapshot, "the level file did not parse");
+            var level = ScriptableObject.CreateInstance<LevelData>();
+            level.hideFlags = HideFlags.DontSave;
+            try
+            {
+                snapshot.ApplyTo(level);
+                var boxes = new List<(Vector2 centre, Vector2 half, float angle)>();
+                float half = level.WallThickness * 0.5f;
+                foreach (var wall in LevelGeometry.CollectWallSegments(level))
+                {
+                    Vector2 d = wall.b - wall.a;
+                    float length = d.magnitude;
+                    if (length < 1e-4f) continue;
+                    boxes.Add(((wall.a + wall.b) * 0.5f, new Vector2(length * 0.5f, half), Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg));
+                }
+
+                const float PassableLegSize = 0.08f; // LevelRenderer.PassableLegSize
+                foreach (var o in level.Obstacles)
+                {
+                    if (o == null || o.kind == ObstacleKind.Cat) continue;
+                    if (o.blocksVacuum)
+                    {
+                        boxes.Add((o.center, o.size * 0.5f, o.rotation));
+                        continue;
+                    }
+                    float leg = Mathf.Min(PassableLegSize, o.size.x * 0.5f, o.size.y * 0.5f);
+                    float hx = o.size.x * 0.5f - leg * 0.5f, hy = o.size.y * 0.5f - leg * 0.5f;
+                    float r = o.rotation * Mathf.Deg2Rad, c = Mathf.Cos(r), s = Mathf.Sin(r);
+                    for (int xs = -1; xs <= 1; xs += 2)
+                        for (int ys = -1; ys <= 1; ys += 2)
+                        {
+                            var l = new Vector2(xs * hx, ys * hy);
+                            boxes.Add((o.center + new Vector2(c * l.x - s * l.y, s * l.x + c * l.y), Vector2.one * (leg * 0.5f), o.rotation));
+                        }
+                }
+
+                var outlines = level.Rooms.Where(room => room != null && room.IsValid).Select(room => new List<Vector2>(room.outline)).ToList();
+                float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+                foreach (var outline in outlines)
+                    foreach (var p in outline)
+                    {
+                        minX = Mathf.Min(minX, p.x); maxX = Mathf.Max(maxX, p.x);
+                        minY = Mathf.Min(minY, p.y); maxY = Mathf.Max(maxY, p.y);
+                    }
+
+                return new SlamWorld(new Rect[0], boxes.ToArray())
+                {
+                    Dock = level.RobotSpawn,
+                    GoalMinX = minX, GoalWidth = maxX - minX, GoalMinY = minY, GoalHeight = maxY - minY,
+                    // The start corridor is 0.68 m clear between wall faces: the apartment's 0.3 m goal margin would leave
+                    // an 8 cm band. Robot radius is about 0.17 m.
+                    GoalMargin = 0.22f, PathMargin = 0.18f,
+                    Inside = p => outlines.Any(outline => Poly2D.ContainsPoint(outline, p)),
+                };
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(level);
+            }
+        }
 
         public bool IsFree(Vector2 p, float margin)
         {
@@ -2234,8 +2036,6 @@ namespace RobotVacuum.Tests
         public float HoldSeconds;
         public bool InsertAtTruth;            // the map gets each scan at the TRUE pose (tracking still fitted): no pose errors written into the map
         public bool InsertExactScans;
-        public bool NodeGraph;                // SLAM_Option2_Design stage 1: node-level graph, submaps rebuilt from their scans
-        public readonly List<RobotPose> NodeTruth = new List<RobotPose>(); // node graph: the true pose at each node
         public double GlobalMs;               // time spent in global SLAM (loop search, solves, rebuilds)
 
         // Diagnostics: one record per scan added to the map (Diagnose_ErrorGrowth).
@@ -2244,9 +2044,21 @@ namespace RobotVacuum.Tests
 
         /// <summary>Diagnostics: called every step with the believed and true pose and the time.</summary>
         public Action<RobotPose, RobotPose, float> OnStep;
+
+        /// <summary>Diagnostics: called after every scan match with local SLAM's fitted pose and the true pose, and the time.</summary>
+        public Action<RobotPose, RobotPose, float> OnMatch;
         public readonly List<(float t, Vector2 error, float headingError, float trueMove, float trueTurn, float unseen, int submapScans)> Insertions =
             new List<(float, Vector2, float, float, float, float, int)>();         // with InsertAtTruth: the map gets an EXACT scan, i.e. a perfect map of what has been seen             // stand still at the dock this long first, adding every scan at the known dock pose
         public bool FlatRangeNoise;           // true = range noise σ is the fixed part only (no % of range)
+
+        // Keyframe diagnostics (claude/SLAM_Certain_Anchor_Design.md, keyframe stage 0): < 0 = off (as now). ≥ 0 = the
+        // scan added to the map is a second scan of the same true pose with its range noise × this (0 = exact),
+        // added at the TRACKED pose; tracking still fits the ordinary scan. Stands in for an averaged keyframe.
+        public float InsertRangeNoiseScale = -1f;
+
+
+        /// <summary>Diagnostics: odometry alone (dead reckoning from the dock), this step.</summary>
+        public RobotPose DeadReckoned => deadReckoned;
 
         // Heading error (believed − true, °) after the start spin and at 60 s.
         public float HeadingAfterSpin = float.NaN, HeadingAt60 = float.NaN;
@@ -2259,12 +2071,6 @@ namespace RobotVacuum.Tests
         /// <summary>Global SLAM (loop closure), or null when it is off.</summary>
         public GlobalSlam Global => globalSlam;
 
-        // Diagnostics: local SLAM's frame → world at each submap's creation, and how each loop search did.
-        public bool Diagnose;
-        readonly List<GraphPose> frameAtCreation = new List<GraphPose>();
-        public readonly List<(int gap, float guessCm, float foundCm, float guessDeg, float foundDeg, bool accepted, float score)> Searches =
-            new List<(int, float, float, float, float, bool, float)>();
-
         // Diagnostics: run a second Internal Model redrawn by the original (reference) redraw, and compare after each redraw.
         public bool CompareRedraw;
         InternalModelWriter referenceWriter;
@@ -2272,16 +2078,13 @@ namespace RobotVacuum.Tests
         public int Redraws, RedrawMismatches;
         public double RedrawMsTotal, RedrawMsMax, ReferenceRedrawMsTotal, ReferenceRedrawMsMax;
 
-        /// <summary>World pose of submap i's frame, by local SLAM's frame → world at its creation.</summary>
-        public GraphPose TrueSubmapPose(int i) => GraphPose.Compose(frameAtCreation[i], slam.Submaps[i].LocalPose);
-
         readonly Vector2 dockPosition;
         public bool MirrorGoals; // goals mirrored in x (with SlamWorld.MirroredX and a mirrored dock: the mirror image of a run)
 
         public SlamHarness(int seed, SlamWorld world = null, bool loopClosure = true, Vector2? dock = null)
         {
-            dockPosition = dock ?? new Vector2(-2f, -1f);
             this.world = world ?? SlamWorld.Apartment();
+            dockPosition = dock ?? this.world.Dock;
             random = new RandomProvider((uint)seed);
             goals = new System.Random(seed);
             truth = believed = deadReckoned = new RobotPose(dockPosition, 0f);
@@ -2312,11 +2115,6 @@ namespace RobotVacuum.Tests
             float previousTrueHeading = truth.heading;
             RobotPose dockPose = localPose;
             lastInsertTruth = truth;
-            if (NodeGraph && globalSlam != null)
-            {
-                slam.KeepNodes = true;
-                globalSlam.NodeMode = true;
-            }
             var globalClock = new System.Diagnostics.Stopwatch();
             bool spinning = spinLeft > 0f;
 
@@ -2376,33 +2174,19 @@ namespace RobotVacuum.Tests
                 }
                 else if (RecordInsertions) unseen = 1f;
 
+                int matchesBefore = slam.Matches;
                 if (holding) localPose = slam.TrackStationary(frame, dockPose, t);
                 else if (InsertAtTruth && frame.hasLidarScan)
                     localPose = slam.Track(frame, localPose, t, truth, InsertExactScans ? world.Scan(truth, null) : frame);
+                else if (InsertRangeNoiseScale >= 0f && frame.hasLidarScan)
+                    localPose = slam.Track(frame, localPose, t, null,
+                        InsertRangeNoiseScale == 0f ? world.Scan(truth, null)
+                                                    : world.Scan(truth, random, 8f, BearingNoise, RangeNoise, Dropouts, RangeNoiseScale * InsertRangeNoiseScale, FlatRangeNoise));
                 else localPose = slam.Track(frame, localPose, t);
-                if (Diagnose)
-                {
-                    if (globalSlam != null) globalSlam.LogSearches = true;
-                    // Local SLAM's frame → world right now: truth ∘ local⁻¹.
-                    var localToWorld = GraphPose.Compose(GraphPose.From(truth), GraphPose.Relative(GraphPose.From(localPose), new GraphPose(0, 0, 0)));
-                    while (frameAtCreation.Count < slam.Submaps.Count) frameAtCreation.Add(localToWorld);
-                }
-                if (NodeGraph && slam.InsertedThisStep) NodeTruth.Add(truth);
+                if (OnMatch != null && slam.Matches > matchesBefore) OnMatch(localPose, truth, t);
                 globalClock.Restart();
-                bool redraw = globalSlam != null && (NodeGraph ? globalSlam.AfterTrack(frame, deadReckoned) : globalSlam.AfterTrack(frame));
+                bool redraw = globalSlam != null && globalSlam.AfterTrack(frame);
                 GlobalMs += globalClock.Elapsed.TotalMilliseconds;
-                if (Diagnose && globalSlam != null)
-                {
-                    foreach (var (submap, home, guess, found, accepted, score) in globalSlam.SearchLog)
-                    {
-                        // Where the scan really is in submap's grid frame: (frame at the submap's creation)⁻¹ ∘ truth.
-                        var expected = GraphPose.Relative(frameAtCreation[submap], GraphPose.From(truth)).ToRobotPose();
-                        Searches.Add((home - submap,
-                            Vector2.Distance(guess.position, expected.position) * 100f, Vector2.Distance(found.position, expected.position) * 100f,
-                            Mathf.Abs(Mathf.DeltaAngle(guess.heading, expected.heading)), Mathf.Abs(Mathf.DeltaAngle(found.heading, expected.heading)),
-                            accepted, score));
-                    }
-                }
                 believed = globalSlam != null ? globalSlam.ToGlobal(localPose) : localPose;
                 if (RecordInsertions && slam.InsertedThisStep)
                 {
@@ -2412,8 +2196,7 @@ namespace RobotVacuum.Tests
                     Insertions.Add((t, believed.position - truth.position, Mathf.DeltaAngle(truth.heading, believed.heading), move, turnSince, unseen, submapScans));
                     lastInsertTruth = truth;
                 }
-                bool drawable = LocalSlam.SubmapCellOverride <= 0f; // the Internal Model is drawn from submaps on its own lattice
-                if (redraw && drawable)
+                if (redraw)
                 {
                     redrawClock.Restart();
                     mapper.RedrawFromSubmaps();
@@ -2431,7 +2214,7 @@ namespace RobotVacuum.Tests
                         RedrawMismatches += CountDifferences(writer.Grid, referenceWriter.Grid);
                     }
                 }
-                if (frame.hasLidarScan && drawable)
+                if (frame.hasLidarScan)
                 {
                     mapper.Apply(frame, believed);
                     referenceMapper?.Apply(frame, believed);
@@ -2505,46 +2288,6 @@ namespace RobotVacuum.Tests
         }
 
         /// <summary>
-        /// How one wall surface sits in the robot's map at the end of the run, to well under a cell: the mean hit position
-        /// of every occupied submap cell (probability above 0.5) within <paramref name="window"/> of the true surface and along the given span,
-        /// carried into the global frame, then a straight line through them weighted by hit count. Angle against the true
-        /// wall (degrees, counter-clockwise +) and mean offset (cm, + = toward +x / +y). For walls along y, the span is y.
-        /// </summary>
-        public (float angleDegrees, float offsetCm, int cells) WallFromHits(bool alongX, float surface, float spanMin, float spanMax, bool skipMiddleJoin, float window = 0.15f)
-        {
-            double sw = 0, sS = 0, sC = 0, sSS = 0, sSC = 0;
-            int cells = 0;
-            foreach (var submap in slam.Submaps)
-            {
-                var g = submap.grid;
-                for (int r = 0; r < g.rows; r++)
-                {
-                    for (int c = 0; c < g.cols; c++)
-                    {
-                        int i = r * g.cols + c;
-                        int n = g.hitCount[i];
-                        if (n == 0 || g.probability[i] <= 0.5f) continue;
-                        var local = new Vector2((float)(g.AnchorWorld.x + g.hitSumX[i] / n), (float)(g.AnchorWorld.y + g.hitSumY[i] / n));
-                        Vector2 p = globalSlam != null ? globalSlam.SubmapToGlobal(submap.index, local) : local;
-                        float across = alongX ? p.x : p.y, along = alongX ? p.y : p.x;
-                        if (Mathf.Abs(across - surface) > window || along < spanMin || along > spanMax) continue;
-                        if (skipMiddleJoin && Mathf.Abs(along - 0.5f) < 0.25f) continue;
-                        sw += n;
-                        sS += n * along;
-                        sC += n * across;
-                        sSS += n * along * along;
-                        sSC += n * along * across;
-                        cells++;
-                    }
-                }
-            }
-            if (cells < 10) return (float.NaN, float.NaN, cells);
-            double slope = (sw * sSC - sS * sC) / (sw * sSS - sS * sS);
-            double angle = (alongX ? -Math.Atan(slope) : Math.Atan(slope)) * 180.0 / Math.PI;
-            return ((float)angle, (float)((sC / sw - surface) * 100.0), cells);
-        }
-
-        /// <summary>
         /// How one wall surface is drawn in the Internal Model at the end of the run: walking from <paramref name="start"/>
         /// toward the wall (<paramref name="dir"/>, along x or y) at points spread along it, the first cell believed blocked
         /// (traversability below 0.5), at its centre. A straight line through those points gives the drawn wall's angle
@@ -2580,25 +2323,6 @@ namespace RobotVacuum.Tests
             // A counter-clockwise turn θ makes a wall along y lean by dx/dy = −tan θ, and a wall along x by dy/dx = +tan θ.
             double angle = (alongX ? -Math.Atan(slope) : Math.Atan(slope)) * 180.0 / Math.PI;
             return ((float)angle, (float)((sumC / n - surface) * 100.0), (int)n);
-        }
-
-        /// <summary>Node graph: each node's pose against the truth, with the graph and as local SLAM had it (mean, worst; metres).</summary>
-        public (double graphMean, double graphMax, double localMean, double localMax) NodeErrors()
-        {
-            double gm = 0, gx = 0, lm = 0, lx = 0;
-            int n = Mathf.Min(NodeTruth.Count, slam.Nodes.Count);
-            for (int i = 0; i < n; i++)
-            {
-                var g = globalSlam.NodeGlobalPose(i);
-                var t = NodeTruth[i];
-                double eg = System.Math.Sqrt((g.x - t.position.x) * (g.x - t.position.x) + (g.y - t.position.y) * (g.y - t.position.y));
-                double el = Vector2.Distance(slam.Nodes[i].pose.position, t.position);
-                gm += eg / n;
-                lm += el / n;
-                gx = System.Math.Max(gx, eg);
-                lx = System.Math.Max(lx, el);
-            }
-            return (gm, gx, lm, lx);
         }
 
         /// <summary>Cells whose traversability differs between two Internal Models (over both their extents).</summary>
@@ -2649,47 +2373,6 @@ namespace RobotVacuum.Tests
             return ((float)max, (float)System.Math.Sqrt(sumSq / track.Count), (float)(angle * 180 / System.Math.PI));
         }
 
-        /// <summary>
-        /// How the robot's believed map compares with the true apartment, over every cell inside the outer walls: cells
-        /// it believes are wall (traversability below 0.5) that are really floor, split into within 25 cm of a real wall
-        /// (thick walls) and further out (ghosts); real wall-surface cells it believes passable (missed); and believed
-        /// wall cells per real wall-surface cell (1 = as thin as the grid allows).
-        /// </summary>
-        public (int falseNear, int ghosts, int missed, float thickness) MapAccuracy()
-        {
-            const float cell = 0.05f, band = 0.25f;
-            int falseNear = 0, ghosts = 0, missed = 0, believedWall = 0, surface = 0;
-            var grid = writer.Grid;
-            if (!grid.TryWorldToGridIndex(new Vector2(-3.1f, -2.1f), out int r0, out int c0)) return default;
-            if (!grid.TryWorldToGridIndex(new Vector2(3.1f, 2.1f), out int r1, out int c1)) return default;
-            for (int row = r0; row <= r1; row++)
-            {
-                for (int col = c0; col <= c1; col++)
-                {
-                    Vector2 p = grid.GridIndexToWorldCenter(row, col);
-                    bool solid = !world.IsFree(p, 0f);
-                    bool blocked = writer.Traversability(row, col) < 0.5f;
-                    if (blocked) believedWall++;
-                    if (solid)
-                    {
-                        bool isSurface = world.IsFree(p + new Vector2(cell, 0), 0f) || world.IsFree(p - new Vector2(cell, 0), 0f) ||
-                                         world.IsFree(p + new Vector2(0, cell), 0f) || world.IsFree(p - new Vector2(0, cell), 0f);
-                        if (isSurface)
-                        {
-                            surface++;
-                            if (!blocked) missed++;
-                        }
-                    }
-                    else if (blocked)
-                    {
-                        if (world.IsFree(p, band)) ghosts++;
-                        else falseNear++;
-                    }
-                }
-            }
-            return (falseNear, ghosts, missed, surface > 0 ? (float)believedWall / surface : 0f);
-        }
-
         static RobotPose Advance(RobotPose p, float forward, float turn) =>
             new RobotPose(p.position + RobotPose.DirectionOf(p.heading + turn * 0.5f) * forward, Mathf.DeltaAngle(0f, p.heading + turn));
 
@@ -2697,9 +2380,9 @@ namespace RobotVacuum.Tests
         {
             for (int tries = 0; tries < 1000; tries++)
             {
-                var g = new Vector2((float)(goals.NextDouble() * 5.6 - 2.8), (float)(goals.NextDouble() * 3.6 - 1.8));
+                var g = new Vector2((float)(goals.NextDouble() * world.GoalWidth + world.GoalMinX), (float)(goals.NextDouble() * world.GoalHeight + world.GoalMinY));
                 if (MirrorGoals) g.x = -g.x;
-                if (world.IsFree(g, 0.3f) && LineFree(truth.position, g)) return g;
+                if ((world.Inside == null || world.Inside(g)) && world.IsFree(g, world.GoalMargin) && LineFree(truth.position, g)) return g;
             }
             return truth.position;
         }
@@ -2708,7 +2391,7 @@ namespace RobotVacuum.Tests
         {
             int n = Mathf.CeilToInt(Vector2.Distance(a, b) / 0.025f) + 1;
             for (int i = 0; i <= n; i++)
-                if (!world.IsFree(Vector2.Lerp(a, b, (float)i / n), 0.2f)) return false;
+                if (!world.IsFree(Vector2.Lerp(a, b, (float)i / n), world.PathMargin)) return false;
             return true;
         }
     }

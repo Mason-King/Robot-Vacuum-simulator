@@ -17,6 +17,23 @@ namespace RobotVacuum.AlgorithmApi
         Sweep,
     }
 
+    /// <summary>What the robot does once it reaches a goal (see <see cref="DriveRequests.Hold"/>).</summary>
+    public enum HoldMode
+    {
+        /// <summary>Nothing: the goal is Reached on arrival. The default.</summary>
+        None,
+
+        /// <summary>Stay still over the goal for <see cref="DriveRequests.HoldSeconds"/> of simulated time.</summary>
+        ForSeconds,
+
+        /// <summary>
+        /// Stay still over the goal until every passable cell within <see cref="DriveRequests.HoldRadiusMeters"/> of the
+        /// goal, and under the brush, believes it is at <see cref="DriveRequests.HoldCleanliness"/>. Capped: the hold ends
+        /// after 1.5 times the time the dirtiest of those cells needed when the hold began, clean or not.
+        /// </summary>
+        UntilClean,
+    }
+
     /// <summary>
     /// What an algorithm asks of the controller, beyond the goal itself. Set these BEFORE returning a goal from
     /// NextGoal; they apply to that goal and stay as they are until changed. One instance per run, in
@@ -35,11 +52,37 @@ namespace RobotVacuum.AlgorithmApi
         public float SweepExposureMeters { get; set; }
 
         /// <summary>
+        /// For Sweep: the share of the target one pass aims for (default 1). The controller divides the sweep speed by
+        /// it, so 0.8 drives 1.25 times faster and each spot gets about 80% of the target. Values below 0.05 count as 0.05.
+        /// </summary>
+        public float SweepTargetFraction { get; set; } = 1f;
+
+        /// <summary>
         /// The goal is a point ON THE WAY, not a destination: the controller doesn't slow down or stop for it, and
         /// reports it Reached as soon as the robot is within <see cref="PassThroughMeters"/> of it, so the next goal
         /// (asked for at once) carries the motion on. Use for lane ends, U-turn arcs, edge runs.
         /// </summary>
         public bool PassThrough { get; set; }
+
+        /// <summary>
+        /// What to do on arrival: nothing, stay still for a time, or stay still until the floor under the brush is clean.
+        /// While the robot holds, the goal is InProgress; when the hold ends it is Reached. A second contact at least
+        /// 3 s after the first ends a hold as Blocked (the first is ignored). Ignored for a pass-through goal.
+        /// </summary>
+        public HoldMode Hold { get; set; } = HoldMode.None;
+
+        /// <summary>For <see cref="HoldMode.ForSeconds"/>: how long, simulated seconds.</summary>
+        public float HoldSeconds { get; set; }
+
+        /// <summary>For <see cref="HoldMode.UntilClean"/>: the cleanliness every checked cell must reach.</summary>
+        public float HoldCleanliness { get; set; }
+
+        /// <summary>
+        /// For <see cref="HoldMode.UntilClean"/>: the cells checked are those whose centers lie within this distance of
+        /// the goal, meters, and also under the brush from where the robot actually stopped. No larger than the robot's
+        /// radius (larger is cut to it).
+        /// </summary>
+        public float HoldRadiusMeters { get; set; }
 
         /// <summary>How close counts as "passed" for a pass-through goal.</summary>
         public const float PassThroughMeters = 0.05f;
@@ -58,6 +101,12 @@ namespace RobotVacuum.AlgorithmApi
         /// asked again after this.
         /// </summary>
         public void Finish() => Finished = true;
+
+        /// <summary>
+        /// For the controller: takes back a Finish. Used when the robot was boxed in (by the cat, say) at the moment the
+        /// algorithm finished, so most of the floor only looked unreachable: after a wait, the algorithm is asked again.
+        /// </summary>
+        public void ClearFinish() => Finished = false;
     }
 
     /// <summary>
