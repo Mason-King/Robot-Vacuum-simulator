@@ -58,9 +58,10 @@ namespace RobotVacuum.LevelEditor
                 icon.AddToClassList("le-empty__icon");
                 empty.Add(icon);
                 Ui.Text(empty, "No floor plans to run", "le-empty__title");
-                Ui.Text(empty, "Draw a floor plan in the level editor first, then come back here to run it.", "le-empty__text");
-                Ui.Button(Ui.Div(empty, "le-empty__actions"), "Open level editor", IconKind.Pen,
-                    () => EditRequested?.Invoke(null), "le-btn--primary");
+                Ui.Text(empty, "Run the sample apartment to see the vacuum at work, or draw your own floor plan in the level editor.", "le-empty__text");
+                var actions = Ui.Div(empty, "le-empty__actions");
+                Ui.Button(actions, "Run the sample", IconKind.Play, RunSample, "le-btn--primary");
+                Ui.Button(actions, "Open level editor", IconKind.Pen, () => EditRequested?.Invoke(null), "le-btn--ghost");
                 return;
             }
 
@@ -78,6 +79,23 @@ namespace RobotVacuum.LevelEditor
                 runsByLevel.TryGetValue(entry.path, out var runs);
                 grid.Add(BuildCard(entry, runs));
             }
+        }
+
+        void RunSample()
+        {
+            LevelLibrary.Entry sample;
+            try
+            {
+                sample = LevelLibrary.CreateSample();
+            }
+            catch (Exception exception)
+            {
+                UnityEngine.Debug.LogException(exception);
+                return;
+            }
+
+            Refresh();
+            RunRequested?.Invoke(sample);
         }
 
         VisualElement BuildCard(LevelLibrary.Entry entry, List<RunReport> runs)

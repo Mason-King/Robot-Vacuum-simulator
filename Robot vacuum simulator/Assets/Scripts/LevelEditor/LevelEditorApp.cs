@@ -167,6 +167,7 @@ namespace RobotVacuum.LevelEditor
         void Start()
         {
             if (palette == null) runtimePalette = FloorPalette.CreateDefault();
+            LevelLibrary.SeedOnFirstLaunch();
 
             CreatePanel();
 
